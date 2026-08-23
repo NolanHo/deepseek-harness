@@ -2,6 +2,14 @@
 
 DeepSeek Harness is a plugin-based agent harness on vendored Cordis: **everything is a plugin**. Read [docs/architecture.md](docs/architecture.md) before changing `packages/`; follow [docs/AGENTS.md](docs/AGENTS.md) for documentation.
 
+## Fork policy: NolanHo/deepseek-harness
+
+This checkout is a **personal fork** of [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness): `origin` is `NolanHo/deepseek-harness`, `upstream` is the DeepSeek AI repository. Fork `master` deliberately carries local customizations on top of upstream `master`; it is a customized build, never a mirror.
+
+- **Sync before every change**: `git fetch upstream` and rebase (or merge) `upstream/master` into the fork at the start of every change session, so fork `master` stays mergeable with upstream. Upstream is the authority; the fork only absorbs updates from it.
+- **Never contribute back**: do not push to `upstream`, do not open PRs against `upstream`, do not merge fork work into upstream. All changes stay in the fork.
+- **Record every change**: append one entry to `FORK_CHANGES.md` (bilingual, append-only) per change: date, what changed, why. Keep personal changes small and reviewable.
+
 ## Pre-release stance: foundation over blast radius
 
 **Remove this section at the first tagged release.** With no external consumers, prefer the correct foundation over compatibility shims: rename or repackage freely and update every reference together. Backends reject old on-disk formats. SQLite uses monotonic `SCHEMA_VERSION`; `dsh-session` keeps `SESSION_FORMAT_VERSION` at `0` with no compatibility promise.
