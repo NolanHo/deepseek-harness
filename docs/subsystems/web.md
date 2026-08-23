@@ -2,7 +2,7 @@
 
 English | [中文](web.zh.md)
 
-The web access seam — a [capability seam](../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md) that spans **two operations** (search and fetch) on one `ctx.web` service, split across packages: Service Definition ([dsh-web](../../packages/web/web), `ctx.web` + the provider registries), Service Providers ([dsh-web-search-exa](../../packages/web/web-search-exa), [dsh-web-search-perplexity](../../packages/web/web-search-perplexity), [dsh-web-search-deepseek](../../packages/web/web-search-deepseek), [dsh-web-fetch-http](../../packages/web/web-fetch-http)), and Consumer ([dsh-tool-web](../../packages/web/tool-web), the `web_search`/`web_fetch` tool schemas). Web is **one optional capability**, not part of the agent-loop spine — so its vocabulary lives here, not in [core.md](core.md). A search-provider swap does not change how the model asks for a query, and a fetch-provider swap does not change how the model asks for a URL.
+The web access seam — a [capability seam](../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md) that spans **two operations** (search and fetch) on one `ctx.web` service, split across packages: Service Definition ([dsh-web](../../packages/web/web), `ctx.web` + the provider registries), Service Providers ([dsh-web-search-exa](../../packages/web/web-search-exa), [dsh-web-search-perplexity](../../packages/web/web-search-perplexity), [dsh-web-search-deepseek](../../packages/web/web-search-deepseek), [dsh-web-search-bocha](../../packages/web/web-search-bocha), [dsh-web-search-brave](../../packages/web/web-search-brave), [dsh-web-search-zhihu](../../packages/web/web-search-zhihu), [dsh-web-search-academic](../../packages/web/web-search-academic), [dsh-web-fetch-http](../../packages/web/web-fetch-http)), and Consumer ([dsh-tool-web](../../packages/web/tool-web), the `web_search`/`web_fetch` tool schemas). Web is **one optional capability**, not part of the agent-loop spine — so its vocabulary lives here, not in [core.md](core.md). A search-provider swap does not change how the model asks for a query, and a fetch-provider swap does not change how the model asks for a URL.
 
 Source: [`packages/web/web/src/types.ts`](../../packages/web/web/src/types.ts)
 
@@ -12,7 +12,7 @@ Search and fetch share no request schema and no business logic, but they are del
 
 ## Search request and result
 
-Each seam request carries exactly one `query`. The `dsh-tool-web` consumer accepts a required `queries` array and fans it out into separate seam requests; a one-item array performs one search. `maxResults` is a consumer-owned bound (`dsh-tool-web`'s `searchMaxResults` config, default `8`) passed through the seam and enforced on the way back — if a provider over-returns, the seam truncates `sources[]` and sets `truncated`.
+Each seam request carries exactly one `query`. The `dsh-tool-web` consumer accepts a required `queries` array and fans it out into separate seam requests; a one-item array performs one search. The model may also name an optional `backend` per call, forwarded as the seam's per-request `provider` override (omitted = the configured default). `maxResults` is a consumer-owned bound (`dsh-tool-web`'s `searchMaxResults` config, default `8`) passed through the seam and enforced on the way back — if a provider over-returns, the seam truncates `sources[]` and sets `truncated`.
 
 ```ts type-equiv
 /**
@@ -176,14 +176,16 @@ registerFetchProvider(provider: WebFetchProvider): () => void
 
 /**
  * Run one search through the selected provider. Resolves the provider at call
- * time with the selection rules above; throws {@link WebError} when the
- * capability cannot run. The seam enforces `request.maxResults` on the result:
- * if the provider over-returns, `sources[]` is truncated and `truncated` set.
+ * time with the selection rules above; an explicit `options.provider` wins
+ * over the configured default for this call alone. Throws {@link WebError}
+ * when the capability cannot run. The seam enforces `request.maxResults` on
+ * the result: if the provider over-returns, `sources[]` is truncated and
+ * `truncated` set.
  * @param request - the query and optional result limit.
- * @param signal - optional cancellation signal forwarded to the provider.
+ * @param options - cancellation signal and optional per-request provider override.
  * @returns the provider's results, capped to `request.maxResults`.
  */
-async search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>
+async search(request: WebSearchRequest, options: WebSearchOptions = {}): Promise<WebSearchResult>
 
 /**
  * Retrieve one URL through the selected provider. Resolves the provider at

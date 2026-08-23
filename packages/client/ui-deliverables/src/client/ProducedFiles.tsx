@@ -48,8 +48,8 @@ export function fitProducedFiles(
 
 /** Registration-side Host capability facts. */
 export interface ProducedFilesInjected {
-  /** Whether the browser itself is connected over loopback. */
-  isLoopback: boolean
+  /** Whether the page authority is one this deployment serves at. */
+  isServingAuthority: boolean
   hooks: {
     /** Current generation's Host description, bound by the slot renderer. */
     hostDescription: HostDescriptionSource
@@ -71,10 +71,10 @@ function moreLabel(t: ProducedFilesProps['t'], count: number): string {
  * @returns The produced-files row.
  */
 export function ProducedFiles({
-  matched: paths, openFile, isLoopback, useHostDescription, t,
+  matched: paths, openFile, isServingAuthority, useHostDescription, t,
 }: ProducedFilesProps) {
   const hostCanOpenPath = useHostDescription(description => description?.canOpenPath === true)
-  const canOpenPath = isLoopback && hostCanOpenPath
+  const canOpenPath = isServingAuthority && hostCanOpenPath
   const limit = Math.min(paths.length, SHOWN_LIMIT)
   const [shownCount, setShownCount] = useState(limit)
   const rowRef = useRef<HTMLDivElement>(null)

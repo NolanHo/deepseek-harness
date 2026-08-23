@@ -8,6 +8,8 @@ AppFrame 始终挂载会话栏和详情栏；已连接 Session 通过 `SessionPr
 
 `/client` 导出表层包含插件主体（`apply`／`inject`）、`LayoutController` 和四个 owner-share 接口。AppFrame、面板 store 与让步求解器仍属于包内部。
 
+外壳承载三种 viewport 形态。宽 viewport 运行完整的三栏网格；窄 viewport（低于 1024px 自动收起断点）将侧边栏保持为可在受挤压的会话栏上方重新展开的控制栏。移动端 viewport（低于 768px 的 `MOBILE_VIEWPORT` 常量）放弃网格：轨道收拢为仅剩会话栏，侧边栏渲染在始终挂载的固定抽屉容器中，通过遮罩滑入（toggleSidebar 在布局 store 中翻转抽屉开关标志），详情栏则变为固定右侧面板（`min(92vw, 420px)`），由打开偏好驱动滑入——从而恢复 openDetails 在该宽度下会被让步求解器清零的行为。抽屉在点击遮罩、按下 Escape 以及会话变更时关闭；两层同时打开时 Escape 先关闭详情面板，且详情面板带有一个由外壳持有的关闭按钮（其占位者按桌面外壳设计）。该形态下隐藏拖动手柄并完全跳过求解器。
+
 ## 模型体验
 
 无。布局外壳管理浏览器查看状态；这里没有任何内容进入模型请求。

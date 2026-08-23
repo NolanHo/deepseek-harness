@@ -17,10 +17,9 @@
 - text: Explain event sourcing in one sentence. {{clock}}
 - button "Copy":
   - img
-- button "Context injection @deepseek-ai/dsh-system-prompt":
+- button "Expand or collapse this turn’s intermediate steps":
   - img
-  - img
-  - text: Context injection @deepseek-ai/dsh-system-prompt
+  - text: Collapsed 1 steps
 - button "Think The user is asking for a one-sentence description of event sourcing. This is a straightforward knowledge question that doesn't require any skill loading or tool calls.":
   - img
   - img

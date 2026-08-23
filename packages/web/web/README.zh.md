@@ -28,10 +28,13 @@
 
 ## 选择
 
-选择绝不依赖注册、配置或 HMR（热模块替换）顺序。能力要么具有显式提供方 id（配置 `searchProvider`／`fetchProvider`，或由环境变量 `$DSH_WEB_SEARCH_PROVIDER`／`$DSH_WEB_FETCH_PROVIDER` 提供相同字段），要么在恰好只注册一个可用提供方时自动选择。`search()`／`fetch()` 会在执行时解析提供方：
+选择绝不依赖注册、配置或 HMR（热模块替换）顺序。能力要么具有显式提供方 id（配置 `searchProvider`／`fetchProvider`，或由环境变量 `$DSH_WEB_SEARCH_PROVIDER`／`$DSH_WEB_FETCH_PROVIDER` 提供相同字段），要么在恰好只注册一个可用提供方时自动选择。`search()` 调用还可以传入 `options.provider`，仅为该次调用覆盖配置的默认提供方（`web_search` 工具将其暴露为 `backend` 参数）。`search()`／`fetch()` 会在执行时解析提供方：
 
 | 情况 | 执行 |
 |---|---|
+| 单次指定 id 已注册且 `available()` | 该次调用运行该提供方 |
+| 单次指定 id 未注册 | `WEB_PROVIDER_UNKNOWN`（消息列出可用 id） |
+| 单次指定 id 已注册但不可用 | `WEB_PROVIDER_UNAVAILABLE` |
 | 已配置 id 已注册且 `available()` | 运行该提供方 |
 | 已配置 id 未注册 | `WEB_PROVIDER_CONFIGURED_MISSING` |
 | 已配置 id 已注册但不可用 | `WEB_PROVIDER_CONFIGURED_UNAVAILABLE` |
@@ -39,7 +42,7 @@
 | 无 id，没有可用提供方 | `WEB_PROVIDER_UNAVAILABLE` |
 | 无 id，多个可用提供方 | `WEB_PROVIDER_AMBIGUOUS` |
 
-失败分支会抛出 `WebError`；调用方按其结构化 code（加消息细节：缺失 id、歧义候选集合）路由。提供方自身的 `available()` 是便宜的局部检查（凭据是否存在、配置是否可解析），供执行时选择使用，且**禁止发起网络调用**；`dsh-tool-web` 永远不会调用它。工具通过 `ctx.web.search()`／`fetch()` 执行，并按抛出的 code 路由，因此提供方选择只有一个归属方。
+失败分支会抛出 `WebError`；调用方按其结构化 code（加消息细节：缺失 id、歧义候选集合、可用后端）路由。提供方自身的 `available()` 是便宜的局部检查（凭据是否存在、配置是否可解析），供执行时选择使用，且**禁止发起网络调用**；`dsh-tool-web` 永远不会调用它。工具通过 `ctx.web.search()`／`fetch()` 执行，并按抛出的 code 路由，因此提供方选择只有一个归属方。
 
 ## 词汇
 

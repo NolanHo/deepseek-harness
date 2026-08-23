@@ -2,12 +2,15 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-attachment'
+// Activates the clientModules Context merge used by the boot-wire publication below.
+import type {} from '@deepseek-ai/dsh-client-modules'
 // Activates the webServer Context merge used below.
 import type { WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
 import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import { API_PATH, HOST_EVENTS_PATH, MUX_EVENTS_PATH } from './api-path.ts'
 import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
 import { assertTrustedAuthority, isTrustedApiRequest } from './api-request-trust.ts'
+import { isLoopbackHostname } from './loopback-hostname.ts'
 import { HostConnectionService } from './rpc-host.ts'
 import { rejectWebSocketUpgrade, WebSocketDownlinks } from './websocket-downlink.ts'
 
@@ -135,6 +138,14 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
   if (ctx.get('apiProxy') !== undefined) assertImageBodyCapacity(ctx, maxRequestBodyBytes)
+  // The boot wire carries the fence list minus loopback entries: the wire
+  // contract is non-loopback page authorities, and loopback is already
+  // first-party on the client without a wire entry. Every entry passed
+  // assertTrustedAuthority above, so the parse cannot fail.
+  ctx.inject(['clientModules'], (scope) => {
+    scope.clientModules.publishTrustedAuthorities(trustedHosts.filter(authority =>
+      !isLoopbackHostname(new URL(`http://${authority}`).hostname)))
+  })
   const connection = new HostConnectionService(ctx, trustedHosts)
   const fetchHandler = connection.createSharedFetchHandler(API_PATH, {
     async fetch(request) {

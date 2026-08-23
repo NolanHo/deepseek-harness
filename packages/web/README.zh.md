@@ -10,6 +10,10 @@
 | [`web-search-exa/`](web-search-exa/README.zh.md) | 通过 Exa 提供 web 搜索 | 注册到 `ctx.web` |
 | [`web-search-perplexity/`](web-search-perplexity/README.zh.md) | 通过 Perplexity 提供 web 搜索 | 注册到 `ctx.web` |
 | [`web-search-deepseek/`](web-search-deepseek/README.zh.md) | 提供 DeepSeek 原生 web 搜索 | 注册到 `ctx.web` |
+| [`web-search-bocha/`](web-search-bocha/README.zh.md) | 通过博查提供 web 搜索 | 注册到 `ctx.web` |
+| [`web-search-brave/`](web-search-brave/README.zh.md) | 通过 Brave 提供 web 搜索 | 注册到 `ctx.web` |
+| [`web-search-zhihu/`](web-search-zhihu/README.zh.md) | 提供知乎站内/全网搜索 | 注册到 `ctx.web` |
+| [`web-search-academic/`](web-search-academic/README.zh.md) | 通过 arXiv + Semantic Scholar 提供学术搜索 | 注册到 `ctx.web` |
 | [`web-fetch-http/`](web-fetch-http/README.zh.md) | 抓取公共 HTTP 和 HTTPS 资源 | 注册到 `ctx.web` |
 | [`tool-web/`](tool-web/README.zh.md) | 向模型公开 web 搜索和抓取 | 注册到 `ctx.tools` |
 

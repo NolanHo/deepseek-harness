@@ -28,7 +28,7 @@ export class SettingsDocumentStore {
   private following: (() => void) | undefined
 
   /**
-   * @param api - loopback settings wire face that opens the provider document.
+   * @param api - first-party settings wire face that opens the provider document.
    * @param describeFace - the shared mirror's describe face (`hasDocument` source).
    */
   constructor(

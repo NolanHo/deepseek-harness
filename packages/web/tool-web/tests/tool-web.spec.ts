@@ -85,14 +85,17 @@ describe('search formatting', () => {
     expect(out).toContain('Showing the first 1 sources')
   })
 
-  it('validates queries', () => {
-    expect(parseSearchArgs({ queries: ['hi'] }, WEB_SEARCH_MAX_QUERIES)).toEqual(['hi'])
+  it('validates queries and the optional backend', () => {
+    expect(parseSearchArgs({ queries: ['hi'] }, WEB_SEARCH_MAX_QUERIES)).toEqual({ queries: ['hi'] })
     expect(parseSearchArgs({ queries: ['one', 'one', ' two '] }, WEB_SEARCH_MAX_QUERIES))
-      .toEqual(['one', ' two '])
+      .toEqual({ queries: ['one', ' two '] })
+    expect(parseSearchArgs({ queries: ['hi'], backend: ' exa ' }, WEB_SEARCH_MAX_QUERIES))
+      .toEqual({ queries: ['hi'], backend: 'exa' })
     expect(() => parseSearchArgs({ queries: [] }, WEB_SEARCH_MAX_QUERIES)).toThrow('at least one query')
     expect(() => parseSearchArgs({ queries: ['one', 'two'] }, 1)).toThrow('at most 1 query')
     expect(() => parseSearchArgs({ queries: ['one', 'two', 'three'] }, 2)).toThrow('at most 2 queries')
     expect(() => parseSearchArgs({ queries: ['ok', ' '] }, WEB_SEARCH_MAX_QUERIES)).toThrow('each query must be a non-empty string')
+    expect(() => parseSearchArgs({ queries: ['ok'], backend: ' ' }, WEB_SEARCH_MAX_QUERIES)).toThrow('backend must be a non-empty string when supplied')
   })
 
   it('falls back to the raw URL as a source label when the URL is unparseable', () => {

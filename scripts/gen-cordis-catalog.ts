@@ -496,6 +496,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   WebFetchProvider: 'web.md',
   WebFetchRequest: 'web.md',
   WebFetchResult: 'web.md',
+  WebSearchOptions: 'web.md',
   WebSearchProvider: 'web.md',
   WebSearchRequest: 'web.md',
   WebSearchResult: 'web.md',

@@ -65,7 +65,7 @@ export interface WebBootEntry {
 
 /** The composed client entry graph the host injects as `window.__DSH_BOOT__`. */
 export interface WebBootGraph {
-  /** Consistency anchor over the whole graph (content + bundle hashes). */
+  /** Consistency anchor over the whole wire (entries + published authorities). */
   rev: string
   /**
    * Composed entries in module-graph order — a dynamic package row precedes
@@ -73,6 +73,12 @@ export interface WebBootGraph {
    * unrelated and remains owned by fiber service waiting.
    */
   entries: WebBootEntry[]
+  /**
+   * Non-loopback authorities this deployment serves pages at (the `/api`
+   * fence's trusted list, canonical `host[:port]`, port-less matches any
+   * port); the client treats a page authority in this list as first-party.
+   */
+  trustedAuthorities: string[]
 }
 
 /** The npm-package view of one boot row: what the module table needs to fetch the bundle. */
@@ -105,6 +111,8 @@ export interface BootManifest {
   modules: BootModuleRow[]
   /** Rows as entry composition consumes them. */
   plugins: BootPluginRow[]
+  /** Host-published serving authorities (`[]` when the wire omits the field — old HTML). */
+  trustedAuthorities: string[]
 }
 
 /**
@@ -155,6 +163,11 @@ export function parseBootManifest(wire: unknown): BootManifest {
   if (!Array.isArray(graph.entries)) {
     throw new Error('client-modules: boot manifest entries must be an array')
   }
+  const trustedAuthorities = graph.trustedAuthorities as string[] | undefined
+  if (trustedAuthorities !== undefined
+    && (!Array.isArray(trustedAuthorities) || trustedAuthorities.some(item => typeof item !== 'string'))) {
+    throw new Error('client-modules: boot manifest trustedAuthorities must be an array of strings')
+  }
   const modules: BootModuleRow[] = []
   const plugins: BootPluginRow[] = []
   for (const value of graph.entries as unknown[]) {
@@ -184,7 +197,12 @@ export function parseBootManifest(wire: unknown): BootManifest {
       immediately: row.immediately === true,
     })
   }
-  return { rev: graph.rev, modules, plugins }
+  return {
+    rev: graph.rev,
+    modules,
+    plugins,
+    trustedAuthorities: trustedAuthorities === undefined ? [] : [...trustedAuthorities],
+  }
 }
 
 /** One client bundle's factory registration submitted through `window.__ModuleLoader__.load`. */

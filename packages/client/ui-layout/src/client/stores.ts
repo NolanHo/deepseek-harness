@@ -15,12 +15,21 @@ import {
 
 /**
  * Layout store state: panel width preferences in px (0 = closed), plus the
- * narrow-viewport pair — `narrow` mirrors AppFrame's breakpoint reading
+ * viewport-regime mirrors — `narrow` mirrors AppFrame's breakpoint reading
  * (viewport < SIDEBAR_AUTO_COLLAPSE) so toggleSidebar can pick semantics, and
  * `narrowExpanded` is the manual override that re-expands the auto-collapsed
  * sidebar over the squeezed center without rewriting the width preference.
+ * `mobile` mirrors viewport < MOBILE_VIEWPORT (the overlay regime: sidebar
+ * drawer + details sheet) and `drawerOpen` is that drawer's open flag.
  */
-type LayoutState = { sidebar: number; details: number; narrow: boolean; narrowExpanded: boolean }
+type LayoutState = {
+  sidebar: number
+  details: number
+  narrow: boolean
+  narrowExpanded: boolean
+  mobile: boolean
+  drawerOpen: boolean
+}
 
 /**
  * Annotation twin of the actions literal below (the export needs a declared
@@ -31,6 +40,8 @@ type LayoutActions = {
   setDetails: (draft: LayoutState, px: number) => void
   toggleSidebar: (draft: LayoutState) => void
   setNarrow: (draft: LayoutState, narrow: boolean) => void
+  setMobile: (draft: LayoutState, mobile: boolean) => void
+  setDrawerOpen: (draft: LayoutState, open: boolean) => void
   openDetails: (draft: LayoutState) => void
   closeDetails: (draft: LayoutState) => void
 }
@@ -40,21 +51,27 @@ type LayoutActions = {
  * closing a panel forgets its drag width — reopening restores the contract
  * default. Actions are the complete write set: drag writes clamp
  * into the panel's contract range and never cross the open/closed line;
- * open/close transitions write 0 / the default explicitly. Below the
- * auto-collapse breakpoint (AppFrame feeds setNarrow) the sidebar toggle
- * flips the narrowExpanded override instead of the preference.
+ * open/close transitions write 0 / the default explicitly. toggleSidebar
+ * carries three-regime semantics: wide flips the width preference, narrow
+ * (768–1024) flips the narrowExpanded override, mobile (<768) flips the
+ * overlay drawer's open flag. Crossing either breakpoint in either
+ * direction (AppFrame feeds setNarrow/setMobile) resets the transient
+ * regime-local flag.
  * @returns the store handle (spec + type + identity + factory in one).
  */
 export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutActions>  {
   const handle = defineStore({
-    init: (): LayoutState => ({ sidebar: SIDEBAR_DEFAULT, details: 0, narrow: false, narrowExpanded: false }),
+    init: (): LayoutState => ({
+      sidebar: SIDEBAR_DEFAULT, details: 0, narrow: false, narrowExpanded: false, mobile: false, drawerOpen: false,
+    }),
     actions: {
       setSidebar: (d, px: number) => { d.sidebar = clampWidth(px, SIDEBAR_MIN, SIDEBAR_MAX) },
       setDetails: (d, px: number) => { d.details = clampWidth(px, DETAILS_MIN, DETAILS_MAX) },
-      // Narrow toggles flip only the override: the width preference survives
-      // untouched, so re-widening restores the pre-squeeze layout.
+      // Mobile wins over narrow (mobile viewports are also narrow): the
+      // drawer open flag is transient, the width preference survives.
       toggleSidebar: (d) => {
-        if (d.narrow) d.narrowExpanded = !d.narrowExpanded
+        if (d.mobile) d.drawerOpen = !d.drawerOpen
+        else if (d.narrow) d.narrowExpanded = !d.narrowExpanded
         else d.sidebar = d.sidebar === 0 ? SIDEBAR_DEFAULT : 0
       },
       // Crossing the breakpoint in either direction drops the override: the
@@ -64,6 +81,14 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         d.narrow = narrow
         d.narrowExpanded = false
       },
+      // Crossing the mobile breakpoint in either direction closes the drawer
+      // (same transient-reset pattern as setNarrow).
+      setMobile: (d, mobile: boolean) => {
+        if (d.mobile === mobile) return
+        d.mobile = mobile
+        d.drawerOpen = false
+      },
+      setDrawerOpen: (d, open: boolean) => { d.drawerOpen = open },
       openDetails: (d) => { if (d.details === 0) d.details = DETAILS_DEFAULT },
       closeDetails: (d) => { d.details = 0 },
     },

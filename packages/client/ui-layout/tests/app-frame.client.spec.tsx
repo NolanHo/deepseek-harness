@@ -88,6 +88,7 @@ function mountFrame() {
       useSessions={useSessions}
       useWorkspaces={((sel: (s: WorkspaceListState) => unknown) => sel(workspaceState)) as never}
       SessionProvider={SessionProviderStub}
+      t={((key: string) => key)}
     />
   )
   const utils = render(element())
@@ -394,5 +395,121 @@ describe('AppFrame — unmount with an in-flight resize frame', () => {
     frameWidth = 1250
     act(() => { fireResize?.(); fireResize?.(); vi.advanceTimersByTime(20) })
     expect(tracks(frame)).toEqual([280, 330])
+  })
+})
+
+describe('AppFrame — mobile overlay layout', () => {
+  const drawerOf = (frame: HTMLElement) => frame.querySelector('[class*="mobileDrawer"]') as HTMLElement
+
+  it('collapses the grid to the center track and hides both drag handles', () => {
+    frameWidth = 412
+    const { frame, slotCalls } = mountFrame()
+    expect(tracks(frame)).toEqual([0, 0])
+    expect(frame.querySelectorAll('[class*="handle"]')).toHaveLength(0)
+    // The drawer wrapper always mounts with the sidebar subtree inside.
+    expect(drawerOf(frame)).toBeTruthy()
+    const sidebarCall = slotCalls.filter(c => c.key === 'sidebar').at(-1)!
+    expect(sidebarCall.props).toEqual({ collapsed: false, width: 300 })
+  })
+
+  it('toggleSidebar opens the drawer with a scrim; the scrim click closes it', () => {
+    frameWidth = 412
+    const { frame, instance } = mountFrame()
+    const drawer = drawerOf(frame)
+    expect(drawer.hasAttribute('data-open')).toBe(false)
+    expect(frame.querySelector('[class*="scrim"]')).toBeNull()
+    act(() => { instance.actions.toggleSidebar() })
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(true)
+    const scrim: HTMLElement = frame.querySelector('[class*="scrim"]')!
+    act(() => { scrim.click() })
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(false)
+    expect(frame.querySelector('[class*="scrim"]')).toBeNull()
+  })
+
+  it('openDetails renders the fixed sheet instead of a third column; the close button closes it', () => {
+    frameWidth = 412
+    const { frame, instance, getByTestId } = mountFrame()
+    const sheet = frame.querySelector('[data-mobile]') as HTMLElement
+    expect(sheet).toBeTruthy()
+    expect(sheet.hasAttribute('data-open')).toBe(false)
+    expect(tracks(frame)).toEqual([0, 0]) // never a squeezed third column
+    act(() => { instance.actions.openDetails() })
+    expect(sheet.hasAttribute('data-open')).toBe(true)
+    // Sheet chrome: a frame-owned close button + its scrim.
+    const closeButton = sheet.querySelector('button[aria-label]') as HTMLButtonElement
+    expect(closeButton.getAttribute('aria-label')).toBe('details.close')
+    expect(frame.querySelector('[class*="scrim"]')).toBeTruthy()
+    // The details subtree stays mounted across the open/close cycle.
+    expect(getByTestId('details-content')).toBeTruthy()
+    act(() => { closeButton.click() })
+    expect(sheet.hasAttribute('data-open')).toBe(false)
+    expect(instance.getSnapshot().details).toBe(0)
+    expect(getByTestId('details-content')).toBeTruthy()
+  })
+
+  it('Escape closes an open drawer', () => {
+    frameWidth = 412
+    const { frame, instance } = mountFrame()
+    act(() => { instance.actions.toggleSidebar() })
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(true)
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(false)
+  })
+
+  it('Escape closes the open sheet first, then the drawer', () => {
+    frameWidth = 412
+    const { frame, instance } = mountFrame()
+    act(() => { instance.actions.toggleSidebar() })
+    act(() => { instance.actions.openDetails() })
+    const sheet = frame.querySelector('[data-mobile]') as HTMLElement
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    expect(sheet.hasAttribute('data-open')).toBe(false)
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(true)
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(false)
+  })
+
+  it('Escape skips a details preference without a visible sheet and closes the drawer directly', () => {
+    frameWidth = 412
+    const { frame, instance, rerenderFrame } = mountFrame()
+    act(() => { instance.actions.toggleSidebar() })
+    act(() => { instance.actions.openDetails() })
+    // Switching to no session hides the sheet while the preference survives.
+    selectedSession.current = undefined
+    act(() => { rerenderFrame() })
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(false)
+  })
+
+  it('renders a frame-owned drawer opener while the drawer is closed; opening hides it', () => {
+    frameWidth = 412
+    const { frame } = mountFrame()
+    const opener = (): HTMLButtonElement | null => frame.querySelector('button[aria-label="sidebar.open"]')
+    expect(opener()).toBeTruthy()
+    act(() => { opener()!.click() })
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(true)
+    expect(opener()).toBeNull()
+  })
+
+  it('a session change closes an open drawer', () => {
+    frameWidth = 412
+    const { frame, instance, rerenderFrame } = mountFrame()
+    act(() => { instance.actions.toggleSidebar() })
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(true)
+    selectedSession.current = 's-next' as SessionId
+    act(() => { rerenderFrame() })
+    expect(drawerOf(frame).hasAttribute('data-open')).toBe(false)
+  })
+
+  it('crossing into mobile closes the drawer; re-widening restores the desktop grid', () => {
+    frameWidth = 412
+    const { frame, instance } = mountFrame()
+    act(() => { instance.actions.toggleSidebar() })
+    frameWidth = 1024
+    act(() => { fireResize?.(); vi.advanceTimersByTime(20) })
+    expect(instance.getSnapshot().mobile).toBe(false)
+    expect(instance.getSnapshot().drawerOpen).toBe(false)
+    expect(tracks(frame)).toEqual([280, 0])
+    expect(frame.querySelector('[class*="mobileDrawer"]')).toBeNull()
   })
 })

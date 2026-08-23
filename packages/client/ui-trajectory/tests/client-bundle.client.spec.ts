@@ -41,10 +41,11 @@ describe('tsdown client artifact', () => {
   async function loadArtifact() {
     let handoff: Handoff | undefined
     ;(window as Win).__ModuleLoader__ = { load: (h) => { handoff = h } }
+    if (code === undefined) throw new Error('built-bundle fixture code missing')
     // The implied-eval ban targets accidental string execution, not this
     // deliberate built-bundle fixture running in the window scope.
     // oxlint-disable-next-line typescript/no-implied-eval, typescript/no-unsafe-call
-    new Function(code!)()
+    new Function(code)()
     expect(handoff).toBeDefined()
     const modules = new Map<string, unknown>([
       ['react', await import('react')],
@@ -85,7 +86,7 @@ describe('tsdown client artifact', () => {
     // the locale-aware view tab label (its settings scope needs a connection
     // handle and the Host-facing settings/remote seams).
     ctx.provide('sessions', { binding: () => undefined })
-    ctx.provide('connection', { api: { settings: {} }, isLoopback: false } as never)
+    ctx.provide('connection', { api: { settings: {} }, isServingAuthority: false } as never)
     ctx.provide('remote', { $on: () => () => {} } as never)
     ctx.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
     const locale = await import('@deepseek-ai/dsh-client-locale/client')

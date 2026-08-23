@@ -282,13 +282,13 @@ describe('ProducedFiles row', () => {
   const t = makeTranslate(zh)
   const capability = (
     canOpenPath: boolean | undefined,
-    isLoopback = true,
-  ): Pick<ProducedFilesProps, 'isLoopback' | 'useHostDescription'> => {
+    isServingAuthority = true,
+  ): Pick<ProducedFilesProps, 'isServingAuthority' | 'useHostDescription'> => {
     const description = canOpenPath === undefined
       ? undefined
       : { version: 'test', cwd: '/workspace', attachedSessions: 1, home: '/h', canOpenPath }
     return {
-      isLoopback,
+      isServingAuthority,
       useHostDescription: selector => selector(description),
     }
   }
@@ -463,7 +463,7 @@ describe('plugin registration', () => {
     const hostDescription = { getSnapshot: () => undefined, subscribe: () => () => {} }
     ctx.provide('connection', {
       api: { settings: {} },
-      isLoopback: false,
+      isServingAuthority: false,
       hostDescription,
     } as never)
     // ui-theme's Appearance row binds a durable scope through these two.
@@ -475,7 +475,7 @@ describe('plugin registration', () => {
     await fiber.await()
     const [entry] = ctx.slots.entries('conversation.chat.turnTail')
     expect(entry).toBeDefined()
-    expect(entry?.inject?.()).toEqual({ isLoopback: false, hooks: { hostDescription } })
+    expect(entry?.inject?.()).toEqual({ isServingAuthority: false, hooks: { hostDescription } })
 
     // The prose face is live while the plugin is: a produced turn yields a
     // resolver whose matches open through the owner-supplied opener.

@@ -8,6 +8,8 @@ AppFrame always mounts the conversation and details columns; a connected Session
 
 The `/client` exports are the plugin body (`apply`/`inject`), `LayoutController`, and the four owner-share interfaces. AppFrame, the panel store, and the concession solver remain package-internal.
 
+The frame carries three viewport regimes. Wide viewports run the full three-column grid; narrow viewports (below the 1024px auto-collapse breakpoint) keep the sidebar as a re-expandable rail over a squeezed center. Mobile viewports (below the 768px `MOBILE_VIEWPORT` constant) abandon the grid: the tracks collapse to the center column alone, the sidebar renders inside an always-mounted fixed drawer that slides in over a scrim (toggleSidebar flips the drawer flag in the layout store), and the details column becomes a fixed right sheet (`min(92vw, 420px)`) whose open preference drives the slide — restoring openDetails, which the concession solver would otherwise zero at this width. The drawer closes on scrim tap, Escape, and a session change; Escape closes the sheet first when both layers are open, and the sheet carries a frame-owned close button because its occupants assume the desktop shell. Drag handles are hidden and the solver is skipped entirely in this regime.
+
 ## Model Experience
 
 None, as the layout shell manages browser viewing state; nothing here reaches a model request.

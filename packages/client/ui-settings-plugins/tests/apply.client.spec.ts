@@ -47,7 +47,7 @@ async function bench(served?: string[]) {
   // connection sink makes.
   new TestRemote(ctx)
   ctx.provide('connection', {
-    isLoopback: true,
+    isServingAuthority: true,
     api: {
       settings: { describe: describeSettings },
       credentials: { describe: describeCredentials },

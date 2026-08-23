@@ -11,8 +11,8 @@ import { apply, inject } from '../src/client/index.ts'
 import { SettingsSchemaService } from '../src/client/schema.ts'
 import { SettingsScopeBinder } from '../src/client/settings-scope.ts'
 
-/** Boot the browser half over a fake loopback connection and test remote. */
-function bench() {
+/** Boot the browser half over a fake first-party connection and test remote. */
+function bench(isServingAuthority = true) {
   const describeCall = vi.fn().mockResolvedValue({
     rpcId: 'plugin-bench' as never,
     result: { ok: true, value: { writable: true, hasDocument: true, namespaces: [] } },
@@ -20,7 +20,7 @@ function bench() {
   const ctx = new Context()
   ctx.provide('connection', {
     api: { settings: { describe: describeCall } },
-    isLoopback: true,
+    isServingAuthority,
   } as never)
   new TestRemote(ctx)
   return { ctx, describeCall, fiber: ctx.plugin({ inject: [...inject], apply }) }
@@ -56,5 +56,14 @@ describe('settings domain base plugin', () => {
     ctx.emit('connection/reset')
     await Promise.resolve()
     expect(describeCall).toHaveBeenCalledTimes(1)
+  })
+
+  it('binds a non-first-party browser to a memory mirror without a settings read', async () => {
+    const { ctx, describeCall, fiber } = bench(false)
+    await fiber.await()
+    expect(ctx.get('settingsScope')).toBeInstanceOf(SettingsScopeBinder)
+    expect(ctx.get('settingsScope')!.describe().getSnapshot()).toMatchObject({ status: 'unavailable' })
+    await Promise.resolve()
+    expect(describeCall).not.toHaveBeenCalled()
   })
 })

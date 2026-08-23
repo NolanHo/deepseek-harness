@@ -4,6 +4,9 @@
  * controller with its sinks.
  */
 import type { Context } from '@deepseek-ai/cordis'
+// Type-only: the ctx.modules Context merge (the parsed boot manifest's
+// trustedAuthorities feeds the serving-authority decision below).
+import type {} from '@deepseek-ai/dsh-client-modules/client'
 import type { HostDescription, IApiClient } from './api.ts'
 import { ConnectionController, type ConnectionConfig, type ConnectionSinks, type ConnectionState } from './connection.ts'
 import { FixtureApiClient } from './fixture.ts'
@@ -78,6 +81,35 @@ interface ClientTransportGlobal {
 }
 
 /**
+ * Whether one boot-wire authority entry matches the current page authority,
+ * mirroring the host fence's comparison semantics: a port-less entry matches
+ * the hostname on any port; a `host:port` entry matches that exact authority.
+ * The entry parses through WHATWG normalization, so case and a redundant
+ * `:80` never decide trust; an unparsable entry never matches.
+ * @param hostname - page hostname (WHATWG-normalized by the browser).
+ * @param port - page port string ('' on a default port).
+ * @param entry - one wire entry, canonical `host[:port]`.
+ * @returns whether the entry covers the page authority.
+ */
+function matchesAuthority(hostname: string, port: string, entry: string): boolean {
+  let entryUrl: URL
+  try {
+    entryUrl = new URL(`http://${entry}`)
+  } catch {
+    // A malformed wire entry — the host validated every entry, so only a
+    // broken wire contract reaches this catch. Never a match.
+    return false
+  }
+  // Judged under both special schemes, whose default ports differ, so `:80`
+  // and `:443` still count as explicit — the host fence's canonical rule.
+  // The https re-parse cannot fail once the http parse succeeded (both are
+  // WHATWG special schemes); the host fence relies on the same fact.
+  const entryPort = entryUrl.port !== '' ? entryUrl.port : new URL(`https://${entry}`).port
+  if (entryPort === '') return entryUrl.hostname === hostname
+  return entryUrl.host === (port === '' ? hostname : `${hostname}:${port}`)
+}
+
+/**
  * The ctx.connection service API: the API client plus a one-shot
  * controller starter (the runtime plugin supplies sinks when its object layer
  * is ready — connection stays consumer-agnostic).
@@ -85,8 +117,12 @@ interface ClientTransportGlobal {
 export interface ConnectionHandle {
   /** Shared api client (fixture or real, decided at boot from the page URL). */
   readonly api: IApiClient
-  /** Whether the current page authority is loopback; non-browser contexts default to true. */
-  readonly isLoopback: boolean
+  /**
+   * Whether the current page authority is one this deployment serves at:
+   * loopback, or listed in the host-published boot wire; non-browser
+   * contexts default to true.
+   */
+  readonly isServingAuthority: boolean
   /** Generation-scoped Host facts, including the account home and native path-open capability. */
   readonly hostDescription: HostDescriptionSource
   /** Generic logical RPC channels over the same Connection transport. */
@@ -129,7 +165,11 @@ export function apply(ctx: Context): void {
   }
   const handle: ConnectionHandle = {
     api,
-    isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    isServingAuthority: pageLocation === undefined
+      || isLoopbackHostname(pageLocation.hostname)
+      || (ctx.get('modules')?.manifest.trustedAuthorities ?? []).some(
+        entry => matchesAuthority(pageLocation.hostname, pageLocation.port, entry),
+      ),
     hostDescription: {
       getSnapshot: () => description,
       subscribe: (listener) => {

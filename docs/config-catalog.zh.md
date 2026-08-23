@@ -3114,6 +3114,70 @@ export interface Config {
 
 来源：[`packages/web/web-fetch-http/src/index.ts:34`](../packages/web/web-fetch-http/src/index.ts)
 
+<a id="deepseek-aidsh-web-search-academic"></a>
+
+## `@deepseek-ai/dsh-web-search-academic`
+
+需要：`web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills constant defaults). */
+export interface Config {
+  /** arXiv Atom API query endpoint. Defaults to the public export.arxiv.org endpoint. */
+  arxivBaseURL?: string
+  /** Semantic Scholar Graph API base; `/paper/search` is appended. */
+  s2BaseURL?: string
+  /** Per-backend result count. Defaults to 5. Must be a positive integer. */
+  count?: number
+  /** Minimum interval between Semantic Scholar requests, in milliseconds. Defaults to 1500. */
+  minS2IntervalMs?: number
+}
+```
+
+来源：[`packages/web/web-search-academic/src/index.ts:39`](../packages/web/web-search-academic/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-bocha"></a>
+
+## `@deepseek-ai/dsh-web-search-bocha`
+
+需要：`web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Bocha API key. Falls back to `$BOCHA_API_KEY`. Empty → provider unavailable. */
+  apiKey?: string
+  /** Endpoint base; `/v1/web-search` is appended. Defaults to the public API. */
+  baseURL?: string
+  /** Recency filter sent as Bocha's `freshness`. Defaults to `noLimit`. */
+  freshness?: string
+  /** Default result count sent as `count` when a request carries no `maxResults`. */
+  count?: number
+}
+```
+
+来源：[`packages/web/web-search-bocha/src/index.ts:38`](../packages/web/web-search-bocha/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-brave"></a>
+
+## `@deepseek-ai/dsh-web-search-brave`
+
+需要：`web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Brave API key. Falls back to `$BRAVE_API_KEY`. Empty → provider unavailable. */
+  apiKey?: string
+  /** Endpoint base; `/res/v1/web/search` is appended. Defaults to the public API. */
+  baseURL?: string
+  /** Default result count sent as `count` when a request carries no `maxResults`. */
+  count?: number
+}
+```
+
+来源：[`packages/web/web-search-brave/src/index.ts:36`](../packages/web/web-search-brave/src/index.ts)
+
 <a id="deepseek-aidsh-web-search-deepseek"></a>
 
 ## `@deepseek-ai/dsh-web-search-deepseek`
@@ -3189,6 +3253,26 @@ export interface Config {
 ```
 
 来源：[`packages/web/web-search-perplexity/src/index.ts:32`](../packages/web/web-search-perplexity/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-zhihu"></a>
+
+## `@deepseek-ai/dsh-web-search-zhihu`
+
+需要：`web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Zhihu access secret. Falls back to `$ZHIHU_ACCESS_SECRET`. Empty → provider unavailable. */
+  apiKey?: string
+  /** Endpoint base; `/api/v1/content/<backend>` is appended. Defaults to the developer API. */
+  baseURL?: string
+  /** Per-backend result count. Defaults to 5. Must be a positive integer. */
+  count?: number
+}
+```
+
+来源：[`packages/web/web-search-zhihu/src/index.ts:37`](../packages/web/web-search-zhihu/src/index.ts)
 
 <a id="deepseek-aidsh-workflow-worker-thread"></a>
 

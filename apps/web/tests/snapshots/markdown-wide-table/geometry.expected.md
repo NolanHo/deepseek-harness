@@ -8,9 +8,9 @@
 | 1100px | fill | true | false | false |
 | 1100px | wide | false | true | true |
 | 1100px | long-cell | true | false | false |
-| 640px | fill | true | false | false |
+| 640px | fill | false | true | false |
 | 640px | wide | false | true | false |
-| 640px | long-cell | true | false | false |
+| 640px | long-cell | false | true | false |
 
 Wrap-first engagement (taller at the narrowest stop than at the widest):
 

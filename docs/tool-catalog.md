@@ -2196,7 +2196,7 @@ Source: [`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/inde
 
 ### `web_search`
 
-Search the web for current information. Provide 1–4 queries in the required queries array. Returns an optional summary answer and a list of source URLs.
+Search the web for current information. Provide 1–4 queries in the required queries array. Optionally name a search backend with the backend argument to override the configured default for this call alone. Returns an optional summary answer and a list of source URLs.
 
 ```json
 {
@@ -2208,6 +2208,10 @@ Search the web for current information. Provide 1–4 queries in the required qu
       "items": {
         "type": "string"
       }
+    },
+    "backend": {
+      "type": "string",
+      "description": "Optional search backend override. Omit to use the default backend. Naming a backend that is not registered fails with the list of available backends."
     }
   },
   "required": [

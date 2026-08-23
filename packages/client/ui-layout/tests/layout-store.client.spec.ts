@@ -19,7 +19,9 @@ beforeEach(() => { localStorage.clear() })
 describe('createLayoutStore', () => {
   it('initializes the sidebar at its default width, details closed, wide viewport assumed', () => {
     const { store } = createLayoutStore().create()
-    expect(store.getSnapshot()).toEqual({ sidebar: SIDEBAR_DEFAULT, details: 0, narrow: false, narrowExpanded: false })
+    expect(store.getSnapshot()).toEqual({
+      sidebar: SIDEBAR_DEFAULT, details: 0, narrow: false, narrowExpanded: false, mobile: false, drawerOpen: false,
+    })
   })
 
   it('each create() is an independent instance (factory is not a singleton)', () => {
@@ -55,7 +57,7 @@ describe('createLayoutStore', () => {
     actions.setSidebar(400)
     actions.setNarrow(true)
     actions.toggleSidebar()
-    expect(store.getSnapshot()).toEqual({ sidebar: 400, details: 0, narrow: true, narrowExpanded: true })
+    expect(store.getSnapshot()).toEqual({ sidebar: 400, details: 0, narrow: true, narrowExpanded: true, mobile: false, drawerOpen: false })
     actions.toggleSidebar()
     expect(store.getSnapshot().narrowExpanded).toBe(false)
     expect(store.getSnapshot().sidebar).toBe(400)
@@ -98,6 +100,36 @@ describe('createLayoutStore', () => {
       details: 0,
       narrow: false,
       narrowExpanded: false,
+      mobile: false,
+      drawerOpen: false,
     })
+  })
+
+  it('mobile toggleSidebar flips only the drawer flag; the width preference survives', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.setSidebar(400)
+    actions.setMobile(true)
+    actions.toggleSidebar()
+    expect(store.getSnapshot()).toMatchObject({ sidebar: 400, mobile: true, drawerOpen: true })
+    actions.toggleSidebar()
+    expect(store.getSnapshot()).toMatchObject({ sidebar: 400, drawerOpen: false })
+    // Non-mobile narrow keeps flipping the re-expand override only.
+    actions.setMobile(false)
+    actions.setNarrow(true)
+    actions.toggleSidebar()
+    expect(store.getSnapshot()).toMatchObject({ narrow: true, narrowExpanded: true, drawerOpen: false })
+  })
+
+  it('crossing the mobile breakpoint resets the drawer; a same-value setMobile keeps it', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.setMobile(true)
+    actions.toggleSidebar()
+    expect(store.getSnapshot().drawerOpen).toBe(true)
+    actions.setMobile(true)
+    expect(store.getSnapshot().drawerOpen).toBe(true)
+    actions.setMobile(false)
+    expect(store.getSnapshot()).toMatchObject({ mobile: false, drawerOpen: false })
+    actions.setMobile(true)
+    expect(store.getSnapshot().drawerOpen).toBe(false)
   })
 })

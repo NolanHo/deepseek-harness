@@ -368,3 +368,30 @@
 .root[data-phase='settling'] .composerSeat {
   visibility: hidden;
 }
+
+/* Composer safe area: on notch/gesture-bar devices the sticky seat must
+   clear the system inset; a no-op max() where the inset is zero. */
+.composerSeat {
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+}
+
+/* Mobile regime (<768px, matching ui-layout's MOBILE_VIEWPORT): the frame's
+   fixed drawer opener occupies the header's top-left corner, so the session
+   header's leading edge clears it. */
+@media (max-width: 767.98px) {
+  .header {
+    padding-left: 56px;
+  }
+}
+
+/* Narrow viewports (~412px): tighten the header and tab rhythm so the
+   breadcrumb row and tab labels keep their single line. */
+@media (max-width: 560px) {
+  .header {
+    padding: 8px 12px 0 56px;
+  }
+
+  .tabs {
+    gap: 16px;
+  }
+}

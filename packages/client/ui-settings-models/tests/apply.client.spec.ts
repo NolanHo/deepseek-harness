@@ -18,7 +18,7 @@ import { WelcomeNotice } from '../src/client/WelcomeNotice.tsx'
 // so browser-language detection never runs and a fresh LocaleRuntime opens on
 // FALLBACK_LOCALE (en); bench stages zh explicitly on the locale instead.
 
-async function bench(isLoopback = true, settings?: object, services: object = {}) {
+async function bench(isServingAuthority = true, settings?: object, services: object = {}) {
   const ctx = new Context()
   await ctx.plugin(SlotRegistry).await()
   const locale = new LocaleRuntime(ctx)
@@ -32,7 +32,7 @@ async function bench(isLoopback = true, settings?: object, services: object = {}
   // ui-settings apply also provides the settingsSchema service.
   ctx.provide('connection', {
     api: settings === undefined ? services : { ...services, settings },
-    isLoopback,
+    isServingAuthority,
   } as never)
   await ctx.plugin({ inject: [...settingsInject], apply: settingsApply }).await()
   return { ctx, slots: ctx.get('slots') as SlotRegistry, locale }

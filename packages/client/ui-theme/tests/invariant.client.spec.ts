@@ -32,7 +32,7 @@ describe('invariant companion', () => {
         rpcId: 'theme-invariant' as never,
         result: { ok: true, value: { writable: true, hasDocument: false, namespaces: [] } },
       }) } },
-      isLoopback: true,
+      isServingAuthority: true,
     } as never)
     // The settings row's transport and the forwarded-event port.
     ctx.provide('remote', { $on: () => () => {} } as never)

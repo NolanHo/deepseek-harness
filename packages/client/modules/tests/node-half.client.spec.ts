@@ -101,6 +101,7 @@ const bootGraph = (): WebBootGraph => ({
     { id: MODULES_ID, url: '/plugins/modules.js?rev=m', rev: 'm' },
     { id: RUNTIME_ID, url: '/plugins/runtime.js?rev=r', rev: 'r' },
   ],
+  trustedAuthorities: [],
 })
 
 describe('HTML bootstrap facade', () => {

@@ -20,7 +20,7 @@ async function bench() {
   } as never)
   ctx.provide('connection', {
     api: { settings: { describe: async () => ({ result: { ok: false } }) } },
-    isLoopback: false,
+    isServingAuthority: false,
   } as never)
   ctx.provide('remote', { $on: () => () => {} } as never)
   await ctx.plugin({ inject: [...settingsInject], apply: settingsApply }).await()

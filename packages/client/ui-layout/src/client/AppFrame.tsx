@@ -6,22 +6,30 @@
  * renders HERE with live parameters from the concession solve, and the
  * session-aware occupants render in fixed column positions; strict entries
  * gate themselves on current-session availability while session-maybe
- * entries retain identity. Pure component: everything arrives
- * through the three framework shares — zero cordis or framework imports,
- * zero self-made hooks.
+ * entries retain identity. Three viewport regimes: wide grid, narrow rail
+ * (auto-collapsed sidebar), and mobile (< MOBILE_VIEWPORT) where the sidebar
+ * becomes a fixed overlay drawer (scrim + Escape + session-change close) and
+ * the details column a fixed right sheet with its own scrim and close button.
+ * Pure component: everything arrives through the framework shares — zero
+ * cordis or framework imports, zero self-made hooks.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import { computeColumns, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
+import type { PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
+import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { computeColumns, MOBILE_VIEWPORT, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
 import type { createLayoutStore } from './stores.ts'
 import css from './AppFrame.module.css'
 
-/** Full composed props: runtime share + child-slot render share + store share. */
+/** Owner-prop width fed to the sidebar occupant inside the mobile drawer (inside the sidebar contract range). */
+const DRAWER_WIDTH = 300
+
+/** Full composed props: runtime share + child-slot render share + store share + locale share. */
 export type AppFrameProps =
   & PropsRuntime<'root'>
   & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
+  & PropsLocale<'layout'>
 
 /** Center column grid item (session-body building block). */
 function CenterColumn(props: { children?: ReactNode }) {
@@ -29,8 +37,21 @@ function CenterColumn(props: { children?: ReactNode }) {
 }
 
 /** Details column grid item; width 0 keeps the subtree mounted (never unmount on close). */
-function DetailsColumn(props: { children?: ReactNode }) {
-  return <div className={css.detailsCol}>{props.children}</div>
+function DetailsColumn(props: { children?: ReactNode; mobile?: boolean; open?: boolean; onClose?: () => void; closeLabel?: string }) {
+  return (
+    <div
+      className={css.detailsCol}
+      data-mobile={props.mobile || undefined}
+      data-open={props.open || undefined}
+    >
+      {props.mobile && (
+        /* Sheet chrome owned by the frame: occupants assume the desktop shell,
+           so the sheet's explicit close affordance lives here. */
+        <button type="button" className={css.sheetClose} aria-label={props.closeLabel} onClick={props.onClose} />
+      )}
+      {props.children}
+    </div>
+  )
 }
 
 /**
@@ -89,8 +110,10 @@ export function AppFrame({
   useSessions,
   actions,
   renderSlot,
+  t,
 }: AppFrameProps) {
   const panels = useStore(s => s)
+  const currentSession = useSessions(s => s.current)
   const detailsSession = useSessions((s) => {
     const current = s.current
     return current !== undefined && s.byId[current]?.blank === false ? current : undefined
@@ -132,16 +155,54 @@ export function AppFrame({
   // re-expand override, stores.ts). Collapsed is decided here, so the
   // solver stays breakpoint-free: a narrow re-expand passes the preference
   // (or the default when the wide preference is closed) and the center
-  // absorbs the squeeze.
+  // absorbs the squeeze. Mobile mirrors separately (drawer semantics).
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
+  const mobile = viewport < MOBILE_VIEWPORT
   useEffect(() => { actions.setNarrow(narrow) }, [actions, narrow])
+  useEffect(() => { actions.setMobile(mobile) }, [actions, mobile])
   const sidebarCollapsed = narrow ? !panels.narrowExpanded : panels.sidebar === 0
   const sidebarPreference = sidebarCollapsed
     ? 0
     : panels.sidebar === 0 ? SIDEBAR_DEFAULT : panels.sidebar
-  const cols = computeColumns(viewport, sidebarPreference, detailsSession === undefined ? 0 : panels.details)
+  // Mobile skips the solver: the grid collapses to the center track and both
+  // panels render as fixed overlays (drawer wrapper / details sheet).
+  const cols = mobile
+    ? { sidebar: 0, center: viewport, details: 0 }
+    : computeColumns(viewport, sidebarPreference, detailsSession === undefined ? 0 : panels.details)
   const colsRef = useRef(cols)
   colsRef.current = cols
+
+  const closeDrawer = useCallback(() => { actions.setDrawerOpen(false) }, [actions])
+  // Live snapshots for the Escape handler (event-handler snapshot reads are
+  // sanctioned; render keeps subscribing through its hooks).
+  const panelsRef = useRef(panels)
+  panelsRef.current = panels
+  const detailsSessionRef = useRef(detailsSession)
+  detailsSessionRef.current = detailsSession
+  // Escape closes the highest open mobile layer first (sheet above drawer).
+  // The sheet gate matches its render visibility (detailsSession defined):
+  // a retained preference without a visible sheet must not swallow a press.
+  useEffect(() => {
+    if (!mobile) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const now = panelsRef.current
+      if (now.details > 0 && detailsSessionRef.current !== undefined) actions.closeDetails()
+      else if (now.drawerOpen) closeDrawer()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => { window.removeEventListener('keydown', onKeyDown) }
+  }, [actions, closeDrawer, mobile])
+
+  // A session change closes an open mobile drawer (the drawer lists sessions;
+  // after selecting one the conversation must be unobstructed).
+  const drawerSession = useRef(currentSession)
+  useEffect(() => {
+    if (drawerSession.current !== currentSession) {
+      drawerSession.current = currentSession
+      if (panels.mobile && panels.drawerOpen) closeDrawer()
+    }
+  }, [closeDrawer, currentSession, panels.drawerOpen, panels.mobile])
 
   // The drag base is the rendered width captured at drag start (grabbing a
   // concession-clamped panel must not jump back to the stored preference);
@@ -161,6 +222,7 @@ export function AppFrame({
     actions.setDetails(detailsBase.current - dx)
   }, [actions])
 
+  const detailsOpen = mobile ? panels.details > 0 && detailsSession !== undefined : cols.details > 0
   return (
     <div
       ref={frameRef}
@@ -170,17 +232,43 @@ export function AppFrame({
       data-details-collapsed={cols.details === 0 || undefined}
       data-dragging={dragging || undefined}
     >
-      <div className={css.sidebarCol}>
-        {/* Render-site slot call with live concession output: a closed
-            sidebar keeps the mounted slot at the compact-rail width, and the
-            component sees its rendered state as owner params decided here
-            (collapsed follows the resolved rail, so a derived auto-collapse
-            renders the rail UI too). */}
-        {renderSlot('sidebar', {
-          collapsed: sidebarCollapsed,
-          width: cols.sidebar,
-        })}
-      </div>
+      {!mobile && (
+        <div className={css.sidebarCol}>
+          {/* Render-site slot call with live concession output: a closed
+              sidebar keeps the mounted slot at the compact-rail width, and the
+              component sees its rendered state as owner params decided here
+              (collapsed follows the resolved rail, so a derived auto-collapse
+              renders the rail UI too). */}
+          {renderSlot('sidebar', {
+            collapsed: sidebarCollapsed,
+            width: cols.sidebar,
+          })}
+        </div>
+      )}
+      {mobile && (
+        <>
+          {/* Drawer scrim sits below the drawer, above column content. */}
+          {panels.drawerOpen && <div className={css.scrim} onClick={closeDrawer} />}
+          {/* Always mounted so the sidebar subtree survives close (CSS slides). */}
+          <div className={css.mobileDrawer} data-open={panels.drawerOpen || undefined}>
+            {renderSlot('sidebar', { collapsed: false, width: DRAWER_WIDTH })}
+          </div>
+          {/* The drawer's own toggle lives inside the slid-out drawer, so a
+              closed drawer needs a frame-owned opener — the only navigation
+              entry in the mobile regime, present in every column phase
+              (including the blank hero, which hides the session header). */}
+          {!panels.drawerOpen && (
+            <button
+              type="button"
+              className={css.mobileMenu}
+              aria-label={t('sidebar.open')}
+              onClick={actions.toggleSidebar}
+            >
+              <IconPanelLeftOutline16 />
+            </button>
+          )}
+        </>
+      )}
       <>
         {/* Both column occupants stay at fixed tree positions from first
             paint — no loading gate: a bare status line reads worse than
@@ -188,14 +276,22 @@ export function AppFrame({
             is session-maybe; the strict details entry naturally renders
             empty while no session is current. */}
         <CenterColumn>{renderSlot('conversation', {})}</CenterColumn>
-        <DetailsColumn>{renderSlot('details', {})}</DetailsColumn>
+        <DetailsColumn
+          mobile={mobile}
+          open={detailsOpen}
+          onClose={actions.closeDetails}
+          closeLabel={t('details.close')}
+        >
+          {renderSlot('details', {})}
+        </DetailsColumn>
       </>
+      {mobile && detailsOpen && <div className={css.scrim} data-sheet="" onClick={actions.closeDetails} />}
       <div className={css.overlayLayer} data-shell-overlay>
         {renderSlot('shell.overlay', {})}
       </div>
-      {/* The collapsed rail is fixed-width: no resize handle while closed. */}
-      {!sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
-      {cols.details > 0 && <DragHandle side="details" left={viewport - cols.details} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
+      {/* The collapsed rail is fixed-width: no resize handle while closed; mobile hides both handles. */}
+      {!mobile && !sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
+      {!mobile && cols.details > 0 && <DragHandle side="details" left={viewport - cols.details} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
     </div>
   )
 }

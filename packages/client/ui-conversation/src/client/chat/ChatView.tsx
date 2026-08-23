@@ -19,6 +19,8 @@ import { Button, IconChevronDownOutline14, Modal } from '@deepseek-ai/dsh-client
 import type { ChatViewSlotProps, RenderMessageImages } from '../contract/slots.ts'
 import { PendingSteeringBubble } from './MessageItem.tsx'
 import { ChatNodeSeat } from './ChatNodeSeat.tsx'
+import { TurnFoldHeader } from './TurnFoldHeader.tsx'
+import { foldSegments } from './turn-fold.ts'
 import { formatRunDuration } from './message-chrome.ts'
 import css from './ChatView.module.css'
 
@@ -162,6 +164,16 @@ export function ChatView({
   const order = useSession(s => s.chat.order)
   const nodeStore = useSession(s => s.chat.nodes)
   const timeline = useSession(s => s.chat.timeline)
+  // Settled-turn fold: locally expanded turns; empty means all collapsed.
+  const [expandedTurns, setExpandedTurns] = useState<ReadonlySet<number>>(() => new Set())
+  const toggleTurnFold = useCallback((turn: number) => {
+    setExpandedTurns((previous) => {
+      const next = new Set(previous)
+      if (next.has(turn)) next.delete(turn)
+      else next.add(turn)
+      return next
+    })
+  }, [])
   const inbox = useSession(s => s.queue)
   // Workspace root off the session list row: path summaries display relative to it.
   const cwd = useSessions(s => s.byId[sessionId]?.cwd)
@@ -215,6 +227,12 @@ export function ChatView({
     [loadImage, renderSlot],
   )
   const runningTurnStart = useMemo(() => runningTurnStartTime(timeline), [timeline])
+  // Segment list over the order: settled turns collapse their intermediate
+  // rows behind one fold header; running/unclosed turns render unchanged.
+  const segments = useMemo(
+    () => foldSegments(order, nodeStore, timeline, expandedTurns),
+    [order, nodeStore, timeline, expandedTurns],
+  )
 
   const listRef = useRef<HTMLDivElement | null>(null)
   const columnRef = useRef<HTMLDivElement | null>(null)
@@ -429,22 +447,44 @@ export function ChatView({
               </button>
             </div>
           )}
-          {order.map(nodeKey => (
-            <ChatNodeSeat
-              key={nodeKey}
-              nodeKey={nodeKey}
-              useSession={useSession}
-              selectedCallId={selectedCallId}
-              cwd={cwd}
-              openFile={requestOpenFile}
-              inspectCall={inspectCall}
-              forkAt={forkAt}
-              renderMessageImages={renderMessageImages}
-              fileMentions={fileMentions}
-              renderSlot={renderSlot}
-              t={t}
-            />
-          ))}
+          {segments.map((segment) => {
+            if (segment.kind === 'fold') {
+              const turn = timeline.turns.get(segment.turn)
+              const runMs = turn === undefined || turn.start === undefined || turn.end === undefined
+                ? undefined
+                : Math.max(0, turn.end.time - turn.start.time)
+              return (
+                <div key={`turn-fold:${segment.turn}`} className={css.flowItem} data-chat-anchor-key={segment.anchorKey}>
+                  <TurnFoldHeader
+                    toolCalls={segment.toolCalls}
+                    steps={segment.steps}
+                    total={segment.total}
+                    runMs={runMs}
+                    expanded={expandedTurns.has(segment.turn)}
+                    onToggle={() => { toggleTurnFold(segment.turn) }}
+                    t={t}
+                  />
+                </div>
+              )
+            }
+            const nodeKey = segment.key
+            return (
+              <ChatNodeSeat
+                key={nodeKey}
+                nodeKey={nodeKey}
+                useSession={useSession}
+                selectedCallId={selectedCallId}
+                cwd={cwd}
+                openFile={requestOpenFile}
+                inspectCall={inspectCall}
+                forkAt={forkAt}
+                renderMessageImages={renderMessageImages}
+                fileMentions={fileMentions}
+                renderSlot={renderSlot}
+                t={t}
+              />
+            )
+          })}
           {/* No pending placeholders: questions (ui-user-questions) and approvals
               (ApprovalPanel) both take over the composer, so a flow card would
               double-render the same wait. */}

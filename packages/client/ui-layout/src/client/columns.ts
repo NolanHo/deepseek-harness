@@ -8,8 +8,9 @@
  * deficit as the last resort. Inputs are the layout store's plain width
  * preferences (0 = closed); a closed sidebar resolves to the fixed
  * SIDEBAR_COLLAPSED control rail while closed details resolve to zero width.
- * The SIDEBAR_AUTO_COLLAPSE breakpoint is consumed by AppFrame, which decides
- * the effective sidebar preference before solving; the solver itself stays
+ * The SIDEBAR_AUTO_COLLAPSE and MOBILE_VIEWPORT breakpoints are consumed by
+ * AppFrame, which decides the effective sidebar preference and the
+ * mobile-overlay regime before solving; the solver itself stays
  * breakpoint-free.
  */
 
@@ -37,6 +38,10 @@ export const DETAILS_MIN = 300
 export const DETAILS_MAX = 520
 /** Details width before any user drag. */
 export const DETAILS_DEFAULT = 360
+/** Viewport width below which the shell switches to the mobile overlay layout
+ * (sidebar drawer + details sheet); AppFrame decides the regime, the solver
+ * stays breakpoint-free. */
+export const MOBILE_VIEWPORT = 768
 
 /**
  * Clamp a panel width into its contract range.

@@ -25,22 +25,25 @@ export const WEB_SEARCH_MAX_QUERIES = 4
 /** Model-facing `web_search` arguments. */
 interface WebSearchArgs {
   queries: string[]
+  backend?: string
 }
 
 /**
  * Validate value constraints the schema DSL can't express: `queries` is
  * non-empty, contains only non-blank strings, and fits the deployment's
  * query-count bound. Exact duplicate strings are collapsed after the bound
- * check. Throws a plain `Error` otherwise.
+ * check. A supplied `backend` must be non-blank and is trimmed. Throws a plain
+ * `Error` otherwise.
  *
  * @param args - the schema-validated `web_search` arguments.
  * @param maxQueries - the deployment's upper bound on queries in one call.
- * @returns the accepted queries in their first-occurrence order.
+ * @returns the accepted queries in their first-occurrence order, plus the
+ *   trimmed backend when supplied.
  */
 export function parseSearchArgs(
   args: WebSearchArgs,
   maxQueries: number,
-): string[] {
+): { queries: string[]; backend?: string } {
   const queries = args.queries
   if (queries.length === 0) throw new Error('queries must contain at least one query')
   if (queries.length > maxQueries) {
@@ -48,7 +51,11 @@ export function parseSearchArgs(
     throw new Error(`queries must contain at most ${maxQueries} ${noun}`)
   }
   if (queries.some(query => query.trim().length === 0)) throw new Error('each query must be a non-empty string')
-  return [...new Set(queries)]
+  if (args.backend !== undefined && args.backend.trim().length === 0) throw new Error('backend must be a non-empty string when supplied')
+  return {
+    queries: [...new Set(queries)],
+    ...args.backend !== undefined ? { backend: args.backend.trim() } : {},
+  }
 }
 
 /** Display label for a source: its title, else its hostname. */
@@ -227,6 +234,8 @@ export function presentSearchResult(args: WebSearchArgs, result: ToolResult): We
  * @param queries - validated non-empty queries.
  * @param maxResults - the deployment's source cap for the combined result.
  * @param signal - cancellation signal forwarded to every search.
+ * @param backend - optional per-request provider id, overriding the configured
+ *   default for this call alone.
  * @returns the combined search result.
  */
 async function runSearchQueries(
@@ -234,9 +243,11 @@ async function runSearchQueries(
   queries: string[],
   maxResults: number,
   signal: AbortSignal,
+  backend: string | undefined,
 ): Promise<WebSearchResult> {
+  const options = { signal, ...backend !== undefined ? { provider: backend } : {} }
   if (queries.length === 1) {
-    return ctx.web.search({ query: queries[0] as string, maxResults }, signal)
+    return ctx.web.search({ query: queries[0] as string, maxResults }, options)
   }
   const controller = new AbortController()
   const batchSignal = AbortSignal.any([signal, controller.signal])
@@ -244,7 +255,7 @@ async function runSearchQueries(
   const results: WebSearchResult[] = []
   const searches = queries.map(async (query, index) => {
     try {
-      results[index] = await ctx.web.search({ query, maxResults }, batchSignal)
+      results[index] = await ctx.web.search({ query, maxResults }, { ...options, signal: batchSignal })
     } catch (error) {
       if (firstFailure === undefined) firstFailure = { error }
       controller.abort(error)
@@ -323,7 +334,7 @@ export function applyWebSearchTool(
 
   ctx.tools.register(defineTool({
     name: 'web_search',
-    description: `Search the web for current information. Provide 1–${maxQueries} queries in the required queries array. Returns an optional summary answer and a list of source URLs.`,
+    description: `Search the web for current information. Provide 1–${maxQueries} queries in the required queries array. Optionally name a search backend with the backend argument to override the configured default for this call alone. Returns an optional summary answer and a list of source URLs.`,
     parameters: {
       queries: {
         type: 'array',
@@ -331,6 +342,7 @@ export function applyWebSearchTool(
         items: { type: 'string' },
         description: `Required search queries; accepts 1–${maxQueries} items and merges their results.`,
       },
+      backend: { type: 'string', description: 'Optional search backend override. Omit to use the default backend. Naming a backend that is not registered fails with the list of available backends.' },
     },
     output: {
       schema: {
@@ -362,8 +374,8 @@ export function applyWebSearchTool(
     // Provider reads do not mutate parent-agent state.
     isConcurrencySafe: () => true,
     async execute(args, exec) {
-      const queries = parseSearchArgs(args, maxQueries)
-      const result = await runSearchQueries(ctx, queries, maxResults, exec.signal)
+      const { queries, backend } = parseSearchArgs(args, maxQueries)
+      const result = await runSearchQueries(ctx, queries, maxResults, exec.signal, backend)
       return {
         ...result.content !== undefined ? { content: result.content } : {},
         sources: result.sources.map(projectSource),

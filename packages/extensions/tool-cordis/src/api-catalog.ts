@@ -513,6 +513,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the graph served as `window.__DSH_BOOT__`.',
       },
       {
+        signature: 'publishTrustedAuthorities(authorities: readonly string[]): void',
+        description: 'Replace the host-published serving authorities. The producer is the client-connection node half, whose `trustedHosts` config is the exact fence list; publication may land after construction, so the injected HTML always renders the settled graph. Same-value publication does nothing; a change recomposes the graph and notifies listeners once.',
+        parameters: [{ name: 'authorities', description: 'non-loopback authorities, canonical `host[:port]`.' }],
+      },
+      {
         signature: 'clientPath(id: string): string | undefined',
         description: 'Absolute path of an entry\'s client bundle.',
         parameters: [{ name: 'id', description: 'entry id (package name).' }],
@@ -2237,9 +2242,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the disposer that unregisters the provider.',
       },
       {
-        signature: 'async search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>',
-        description: 'Run one search through the selected provider. Resolves the provider at call time with the selection rules above; throws WebError when the capability cannot run. The seam enforces `request.maxResults` on the result: if the provider over-returns, `sources[]` is truncated and `truncated` set.',
-        parameters: [{ name: 'request', description: 'the query and optional result limit.' }, { name: 'signal', description: 'optional cancellation signal forwarded to the provider.' }],
+        signature: 'async search(request: WebSearchRequest, options: WebSearchOptions = {}): Promise<WebSearchResult>',
+        description: 'Run one search through the selected provider. Resolves the provider at call time with the selection rules above; an explicit `options.provider` wins over the configured default for this call alone. Throws WebError when the capability cannot run. The seam enforces `request.maxResults` on the result: if the provider over-returns, `sources[]` is truncated and `truncated` set.',
+        parameters: [{ name: 'request', description: 'the query and optional result limit.' }, { name: 'options', description: 'cancellation signal and optional per-request provider override.' }],
         returns: 'the provider\'s results, capped to `request.maxResults`.',
       },
       {
@@ -4943,7 +4948,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WebBootGraph',
-    declaration: 'export interface WebBootGraph {\n    rev: string;\n    entries: WebBootEntry[];\n}',
+    declaration: 'export interface WebBootGraph {\n    rev: string;\n    entries: WebBootEntry[];\n    trustedAuthorities: string[];\n}',
   },
   {
     name: 'WebFetchBody',
@@ -4976,6 +4981,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WebRouteKind',
     declaration: 'export type WebRouteKind = \'exact\' | \'prefix\';',
+  },
+  {
+    name: 'WebSearchOptions',
+    declaration: 'export interface WebSearchOptions {\n    readonly signal?: AbortSignal;\n    readonly provider?: string;\n}',
   },
   {
     name: 'WebSearchProvider',

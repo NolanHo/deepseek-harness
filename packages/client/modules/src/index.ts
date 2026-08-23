@@ -293,6 +293,7 @@ export class ClientModuleRegistry extends Service {
   private readonly resolvePkgJson: (spec: string) => string
   private flushQueued = false
   private composed: WebBootGraph
+  private trustedAuthorities: string[] = []
 
   /**
    * Build the service: subscribe, seed, and run the activation flush.
@@ -354,6 +355,23 @@ export class ClientModuleRegistry extends Service {
   }
 
   /**
+   * Replace the host-published serving authorities. The producer is the
+   * client-connection node half, whose `trustedHosts` config is the exact
+   * fence list; publication may land after construction, so the injected
+   * HTML always renders the settled graph. Same-value publication does
+   * nothing; a change recomposes the graph and notifies listeners once.
+   * @param authorities - non-loopback authorities, canonical `host[:port]`.
+   */
+  publishTrustedAuthorities(authorities: readonly string[]): void {
+    const next = [...authorities]
+    if (next.length === this.trustedAuthorities.length
+      && next.every((value, index) => value === this.trustedAuthorities[index])) return
+    this.trustedAuthorities = next
+    this.composed = this.compose()
+    this.notifyGraphChanged()
+  }
+
+  /**
    * Absolute path of an entry's client bundle.
    * @param id - entry id (package name).
    * @returns the path, or undefined for an unknown id.
@@ -411,7 +429,11 @@ export class ClientModuleRegistry extends Service {
 
   private compose(): WebBootGraph {
     const entries = orderByModuleGraph([...this.table.values()].map(record => record.entry))
-    return { rev: shortHash(JSON.stringify(entries)), entries }
+    return {
+      rev: shortHash(JSON.stringify([entries, this.trustedAuthorities])),
+      entries,
+      trustedAuthorities: [...this.trustedAuthorities],
+    }
   }
 
   private notifyGraphChanged(): void {

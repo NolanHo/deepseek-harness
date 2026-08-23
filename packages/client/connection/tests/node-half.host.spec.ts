@@ -498,4 +498,21 @@ describe('connection node half over a real HTTP server', () => {
       await dispose()
     }
   })
+
+  it('publishes the fence list minus loopback entries to the boot wire', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    const published: string[][] = []
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    ctx.provide('apiProxy', {} as unknown as ApiProxy)
+    ctx.provide('clientModules', {
+      publishTrustedAuthorities(authorities: readonly string[]) { published.push([...authorities]) },
+    } as never)
+    const fiber = ctx.plugin({ inject: [...inject], apply }, {
+      trustedHosts: ['127.0.0.1', 'localhost', 'app.internal', '192.168.4.7:8080'],
+    })
+    await fiber.await()
+    expect(published).toEqual([['app.internal', '192.168.4.7:8080']])
+    await fiber.dispose()
+  })
 })

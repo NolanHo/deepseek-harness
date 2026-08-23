@@ -2,7 +2,8 @@
  * Service Definition for the web access capability seam (`ctx.web`): registries and provider-selecting execution for search and
  * fetch. Duplicate ids are rejected. At execution time, a configured provider must exist and
  * be usable; without one, exactly one usable provider is required, so selection never depends
- * on registration order.
+ * on registration order. A `search()` call may name a per-request provider, overriding the
+ * configured default for that call alone.
  * @module @deepseek-ai/dsh-web
  */
 
@@ -44,6 +45,14 @@ interface Selection<P> {
   readonly configuredId?: string
   /** Providers registered for this capability kind. */
   readonly providers: ReadonlyMap<string, P>
+}
+
+/** Execution options for one search call. */
+export interface WebSearchOptions {
+  /** Optional cancellation signal forwarded to the provider. */
+  readonly signal?: AbortSignal
+  /** Explicit per-request provider id, overriding the configured default for this call alone. */
+  readonly provider?: string
 }
 
 /**
@@ -130,19 +139,21 @@ export class WebRuntime extends Service {
 
   /**
    * Run one search through the selected provider. Resolves the provider at call
-   * time with the selection rules above; throws {@link WebError} when the
-   * capability cannot run. The seam enforces `request.maxResults` on the result:
-   * if the provider over-returns, `sources[]` is truncated and `truncated` set.
+   * time with the selection rules above; an explicit `options.provider` wins
+   * over the configured default for this call alone. Throws {@link WebError}
+   * when the capability cannot run. The seam enforces `request.maxResults` on
+   * the result: if the provider over-returns, `sources[]` is truncated and
+   * `truncated` set.
    * @param request - the query and optional result limit.
-   * @param signal - optional cancellation signal forwarded to the provider.
+   * @param options - cancellation signal and optional per-request provider override.
    * @returns the provider's results, capped to `request.maxResults`.
    */
-  async search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult> {
+  async search(request: WebSearchRequest, options: WebSearchOptions = {}): Promise<WebSearchResult> {
     const provider = resolveProvider({
       providers: this.searchProviders,
       ...this.searchProviderId !== undefined ? { configuredId: this.searchProviderId } : {},
-    })
-    const result = await provider.search(request, signal)
+    }, options.provider)
+    const result = await provider.search(request, options.signal)
     return capSources(result, request.maxResults)
   }
 
@@ -169,8 +180,22 @@ interface ResolvableProvider {
 }
 
 /** Resolve the selected provider or throw the matching {@link WebError}. */
-function resolveProvider<P extends ResolvableProvider>(selection: Selection<P>): P {
+function resolveProvider<P extends ResolvableProvider>(selection: Selection<P>, explicitId?: string): P {
   const { configuredId, providers } = selection
+  if (explicitId !== undefined) {
+    const provider = providers.get(explicitId)
+    if (!provider) {
+      const available = [...providers.keys()].sort().join(', ')
+      throw new WebError(
+        `web search backend "${explicitId}" is not registered${available.length > 0 ? ` (available: ${available})` : ''}`,
+        'WEB_PROVIDER_UNKNOWN',
+      )
+    }
+    if (!provider.available()) {
+      throw new WebError(`web search backend "${explicitId}" is registered but unavailable`, 'WEB_PROVIDER_UNAVAILABLE')
+    }
+    return provider
+  }
   if (configuredId !== undefined) {
     const provider = providers.get(configuredId)
     if (!provider) {

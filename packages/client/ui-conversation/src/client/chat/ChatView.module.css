@@ -200,3 +200,14 @@
 .modalAction {
   min-width: 72px;
 }
+
+/* Narrow viewports (~412px): the full composer-clearance + 16px side padding
+   leaves too little line length; drop to a flat 12px per side. The wide
+   width relation (transcript 32px narrower than the input card) does not
+   hold below this breakpoint. */
+@media (max-width: 560px) {
+  .scroll {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}

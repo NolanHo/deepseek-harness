@@ -70,7 +70,7 @@ export function apply(ctx: ClientContext): void {
   const connection = ctx.get('connection') as ConnectionHandle
   // The action follows the shared describe mirror, whose owning plugin
   // already refreshes it on document commits and reconnects.
-  const documentController = connection.isLoopback
+  const documentController = connection.isServingAuthority
     ? new SettingsDocumentStore(connection.api, ctx.settingsScope.describe())
     : undefined
   const documentInjected = documentController === undefined

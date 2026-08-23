@@ -67,7 +67,7 @@ describe('connection client apply', () => {
     ;(globalThis as Win).location = { hostname: 'localhost', search: '' }
     const handle = await mount()
     expect(handle.api).toBeInstanceOf(WebApiClient)
-    expect(handle.isLoopback).toBe(true)
+    expect(handle.isServingAuthority).toBe(true)
   })
 
   it('selects the fixture client under ?fixture (and with no location at all stays real)', async () => {
@@ -76,12 +76,12 @@ describe('connection client apply', () => {
     delete (globalThis as Win).location
     const handle = await mount()
     expect(handle.api).toBeInstanceOf(WebApiClient)
-    expect(handle.isLoopback).toBe(true)
+    expect(handle.isServingAuthority).toBe(true)
   })
 
   it('reports non-loopback page authority through the connection handle', async () => {
     ;(globalThis as Win).location = { hostname: '192.0.2.20', search: '' }
-    expect((await mount()).isLoopback).toBe(false)
+    expect((await mount()).isServingAuthority).toBe(false)
   })
 
   it('start() hands out one loop, rejects a second consumer, and stop() aborts the streams', async () => {

@@ -92,6 +92,16 @@ The web plugin table service: incremental `dsh.client` scan + wire composition +
 graph(): WebBootGraph
 
 /**
+ * Replace the host-published serving authorities. The producer is the
+ * client-connection node half, whose `trustedHosts` config is the exact
+ * fence list; publication may land after construction, so the injected
+ * HTML always renders the settled graph. Same-value publication does
+ * nothing; a change recomposes the graph and notifies listeners once.
+ * @param authorities - non-loopback authorities, canonical `host[:port]`.
+ */
+publishTrustedAuthorities(authorities: readonly string[]): void
+
+/**
  * Absolute path of an entry's client bundle.
  * @param id - entry id (package name).
  * @returns the path, or undefined for an unknown id.

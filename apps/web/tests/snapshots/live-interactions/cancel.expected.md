@@ -12,10 +12,9 @@
 - text: Reply with a one-sentence description of event sourcing, then stop. {{clock}}
 - button "Copy":
   - img
-- button "Context injection @deepseek-ai/dsh-system-prompt":
+- button "Expand or collapse this turn’s intermediate steps":
   - img
-  - img
-  - text: Context injection @deepseek-ai/dsh-system-prompt
+  - text: Collapsed 1 steps
 - paragraph: partial
 - text: Stopped
 - button "Copy":

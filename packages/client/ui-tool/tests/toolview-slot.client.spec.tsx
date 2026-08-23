@@ -66,7 +66,7 @@ async function bench(nodes: ToolResultNode[]) {
   const runtime = await SlotTestRuntime.create()
   runtime.provide('connection', {
     api: { settings: {} },
-    isLoopback: false,
+    isServingAuthority: false,
     hostDescription: { getSnapshot: () => undefined, subscribe: () => () => {} },
   })
   // ui-theme's Appearance row binds a durable scope through these two.
@@ -209,7 +209,7 @@ describe('registrant declaration injection', () => {
     const runtime = await SlotTestRuntime.create()
     runtime.provide('connection', {
       api: { settings: {} },
-      isLoopback: false,
+      isServingAuthority: false,
       hostDescription: { getSnapshot: () => undefined, subscribe: () => () => {} },
     })
     // ui-theme's Appearance row binds a durable scope through these two.

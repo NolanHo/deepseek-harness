@@ -30,7 +30,7 @@ async function mount(): Promise<Bench> {
   const bench: Bench = { ctx, api, sinks: undefined, stopped: 0 }
   const handle: ConnectionHandle = {
     api,
-    isLoopback: true,
+    isServingAuthority: true,
     hostDescription: {
       getSnapshot: () => undefined,
       subscribe: () => () => {},

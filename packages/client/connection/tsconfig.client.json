@@ -43,6 +43,9 @@
       "path": "../../runtime-diagnostics/invariants"
     },
     {
+      "path": "../modules"
+    },
+    {
       "path": "../../util/brand"
     }
   ]

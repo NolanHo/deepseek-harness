@@ -113,6 +113,31 @@ describe('WebRuntime execution resolution', () => {
     await expect(web.search({ query: 'q' })).resolves.toMatchObject({ content: 'perplexity' })
   })
 
+  it('runs the explicitly requested provider over the configured default for that call alone', async () => {
+    const { web } = await mountWeb({ searchProvider: 'perplexity' })
+    web.registerSearchProvider(makeSearchProvider('exa', available, () => Promise.resolve(searchResult('exa'))))
+    web.registerSearchProvider(makeSearchProvider('perplexity', available, () => Promise.resolve(searchResult('perplexity'))))
+    await expect(web.search({ query: 'q' }, { provider: 'exa' })).resolves.toMatchObject({ content: 'exa' })
+    // The configured default is untouched for calls without an explicit override.
+    await expect(web.search({ query: 'q' })).resolves.toMatchObject({ content: 'perplexity' })
+  })
+
+  it('throws WEB_PROVIDER_UNKNOWN for an explicit provider id that is not registered, naming the available ones', async () => {
+    const { web } = await mountWeb()
+    web.registerSearchProvider(makeSearchProvider('exa', available, () => Promise.resolve(searchResult('exa'))))
+    const rejection = expect(web.search({ query: 'q' }, { provider: 'bocha' })).rejects
+    await rejection.toThrow(expect.objectContaining({ code: 'WEB_PROVIDER_UNKNOWN' }))
+    await rejection.toThrow(expect.objectContaining({ message: expect.stringContaining('bocha') as never }))
+    await rejection.toThrow(expect.objectContaining({ message: expect.stringContaining('exa') as never }))
+  })
+
+  it('throws WEB_PROVIDER_UNAVAILABLE for an explicit provider id that is registered but unusable', async () => {
+    const { web } = await mountWeb()
+    web.registerSearchProvider(makeSearchProvider('exa', unavailable, () => Promise.resolve(searchResult('exa'))))
+    await expect(web.search({ query: 'q' }, { provider: 'exa' }))
+      .rejects.toThrow(expect.objectContaining({ code: 'WEB_PROVIDER_UNAVAILABLE' }))
+  })
+
   it('ignores unusable providers when auto-selecting', async () => {
     const { web } = await mountWeb()
     web.registerSearchProvider(makeSearchProvider('exa', available, () => Promise.resolve(searchResult('exa'))))
@@ -151,7 +176,7 @@ describe('WebRuntime execution resolution', () => {
       search: (_request, signal) => { seen.push(signal); return Promise.resolve(searchResult('exa')) },
     })
     const controller = new AbortController()
-    await web.search({ query: 'q' }, controller.signal)
+    await web.search({ query: 'q' }, { signal: controller.signal })
     expect(seen[0]).toBe(controller.signal)
   })
 })

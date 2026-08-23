@@ -160,7 +160,7 @@ async function bench(snapshot: ConversationSnapshot) {
   ctx.provide('layout', layout)
   ctx.provide('connection', {
     api: { settings: {} },
-    isLoopback: false,
+    isServingAuthority: false,
     hostDescription: { getSnapshot: () => undefined, subscribe: () => () => {} },
   } as never)
   // ui-theme's Appearance row binds a durable scope through these two.
