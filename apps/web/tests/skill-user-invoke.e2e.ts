@@ -16,6 +16,7 @@ import {
   assertFixtureInventory,
   captureStableAria,
   compareOrRefreshGolden,
+  expandAllTurnFolds,
   launchWebScaffold,
   watchConsole,
   webSnapshotMode,
@@ -119,6 +120,13 @@ describe.skipIf(MODE === 'record')('web e2e: user-explicit skill invocation thro
     await bubble.waitFor({ timeout: 15_000 })
     expect(await bubble.textContent()).toBe(`/${SKILL_NAME}`)
 
+    // The injection started a turn; the replay adapter answers it. The settled
+    // turn folds the injection row behind the turn fold, so settle and expand
+    // before interacting with the row.
+    await page.getByText('USER_INVOKE_REPLY', { exact: false }).first().waitFor({ timeout: 20_000 })
+    await settled
+    await expandAllTurnFolds(page)
+
     // The rendered body arrives as a context-injection row named after the
     // skill; expanding it reveals the canonical <skill_content> block, and
     // the user's text is NOT folded into it.
@@ -133,10 +141,6 @@ describe.skipIf(MODE === 'record')('web e2e: user-explicit skill invocation thro
     expect(injected).toContain('Reply with the fixture acknowledgement line.')
     expect(injected).not.toContain(ARGS_TEXT)
     await injectionRow.click()
-
-    // The injection started a turn; the replay adapter answers it.
-    await page.getByText('USER_INVOKE_REPLY', { exact: false }).first().waitFor({ timeout: 20_000 })
-    await settled
 
     const snapshot = await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd)
     await compareOrRefreshGolden(UI_EXPECTED, snapshot, MODE)

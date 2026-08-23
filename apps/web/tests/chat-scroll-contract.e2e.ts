@@ -14,6 +14,7 @@ import type { ReplayEntry, ReplayOverrideDoc } from '@deepseek-ai/dsh-llm-replay
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { createChatScrollFixture, type ChatScrollFixture } from './chat-scroll-fixture.ts'
 import {
+  expandAllTurnFolds,
   launchWebScaffold,
   seedSession,
   watchConsole,
@@ -262,7 +263,18 @@ async function loadedFlowRows(page: Page): Promise<number> {
   return page.locator('[data-chat-flow-key]').count()
 }
 
-async function openSeed(page: Page, fixture: ChatScrollFixture, tailMarker?: string): Promise<void> {
+/** Open the mobile overlay drawer when its floating frame opener is showing. */
+async function ensureDrawerOpen(page: Page): Promise<void> {
+  const opener = page.getByRole('button', { name: 'Open sidebar', exact: true })
+  if (await opener.count() > 0) await opener.click()
+}
+
+async function openSeed(
+  page: Page,
+  fixture: ChatScrollFixture,
+  tailMarker?: string,
+  options?: { readonly preserveReaderPosition?: boolean },
+): Promise<void> {
   // Search collapsed into a header action; expand it before filling.
   const searchButton = page.getByRole('button', { name: 'Search sessions' })
   if (await searchButton.getAttribute('aria-expanded') !== 'true') await searchButton.click()
@@ -274,10 +286,39 @@ async function openSeed(page: Page, fixture: ChatScrollFixture, tailMarker?: str
   await search.fill(fixture.markers.user(1))
   const results = page.getByRole('tree', { name: 'Search results' }).getByRole('treeitem')
   await expect.poll(() => results.count(), { timeout: 60_000 }).toBe(1)
-  await results.click()
+  // The result row re-renders while lazy history loading reconciles the
+  // content index, so a stability-gated click can time out mid-churn; retry
+  // briefly instead of waiting out the full default timeout.
+  let opened = false
+  for (let attempt = 0; attempt < 10 && !opened; attempt += 1) {
+    try {
+      await results.first().click({ timeout: 2_000 })
+      opened = true
+    } catch {
+      // Row replaced mid-click by index reconciliation; the next attempt
+      // resolves the fresh row.
+    }
+  }
+  if (!opened) throw new Error(`search result for ${fixture.markers.user(1)} never stabilized`)
   await page.getByRole('tab', { name: 'Chat', exact: true }).waitFor({ timeout: 30_000 })
   if (tailMarker !== undefined) {
     await page.getByText(tailMarker, { exact: false }).last().waitFor({ timeout: 30_000 })
+  }
+  // Seeded turns are settled with closing answers, so their intermediate rows
+  // render behind folds; these scenarios assert row-level geometry over the
+  // full transcript, so expand every fold right after the open. Each header
+  // click scrolls the clicked row into view (Playwright auto scroll-into-view),
+  // leaving the viewport mid-history; every scenario below starts from the
+  // pinned floor, so return there after the expansion. Position-restoration
+  // scenarios skip both steps so the remounted view keeps its saved reader
+  // spot over the exact layout it was captured on.
+  if (options?.preserveReaderPosition !== true) {
+    await expandAllTurnFolds(page)
+    await page.evaluate(() => {
+      const scroller = document.querySelector('[data-conversation-scroll]')
+      if (scroller === null || !(scroller instanceof HTMLElement)) throw new Error('conversation scrollport is missing')
+      scroller.scrollTop = scroller.scrollHeight
+    })
   }
   await nextPaint(page)
 }
@@ -657,21 +698,26 @@ describe('web e2e: long Chat scroll contract', () => {
       await world.page.getByRole('tab', { name: 'Trajectory', exact: true }).click()
       await world.page.getByLabel('Trajectory timeline').waitFor({ timeout: 30_000 })
       await world.page.setViewportSize({ width: 700, height: 900 })
-      // The narrow breakpoint auto-collapses the sidebar. Re-open it because
-      // this scenario switches sessions while pinning the narrow Chat scroll owner.
-      await world.page.getByRole('button', { name: 'Open sidebar', exact: true }).click()
+      // 700px lands in the mobile regime (<768px): the sidebar is the overlay
+      // drawer and the drawer's scrim would swallow a tab click while open.
+      // Return to Chat first, then drive the cross-session flow through the
+      // drawer (each session selection closes it; the opener button returns).
       await world.page.getByRole('tab', { name: 'Chat', exact: true }).click()
       await nextPaint(world.page)
       await expectSameFlowTop(world.page, sessionAnchor)
 
+      await ensureDrawerOpen(world.page)
       await openSeed(
         world.page,
         RESTORE_FIXTURE_B,
         RESTORE_FIXTURE_B.markers.assistant(RESTORE_FIXTURE_B.turns),
       )
+      await ensureDrawerOpen(world.page)
       await openSeed(
         world.page,
         RESTORE_FIXTURE_A,
+        RESTORE_FIXTURE_A.markers.assistant(RESTORE_FIXTURE_A.turns),
+        { preserveReaderPosition: true },
       )
       await expectSameFlowTop(world.page, sessionAnchor)
 
@@ -689,11 +735,15 @@ describe('web e2e: long Chat scroll contract', () => {
       await world.page.getByLabel('Trajectory timeline').waitFor({ timeout: 30_000 })
       await world.page.getByRole('tab', { name: 'Chat', exact: true }).click()
       await expectBottom(world.page)
+      // Mobile regime: the only sidebar opener is the frame's floating button,
+      // and the drawer auto-closed on the previous session selection.
+      await ensureDrawerOpen(world.page)
       await openSeed(
         world.page,
         RESTORE_FIXTURE_B,
         RESTORE_FIXTURE_B.markers.assistant(RESTORE_FIXTURE_B.turns),
       )
+      await ensureDrawerOpen(world.page)
       await openSeed(
         world.page,
         RESTORE_FIXTURE_A,

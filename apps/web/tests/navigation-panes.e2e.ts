@@ -71,6 +71,15 @@ async function ensureSeedOpen(page: Page): Promise<void> {
   }
   await chat.click()
   await page.getByText('FIRST_DONE', { exact: true }).waitFor({ timeout: 15_000 })
+  // The seeded settled turns fold their intermediate rows; expand every still
+  // collapsed fold (idempotent across repeated calls) so row assertions in
+  // later tests see the tool rows.
+  const folds = page.getByRole('button', { name: 'Expand or collapse this turn’s intermediate steps' })
+  for (let index = 0; index < await folds.count(); index += 1) {
+    if (await folds.nth(index).getAttribute('aria-expanded') === 'false') {
+      await folds.nth(index).click()
+    }
+  }
   if (await search.inputValue() !== '') {
     await search.fill('')
     await expect.poll(() => search.inputValue(), { timeout: 5_000 }).toBe('')

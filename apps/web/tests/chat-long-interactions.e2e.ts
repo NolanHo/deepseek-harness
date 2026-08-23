@@ -13,6 +13,7 @@ import type { ReplayEntry, ReplayOverrideDoc } from '@deepseek-ai/dsh-llm-replay
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { createChatScrollFixture } from './chat-scroll-fixture.ts'
 import {
+  expandAllTurnFolds,
   launchWebScaffold,
   seedSession,
   watchConsole,
@@ -93,6 +94,10 @@ async function openSeed(page: Page): Promise<void> {
   await results.click()
   await page.getByText(FIXTURE.markers.assistant(FIXTURE.turns), { exact: false })
     .last().waitFor({ timeout: 30_000 })
+  // Seeded turns are settled with closing answers, so their intermediate rows
+  // (tool calls, intermediate replies) render behind folds; these scenarios
+  // locate rows by semantic identity, so expand every fold after the open.
+  await expandAllTurnFolds(page)
   await nextPaint(page)
 }
 

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-23-transcript-turn-fold-and-mobile-shell.md
-2026-08-23-transcript-turn-fold-and-mobile-shell.md: 0acb74e8b44720c7e382a62ab14685b6d5b841a1
-2026-08-23-transcript-turn-fold-and-mobile-shell.zh.md: 0e900728cbdf5d1c427542657d15b9677b23fa6d
+2026-08-23-transcript-turn-fold-and-mobile-shell.md: 55cfbbc2cffdccb39429ca559ce1ccc72b7b8b5f
+2026-08-23-transcript-turn-fold-and-mobile-shell.zh.md: b0900493beac20a0a421dabd69a303df133c1c0f

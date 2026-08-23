@@ -13,8 +13,9 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { WEB_SEARCH_MAX_RESULTS } from '@deepseek-ai/dsh-tool-web'
 import {
-  assertFixtureInventory, captureStableAria, compareOrRefreshGolden, fixtureUserPrompts,
-  launchWebScaffold, recordFixture, watchConsole, webSnapshotMode, type WebScaffold,
+  assertFixtureInventory, captureStableAria, compareOrRefreshGolden, expandAllTurnFolds,
+  fixtureUserPrompts, launchWebScaffold, recordFixture, watchConsole, webSnapshotMode,
+  type WebScaffold,
 } from './scaffold.ts'
 import { connectFreshWorkspace, newEnglishPage, saveFailureShot } from './support.ts'
 
@@ -262,6 +263,8 @@ describe('web e2e: shipped default web search', () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-search-aria'))
     await expect.poll(() => page.getByText('SEARCH_DONE', { exact: true }).count(), { timeout: 15_000 })
       .toBeGreaterThanOrEqual(1)
+    // The settled turn folds its intermediate rows; expand before row assertions.
+    await expandAllTurnFolds(page)
     await page.locator('[data-tool="web_search"]').waitFor({ timeout: 10_000 })
     const snapshot = await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd)
     await compareOrRefreshGolden(UI_EXPECTED, snapshot, MODE)

@@ -15,7 +15,7 @@ import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
-  captureStableAria, compareOrRefreshGolden, fixtureUserPrompts,
+  captureStableAria, compareOrRefreshGolden, expandAllTurnFolds, fixtureUserPrompts,
   launchWebScaffold, recordFixture, watchConsole, webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'
 import { connectFreshWorkspace, newEnglishPage, saveFailureShot } from './support.ts'
@@ -103,6 +103,8 @@ describe('web e2e: Code Mode round renders nested sub-calls', () => {
   it.skipIf(MODE === 'record')('renders the code parent row with always-visible nested sub-rows', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-code-mode-rows'))
     await expect.poll(() => page.getByText('DONE', { exact: true }).count(), { timeout: 15_000 }).toBeGreaterThanOrEqual(1)
+    // The settled turn folds its intermediate rows; expand before row assertions.
+    await expandAllTurnFolds(page)
     // The parent run_code row wears the code variant with the model-authored
     // description as its summary (the presentCall contract).
     const codeRow = page.locator('[data-variant="code"]').first()

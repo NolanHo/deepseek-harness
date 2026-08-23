@@ -10,7 +10,7 @@ import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import {
-  assertFixtureInventory, captureStableAria, compareOrRefreshGolden,
+  assertFixtureInventory, captureStableAria, compareOrRefreshGolden, expandAllTurnFolds,
   fixtureUserPrompts, launchWebScaffold, watchConsole, webSnapshotMode,
   type WebScaffold,
 } from './scaffold.ts'
@@ -161,6 +161,8 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     await sessions.getByRole('treeitem', { name: /Use the workflow tool exactly/ }).click()
     await settled
     await page.locator('[data-workflow-run][data-run-status="completed"]').waitFor()
+    // The settled turn folds intermediate rows; expand before row assertions.
+    await expandAllTurnFolds(page)
 
     expect(await page.locator('[data-chat-flow-kind="tool-call"]').count()).toBeGreaterThanOrEqual(1)
     expect(await page.locator('[data-chat-flow-kind="workflow-run"]').count()).toBe(1)
@@ -185,6 +187,11 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     onTestFailed(() => saveFailureShot(page, 'web-e2e-workflow-run-history'))
     await page.reload({ waitUntil: 'load' })
     await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
+    // History rebuilds settled turns folded; expand before reaching the record.
+    await page
+      .getByRole('button', { name: 'Expand or collapse this turn’s intermediate steps' })
+      .first().waitFor({ timeout: 15_000 })
+    await expandAllTurnFolds(page)
     const workflow = page.getByRole('button', { name: /^snapshot-flow/ })
     await workflow.waitFor({ timeout: 15_000 })
     expect(await workflow.getAttribute('aria-expanded')).toBe('false')

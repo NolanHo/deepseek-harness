@@ -227,7 +227,10 @@ export function AppFrame({
     <div
       ref={frameRef}
       className={css.frame}
-      style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.details}px` }}
+      /* Mobile collapses to ONE in-flow track: the drawer/scrim/sheet nodes
+         are position:fixed (out of flow), so a three-track template would
+         auto-place the center column into the zero-width sidebar track. */
+      style={{ gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : `${cols.sidebar}px minmax(0, 1fr) ${cols.details}px` }}
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-details-collapsed={cols.details === 0 || undefined}
       data-dragging={dragging || undefined}

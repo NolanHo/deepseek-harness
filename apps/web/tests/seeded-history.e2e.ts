@@ -22,7 +22,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { join } from 'node:path'
 import {
-  assertFixtureInventory, captureStableAria, compareOrRefreshGolden, fixtureUserPrompts,
+  assertFixtureInventory, captureStableAria, compareOrRefreshGolden, expandAllTurnFolds, fixtureUserPrompts,
   launchWebScaffold, parseSeedFixture, realizeSeedFixture, recordFixture, renderSeedFixture, seedSession, watchConsole,
   webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'
@@ -285,6 +285,9 @@ describe('web e2e: seeded history renders through cold resume', () => {
     expect(await page.getByText('Context compacted', { exact: true }).count()).toBe(0)
     // Tool cards render from logged tool/call + tool/result alone (views are
     // host-recomputed per page; the generic card is the documented default).
+    // The settled turn's intermediate rows render behind its fold: expand
+    // before row-level assertions.
+    await expandAllTurnFolds(page)
     const toolRows = page.locator('[data-variant], [data-sample]')
     await expect.poll(() => toolRows.count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(2)
     expect(await page.getByText('a.txt', { exact: false }).count()).toBeGreaterThan(0)

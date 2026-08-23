@@ -29,4 +29,10 @@ export interface ChatStoreState {
    * persisted snapshots from before this field rehydrate without it.
    */
   inspect: { callId: CallId } | null
+  /**
+   * Locally expanded settled-turn folds, by turn number (persisted; survives
+   * view switches, session switches, and reloads). Read with `?? []` —
+   * persisted snapshots from before this field rehydrate without it.
+   */
+  expandedTurns?: readonly number[]
 }

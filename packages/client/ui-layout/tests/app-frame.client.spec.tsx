@@ -97,6 +97,9 @@ function mountFrame() {
 }
 
 function tracks(frame: HTMLElement): number[] {
+  // Mobile collapses to one in-flow track (the drawer/scrim/sheet overlays
+  // are position:fixed, out of the grid flow).
+  if (frame.style.gridTemplateColumns === 'minmax(0, 1fr)') return [0, 0]
   const m = /^(\d+)px minmax\(0, 1fr\) (\d+)px$/.exec(frame.style.gridTemplateColumns)
   if (m === null) throw new Error(`unexpected template: ${frame.style.gridTemplateColumns}`)
   return [Number(m[1]), Number(m[2])]

@@ -15,7 +15,7 @@ import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
-  captureStableAria, compareOrRefreshGolden, fixtureUserPrompts,
+  captureStableAria, compareOrRefreshGolden, expandAllTurnFolds, fixtureUserPrompts,
   launchWebScaffold, recordFixture, watchConsole, webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'
 import { connectFreshWorkspace, newEnglishPage, saveFailureShot } from './support.ts'
@@ -138,6 +138,8 @@ describe('web e2e: Cordis tools use their owned cards', () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-cordis-rows'))
     await expect.poll(() => page.getByText('CORDIS_UI_DONE', { exact: true }).count(), { timeout: 15_000 })
       .toBeGreaterThanOrEqual(1)
+    // The settled turn folds its tool rows; expand before row assertions.
+    await expandAllTurnFolds(page)
 
     const inspectRow = page.locator('[data-tool="cordis_inspect_self"]').filter({ hasText: 'Inspect' }).first()
     await inspectRow.waitFor({ timeout: 10_000 })

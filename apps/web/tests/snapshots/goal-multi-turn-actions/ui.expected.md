@@ -16,7 +16,7 @@
   - text: "goal Goal created Status: active Objective: 做两个turn，每个turn输出随机一个包的文件结构。注意你做完一个turn之后，直接输出内容，停止，我们的系统会帮你再开一个turn，你看着做一个类似的 Rounds: 0/256 Activation: armed Commands: /goal edit <objective>, /goal pause, /goal clear"
 - button "Expand or collapse this turn’s intermediate steps":
   - img
-  - text: Collapsed 6 tool calls · 5 intermediate replies · {{duration}}
+  - text: "Collapsed · Tool calls: 6 · Intermediate replies: 5 · {{duration}}"
 - 'button "Think Turn 1 is done. Per the objective: \"你做完一个turn之后，直接输出内容，停止\" — after finishing a turn, directly output the content and stop. The system will open another turn."':
   - img
   - img
@@ -42,7 +42,7 @@
 - text: {{clock}} Ran for {{duration}} TTFT {{duration}} {{throughput}} tok/s
 - button "Expand or collapse this turn’s intermediate steps":
   - img
-  - text: Collapsed 5 tool calls · 4 intermediate replies · {{duration}}
+  - text: "Collapsed · Tool calls: 5 · Intermediate replies: 4 · {{duration}}"
 - paragraph: 两个 turn 都完成了 ✅
 - paragraph:
   - strong: 总结：

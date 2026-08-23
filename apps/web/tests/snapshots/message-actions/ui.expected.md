@@ -27,7 +27,7 @@
 - text: Available only on the last message of a completed turn 7/25 {{clock}} Ran for {{duration}} TTFT {{duration}} {{throughput}} tok/s
 - button "Expand or collapse this turn’s intermediate steps":
   - img
-  - text: Collapsed 2 tool calls · 1 intermediate replies · {{duration}}
+  - text: "Collapsed · Tool calls: 2 · Intermediate replies: 1 · {{duration}}"
 - text: Now give the final answer. 7/25 {{clock}}
 - button "Copy":
   - img

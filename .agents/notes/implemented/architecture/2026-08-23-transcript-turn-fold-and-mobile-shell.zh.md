@@ -14,15 +14,15 @@ Status: implemented
 
 ## Decision
 
-**回合折叠是渲染期视图分组，不是投影变更。** 纯预遍历（`turn-fold.ts`）按 `location.turn` 对 `order` 的连续行分组；仅当 timeline 报告回合已定稿且其 `turn-tail` 携带 `closing` 回答时才折叠。可折叠行是除 user/steering、结束 `assistant-step`（按 `finalNode.seq` 匹配）、`turn-tail`、错误行之外的全部行。折叠行完全离开 DOM（而非隐藏），折叠头携带第一个隐藏行的锚点 key，展开状态是 ChatView 本地 state（`useState` Set）——刻意不用 store：它是单次阅读的视图状态，不跨条目共享、不值得跨挂载存活。运行中回合与无 closing 回答的回合渲染与折叠前逐字节一致。不新增 Chat Node kind、不改 Session：Conversation Node 纪律保持追加热路径无扫描，timeline 在回合定稿时重发布即自动出现折叠。
+**回合折叠是渲染期视图分组，不是投影变更。** 纯预遍历（`turn-fold.ts`）按 `location.turn` 对 `order` 的连续行分组；仅当 timeline 报告回合已定稿且其 `turn-tail` 携带 `closing` 回答时才折叠。可折叠行是除 user/steering、结束 `assistant-step`（按 `finalNode.seq` 匹配）、`turn-tail`、错误行之外的全部行。折叠行完全离开 DOM（而非隐藏），折叠头携带第一个隐藏行的锚点 key，展开状态存放在按会话的 chat store（`expandedTurns`，随 store 持久化，与活动视图标签一致）——组件本地 state 在每次视图标签重挂载时清零，会在阅读中途折叠整段 transcript，破坏重挂载必须保留的按会话滚动位置恢复。运行中回合与无 closing 回答的回合渲染与折叠前逐字节一致。不新增 Chat Node kind、不改 Session：Conversation Node 纪律保持追加热路径无扫描，timeline 在回合定稿时重发布即自动出现折叠。
 
-**外壳持有三档视口分档；求解器保持无断点。** `MOBILE_VIEWPORT = 768`（低于 SIDEBAR_AUTO_COLLAPSE 的 1024 rail 档）在 AppFrame 决断：mobile 跳过让步求解器（`0 minmax(0,1fr) 0`），侧栏渲染在常驻挂载的 fixed 抽屉内（scrim 点击、Escape、会话切换关闭），详情列渲染为 fixed 右侧 sheet 并带框架自有的关闭 chrome——在移动宽度上恢复 `openDetails`。分档标志与抽屉开合标志存于既有 layout store；`toggleSidebar` 先判 mobile（抽屉翻转）再判 narrow（rail 再展开）分支，既有调用方（ui-sidebar 注入的 face）无需服务面变更即获得移动语义。跨任一断点重置瞬态分档本地标志；宽度偏好始终存活。拖拽手柄在 mobile 不渲染。
+**外壳持有三档视口分档；求解器保持无断点。** `MOBILE_VIEWPORT = 768`（低于 SIDEBAR_AUTO_COLLAPSE 的 1024 rail 档）在 AppFrame 决断：mobile 跳过让步求解器并把网格收成单一在流轨道（`minmax(0, 1fr)`——抽屉/scrim/sheet 节点均为 position:fixed 脱离网格流，三轨模板会把对话列自动放进 0 宽的侧栏轨道、使转录以 0 宽渲染），侧栏渲染在常驻挂载的 fixed 抽屉内（scrim 点击、Escape、会话切换关闭），详情列渲染为 fixed 右侧 sheet 并带框架自有的关闭 chrome——在移动宽度上恢复 `openDetails`。框架自有的浮动开启按钮（`打开侧栏`，左上角，仅在抽屉关闭时出现）是 mobile 的导航入口：侧栏自己的 toggle 在滑出的抽屉内部，而空白会话的 hero 会隐藏对话 header。分档标志与抽屉开合标志存于既有 layout store；`toggleSidebar` 先判 mobile（抽屉翻转）再判 narrow（rail 再展开）分支，既有调用方（ui-sidebar 注入的 face）无需服务面变更即获得移动语义。跨任一断点重置瞬态分档本地标志；宽度偏好始终存活。拖拽手柄在 mobile 不渲染。
 
 对话列窄屏 CSS（≤560px 的 header/tabs/转录 padding，composer 的 `env(safe-area-inset-bottom)`）与 viewport meta（`viewport-fit=cover`、`interactive-widget=resizes-content`）完成手机端收尾。折叠刻意默认收起：过程行可从日志重导出，摘要行（工具数、中间回复数、回合时长）即阅读入口。
 
 ## Consequences
 
-- 折叠状态是 ChatView 本地 state，视图 tab 切换或重挂载即重置：刻意取舍——持久化需要 store 席位（per-session、跨条目）而唯一消费者是这一个组件。若折叠状态必须跨视图切换存活再重新评估。
+- 折叠状态存放在按会话的 chat store（`expandedTurns`，与活动视图标签一样随 store 持久化）：组件本地 state 在每次视图标签重挂载时清零，会在阅读中途折叠转录并破坏按会话的滚动位置恢复。读取用 `?? []` 兼容该字段存在之前持久化的快照（`inspect` 字段的既有模式）。
 - 折叠行不在 DOM 中，转录 aria goldens 与任何按 `[data-chat-flow-kind]` 计数的消费方只看到可见行；回合定稿后断言 tool-call 行存在的浏览器 e2e spec 必须先展开折叠（或断言折叠头）。既有 goldens 已相应刷新。
 - 想让自己那类行免于折叠的插件（例如未来的内联交付物卡片）无法选择退出：可折叠性在视图预遍历中按 Chat kind 封闭。豁免需要在 `chat-nodes.ts` 改契约并更新本 note——不得按注册方特判。
 - 移动抽屉与详情 sheet 是框架自有 chrome：占用方（ui-sidebar、details 条目）对分档无感知。任何基于网格列定位自己的东西（未来的第三个 fixed 面板）必须从 store 或 owner props 读分档，不得假设网格轨道。

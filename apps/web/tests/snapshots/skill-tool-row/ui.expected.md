@@ -10,6 +10,9 @@
 - text: Load the editing-cordis-compositions skill with the skill tool, then reply DONE. {{date}} {{clock}}
 - button "Copy":
   - img
+- button "Expand or collapse this turn’s intermediate steps" [expanded]:
+  - img
+  - text: "Collapsed · Tool calls: 1 · Intermediate replies: 1 · {{duration}}"
 - button "Context injection @deepseek-ai/dsh-system-prompt":
   - img
   - img

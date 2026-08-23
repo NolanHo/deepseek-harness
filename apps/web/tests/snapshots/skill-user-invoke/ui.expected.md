@@ -12,6 +12,9 @@
 - text: /user-invoke-demo and confirm the fixture wiring {{clock}}
 - button "Copy":
   - img
+- button "Expand or collapse this turn’s intermediate steps" [expanded]:
+  - img
+  - text: Collapsed 2 steps
 - button "Context injection @deepseek-ai/dsh-system-prompt":
   - img
   - img

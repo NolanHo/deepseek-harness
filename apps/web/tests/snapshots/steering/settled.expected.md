@@ -14,7 +14,7 @@
   - img
 - button "Expand or collapse this turn’s intermediate steps":
   - img
-  - text: Collapsed 1 tool calls · 1 intermediate replies · {{duration}}
+  - text: "Collapsed · Tool calls: 1 · Intermediate replies: 1 · {{duration}}"
 - text: "Interjection: include the word BANANA in your final reply. {{clock}}"
 - button "Copy":
   - img

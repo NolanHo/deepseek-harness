@@ -10,9 +10,23 @@
 - text: "Use the read tool twice in one assistant message: read a.txt and b.txt. Then reply with the single word DONE and stop. 7/25 {{clock}}"
 - button "Copy":
   - img
-- button "Expand or collapse this turn’s intermediate steps":
+- button "Expand or collapse this turn’s intermediate steps" [expanded]:
   - img
   - text: "Collapsed · Tool calls: 2 · Intermediate replies: 1 · {{duration}}"
+- button "Think The user wants me to read a.txt and b.txt, then reply with \"DONE\". Let me do both reads in parallel.":
+  - img
+  - img
+  - text: Think The user wants me to read a.txt and b.txt, then reply with "DONE". Let me do both reads in parallel.
+- button "Read a.txt":
+  - img
+  - img
+  - text: Read
+  - button "a.txt"
+- button "Read b.txt":
+  - img
+  - img
+  - text: Read
+  - button "b.txt"
 - button "Think Both files have been read. a.txt contains \"alpha\" and b.txt contains \"beta\". I'll now reply with DONE as instructed.":
   - img
   - img
@@ -28,6 +42,10 @@
   - img
 - text: 7/25 {{clock}} Ran for {{duration}} TTFT {{duration}} {{throughput}} tok/s
 - button "compact Compacted 5 history items (~{{tokens}} tokens)"
+- button "Context injection AGENTS.md":
+  - img
+  - img
+  - text: Context injection AGENTS.md
 - img
 - text: permission preset read-only
 - textbox "Message the agent"

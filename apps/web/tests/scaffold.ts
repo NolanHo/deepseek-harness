@@ -946,6 +946,25 @@ export async function captureStableAria(page: Page, selector: string, workspaceC
 }
 
 /**
+ * Expand every collapsed turn fold in the transcript so row-level assertions
+ * see the intermediate rows (tool calls, intermediate replies). A no-op when
+ * no fold header is present (running turns, empty sessions).
+ * @param page - the page under test.
+ */
+export async function expandAllTurnFolds(page: Page): Promise<void> {
+  const headers = page.getByRole('button', { name: 'Expand or collapse this turn’s intermediate steps' })
+  const count = await headers.count()
+  for (let index = 0; index < count; index += 1) {
+    // Idempotent: a second call must not collapse already-expanded turns
+    // (and a click scrolls the header into view, so skipping is also what
+    // keeps a saved reader position intact).
+    if (await headers.nth(index).getAttribute('aria-expanded') === 'false') {
+      await headers.nth(index).click()
+    }
+  }
+}
+
+/**
  * Compare a normalized golden, or rewrite it under refresh. Refresh is the
  * ONLY writer: a missing golden in replay mode fails with the healing command
  * instead of silently self-bootstrapping.

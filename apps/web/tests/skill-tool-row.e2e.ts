@@ -7,8 +7,9 @@ import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import {
-  assertFixtureInventory, captureStableAria, compareOrRefreshGolden, fixtureUserPrompts,
-  launchWebScaffold, seedSession, watchConsole, webSnapshotMode, type WebScaffold,
+  assertFixtureInventory, captureStableAria, compareOrRefreshGolden, expandAllTurnFolds,
+  fixtureUserPrompts, launchWebScaffold, seedSession, watchConsole, webSnapshotMode,
+  type WebScaffold,
 } from './scaffold.ts'
 import { newEnglishPage, saveFailureShot } from './support.ts'
 
@@ -42,6 +43,10 @@ describe.skipIf(MODE === 'record')('web e2e: dedicated Skill tool row', () => {
     const sessionRow = page.locator('[role="treeitem"]').nth(1)
     await sessionRow.waitFor({ timeout: 10_000 })
     await sessionRow.click()
+    // Wait for the seeded content, then lift the settled turn's fold so the
+    // Skill row is visible for the assertions below.
+    await page.getByText('DONE', { exact: true }).waitFor({ timeout: 15_000 })
+    await expandAllTurnFolds(page)
     await page.locator('[data-tool="skill"]').waitFor({ timeout: 15_000 })
   }, 120_000)
 

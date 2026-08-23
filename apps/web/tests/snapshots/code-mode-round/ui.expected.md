@@ -12,9 +12,26 @@
 - text: "Using ONE run_code program: run bash `echo CODE_ROUND_OK`, then read the file missing.txt catching its error in the program. Return an object with both outcomes. Then reply DONE and stop. {{clock}}"
 - button "Copy":
   - img
-- button "Expand or collapse this turn’s intermediate steps":
+- button "Expand or collapse this turn’s intermediate steps" [expanded]:
   - img
-  - text: Collapsed 1 tool calls · 1 intermediate replies · {{duration}}
+  - text: "Collapsed · Tool calls: 1 · Intermediate replies: 1 · {{duration}}"
+- button "Context injection @deepseek-ai/dsh-system-prompt":
+  - img
+  - img
+  - text: Context injection @deepseek-ai/dsh-system-prompt
+- 'button "Think The user wants me to write a single `run_code` program that:"':
+  - img
+  - img
+  - text: "Think The user wants me to write a single `run_code` program that:"
+- text: Failed
+- 'button "Code Error: code run failed (exception): ToolCallError: sandbox mode \"workspace-write\" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) — otherwise switch the consumer to danger-full-access."':
+  - img
+  - text: "Code Error: code run failed (exception): ToolCallError: sandbox mode \"workspace-write\" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) — otherwise switch the consumer to danger-full-access."
+- 'button "Failed Bash Error: sandbox mode \"workspace-write\" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) — otherwise switch the consumer to danger-full-access." [expanded]':
+  - img
+  - text: "Failed Bash Error: sandbox mode \"workspace-write\" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) — otherwise switch the consumer to danger-full-access."
+- text: "IN { \"command\": \"echo CODE_ROUND_OK\", \"description\": \"Echo CODE_ROUND_OK\" } OUT Error: sandbox mode \"workspace-write\" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel (Linux), ensure sandbox-exec is usable (macOS), or ensure the ACL restricted-token runner can start (Windows) — otherwise switch the consumer to danger-full-access."
+- button "Inspect"
 - button "Think The program ran successfully. Let me now reply DONE as instructed.":
   - img
   - img

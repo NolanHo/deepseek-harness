@@ -158,22 +158,18 @@ function TurnStatus({ startTime, t }: {
  * ordered business Node crosses the keyed renderer seat.
  */
 export function ChatView({
-  useSession, useSessions, useStore, renderSlot, sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, forkAt,
+  useSession, useSessions, useStore, actions, renderSlot, sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, forkAt,
   fileMentions, t,
 }: ChatViewSlotProps) {
   const order = useSession(s => s.chat.order)
   const nodeStore = useSession(s => s.chat.nodes)
   const timeline = useSession(s => s.chat.timeline)
-  // Settled-turn fold: locally expanded turns; empty means all collapsed.
-  const [expandedTurns, setExpandedTurns] = useState<ReadonlySet<number>>(() => new Set())
-  const toggleTurnFold = useCallback((turn: number) => {
-    setExpandedTurns((previous) => {
-      const next = new Set(previous)
-      if (next.has(turn)) next.delete(turn)
-      else next.add(turn)
-      return next
-    })
-  }, [])
+  // Settled-turn fold: expanded turns live in the per-session chat store so
+  // the reading position they create survives view switches and reloads.
+  // `?? []`: persisted snapshots from before the field rehydrate without it.
+  const expandedTurnList = useStore(s => s.expandedTurns) ?? []
+  const expandedTurns = useMemo(() => new Set(expandedTurnList), [expandedTurnList])
+  const toggleTurnFold = actions.toggleTurnFold
   const inbox = useSession(s => s.queue)
   // Workspace root off the session list row: path summaries display relative to it.
   const cwd = useSessions(s => s.byId[sessionId]?.cwd)
