@@ -14,7 +14,7 @@ import AgentRegistry, { Inbox } from '@deepseek-ai/dsh-agent'
 import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { decodeStorageRecord, SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
@@ -99,7 +99,7 @@ describe('session.history projections block', () => {
     expect(projections?.asOfSeq).toBe(session.seq - 1)
     expect(projections?.values['test/last-user']).toEqual({ text: 'm2' })
     // asOfSeq IS the window tail: the last served event carries it.
-    expect(events.at(-1)?.event.seq).toBe(projections?.asOfSeq)
+    expect(events.flatMap(entry => 'packed' in entry ? decodeStorageRecord(entry.packed) : [entry.event]).at(-1)?.seq).toBe(projections?.asOfSeq)
   })
 
   it('publishes the attachments imageLimits as a constant unit while both seams are composed', async () => {

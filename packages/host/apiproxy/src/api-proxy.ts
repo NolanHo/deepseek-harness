@@ -17,7 +17,7 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
-import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
+import { isAppendSurfaceEvent, isJsonValue, packChunkRuns } from '@deepseek-ai/dsh-session'
 import type { JsonValue, Session, SessionEvent, SessionEventMap, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
@@ -776,11 +776,20 @@ function historyPage(
   return { events: pageEntries(ctx, page.events, scope), hasMore: page.hasMore }
 }
 
-/** Presenter-decorated entries for one already-paginated event slice. */
+/**
+ * Presenter-decorated wire entries for one already-paginated event slice.
+ * The wire reuses the storage chunk codec: consecutive delta-chunk runs pack
+ * into one `ChunkRow` (only the exact shapes the encoder whitelists — chunk
+ * events are `{type, seq, time, data}` by construction, so they always
+ * qualify), and the client expands them back to the original events before
+ * the fold; every other event ships verbatim.
+ */
 function pageEntries(ctx: Context, page: readonly SessionEvent[], scope: ScopeKey | undefined): HistoryEntry[] {
-  return page.map((event) => {
-    const view = viewFor(ctx, event, callId => backscanArgs(page, callId), scope)
-    return { event, ...view === undefined ? {} : { view } }
+  const records = packChunkRuns(page)
+  return records.map((record) => {
+    if (record.type === 'text-chunks' || record.type === 'reasoning-chunks' || record.type === 'tool-call-chunks') return { packed: record }
+    const view = viewFor(ctx, record, callId => backscanArgs(page, callId), scope)
+    return { event: record, ...view === undefined ? {} : { view } }
   })
 }
 

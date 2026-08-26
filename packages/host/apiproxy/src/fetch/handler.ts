@@ -7,6 +7,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { promisify } from 'node:util'
+import { gzip, zstdCompress } from 'node:zlib'
 import type { z } from 'zod'
 import type { ApiProxy, MuxFrame, HostFrame } from '../api/index.ts'
 import { sessionLogQuerySchema } from '../api/downloads.schema.ts'
@@ -273,48 +275,97 @@ export function toFetchHandler(api: ApiProxy): { fetch: typeof fetch } {
       if (req.method !== 'POST' || !path.startsWith('/api/')) {
         return new Response('not found', { status: 404 })
       }
+      return await maybeCompress(req, await handlePost(api, req, path))
 
-      // Cross-site write fence: browsers send "simple" POSTs (text/plain,
-      // form encodings) without a CORS preflight, so a malicious page could
-      // otherwise execute side-effectful RPCs blind — the response stays
-      // unreadable cross-origin, but session.prompt would still run. Only the
-      // JSON media type is accepted; anything else is forced into a preflight
-      // this server never answers. 415 = carrier layer, like the 400 below.
-      const mediaType = req.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
-      if (mediaType !== 'application/json') {
-        return new Response('content type must be application/json', { status: 415 })
-      }
+      /**
+       * The POST envelope path: cross-site fence, JSON parse, the physical
+       * respond route, then unary dispatch. Split out so the outer fetch can
+       * compress its JSON result (SSE channels and downloads never enter).
+       */
+      async function handlePost(apiProxy: ApiProxy, request: Request, requestPath: string): Promise<Response> {
+        // Cross-site write fence: browsers send "simple" POSTs (text/plain,
+        // form encodings) without a CORS preflight, so a malicious page could
+        // otherwise execute side-effectful RPCs blind — the response stays
+        // unreadable cross-origin, but session.prompt would still run. Only the
+        // JSON media type is accepted; anything else is forced into a preflight
+        // this server never answers. 415 = carrier layer, like the 400 below.
+        const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
+        if (mediaType !== 'application/json') {
+          return new Response('content type must be application/json', { status: 415 })
+        }
 
-      let body: unknown
-      try {
-        body = await req.json()
-      } catch {
-        // 400 = carrier layer (body is not even JSON); valid JSON with a bad shape goes 200 + bad-request.
-        return new Response('body is not JSON', { status: 400 })
-      }
+        let body: unknown
+        try {
+          body = await request.json()
+        } catch {
+          // 400 = carrier layer (body is not even JSON); valid JSON with a bad shape goes 200 + bad-request.
+          return new Response('body is not JSON', { status: 400 })
+        }
 
-      if (path === '/api/respond') {
-        const parsed = clientResponseSchema.safeParse(body)
-        if (!parsed.success) return Response.json({ accepted: false, reason: 'bad-response' })
-        return Response.json(await api.respond(parsed.data))
-      }
+        if (requestPath === '/api/respond') {
+          const parsed = clientResponseSchema.safeParse(body)
+          if (!parsed.success) return Response.json({ accepted: false, reason: 'bad-response' })
+          return Response.json(await apiProxy.respond(parsed.data))
+        }
 
-      const method = methodFor(path.slice('/api/'.length))
-      if (method === undefined) return new Response('not found', { status: 404 })
+        const method = methodFor(requestPath.slice('/api/'.length))
+        if (method === undefined) return new Response('not found', { status: 404 })
 
-      const envelope = clientRequestSchema.safeParse(body)
-      if (!envelope.success) {
-        // Best effort at correlation: salvage a string rpcId from the raw body;
-        // otherwise the fixed sentinel keeps the response a valid ServerResponse.
-        const rawId = (body as { rpcId?: unknown } | null)?.rpcId
-        const rpcId = typeof rawId === 'string' ? RpcId(rawId) : INVALID_REQUEST_RPC_ID
-        return errorResponse(rpcId, { code: 'bad-request', message: 'invalid client-request message', details: { issues: envelope.error.issues } })
+        const envelope = clientRequestSchema.safeParse(body)
+        if (!envelope.success) {
+          // Best effort at correlation: salvage a string rpcId from the raw body;
+          // otherwise the fixed sentinel keeps the response a valid ServerResponse.
+          const rawId = (body as { rpcId?: unknown } | null)?.rpcId
+          const rpcId = typeof rawId === 'string' ? RpcId(rawId) : INVALID_REQUEST_RPC_ID
+          return errorResponse(rpcId, { code: 'bad-request', message: 'invalid client-request message', details: { issues: envelope.error.issues } })
+        }
+        const message: ClientRequest = envelope.data
+        if (message.method !== method) {
+          return errorResponse(message.rpcId, { code: 'bad-request', message: `method "${message.method}" does not match path "${method}"`, details: { issues: [] } })
+        }
+        return handleUnary(apiProxy, method, message, request.signal)
       }
-      const message: ClientRequest = envelope.data
-      if (message.method !== method) {
-        return errorResponse(message.rpcId, { code: 'bad-request', message: `method "${message.method}" does not match path "${method}"`, details: { issues: [] } })
-      }
-      return handleUnary(api, method, message, req.signal)
     },
   }
+}
+
+/** Smallest response body worth compressing (below it the framing rivals the payload). */
+const COMPRESS_MIN_BYTES = 1024
+
+const gzipAsync = promisify(gzip)
+const zstdCompressAsync = promisify(zstdCompress)
+
+/**
+ * Compress one JSON response with the strongest content coding the client
+ * advertised (zstd, then gzip), when the payload is worth it. Browser fetches
+ * advertise codings in Accept-Encoding and decompress transparently; a client
+ * that advertised none gets the body verbatim. Streaming channels (SSE) and
+ * downloads never pass through here. A tiny or incompressible payload stays
+ * plain, and the Vary header names the negotiation dimension.
+ */
+async function maybeCompress(request: Request, response: Response): Promise<Response> {
+  if (response.status === 204 || response.body === null) return response
+  if (response.headers.get('content-type')?.split(';', 1)[0]?.trim() !== 'application/json') return response
+  const accept = request.headers.get('accept-encoding') ?? ''
+  const encoding = accept.includes('zstd') ? 'zstd' : accept.includes('gzip') ? 'gzip' : undefined
+  if (encoding === undefined) return response
+  const body = new Uint8Array(await response.arrayBuffer())
+  // Every return past the arrayBuffer() read re-bodies the bytes: the
+  // original Response's stream is consumed and must never be returned
+  // (a consumed stream writes nothing, an empty HTTP response).
+  if (body.length < COMPRESS_MIN_BYTES) {
+    return new Response(Buffer.from(body), { status: response.status, statusText: response.statusText, headers: response.headers })
+  }
+  const compressed = encoding === 'zstd' ? await zstdCompressAsync(body) : await gzipAsync(body)
+  // Incompressible: re-body the already-read bytes — the original Response's
+  // stream was consumed by the arrayBuffer() read above and must not be
+  // returned (a consumed stream writes nothing, an empty HTTP response).
+  if (compressed.length >= body.length) {
+    return new Response(Buffer.from(body), { status: response.status, statusText: response.statusText, headers: response.headers })
+  }
+  const headers = new Headers(response.headers)
+  headers.set('content-encoding', encoding)
+  headers.set('content-length', String(compressed.length))
+  headers.set('vary', 'accept-encoding')
+  return new Response(Buffer.from(compressed), { status: response.status, statusText: response.statusText, headers })
 }

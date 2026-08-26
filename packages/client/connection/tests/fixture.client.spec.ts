@@ -5,6 +5,7 @@
  * the hand-written fixture/host parallel implementations.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { decodeStorageRecord } from '@deepseek-ai/dsh-session/chunk-rows'
 import type { SessionId, WorkspaceId } from '../src/client/api.ts'
 import { RpcId } from '../src/client/api.ts'
 import type { HostFrame, MuxFrame, RpcMessage, RpcRequest } from '../src/client/api.ts'
@@ -121,12 +122,15 @@ describe('createFixtureApi', () => {
     if (!tail.result.ok) throw new Error('history failed')
     const tailPage = tail.result.value
     expect(tailPage.hasMore).toBe(true)
-    expect(tailPage.events[0]?.event.type).toBe('turn/start') // cut lands on a turn boundary
-    const boundary = tailPage.events[0]?.event.seq ?? 0
+    const head = tailPage.events[0]
+    const headEvent = head !== undefined && 'event' in head ? head.event : undefined
+    expect(headEvent?.type).toBe('turn/start') // cut lands on a turn boundary
+    const boundary = headEvent?.seq ?? 0
     expect(boundary).toBeGreaterThan(0)
     const older = await api.sessions.history(req({ sessionId: sid('fx-alpha'), beforeSeq: boundary, maxMessages: 10 }))
     if (!older.result.ok) throw new Error('older failed')
-    const olderTail = older.result.value.events.at(-1)?.event
+    const olderTailEntry = older.result.value.events.at(-1)
+    const olderTail = olderTailEntry !== undefined && 'event' in olderTailEntry ? olderTailEntry.event : undefined
     expect((olderTail?.seq ?? -1) + 1).toBe(boundary) // pages stitch with no hole/overlap
     // Out-of-range beforeSeq clamps instead of exploding.
     const clamped = await api.sessions.history(req({ sessionId: sid('fx-alpha'), beforeSeq: -5, maxMessages: 10 }))
@@ -245,7 +249,7 @@ describe('createFixtureApi', () => {
     const api = createFixtureApi()
     const tail = await api.sessions.history(req({ sessionId: sid('fx-alpha'), maxMessages: 10 }))
     if (!tail.result.ok) throw new Error('history failed')
-    const events = tail.result.value.events.map(e => e.event)
+    const events = tail.result.value.events.flatMap(e => 'packed' in e ? decodeStorageRecord(e.packed) : [e.event])
     const todoAt = events.findIndex(e => e.type === 'todo/write')
     expect(todoAt).toBeGreaterThan(0)
     // Production ordering (the tool appends mid-execution): call → snapshot → result.
@@ -650,8 +654,9 @@ describe('createFixtureApi', () => {
     // so the event is located by seq and its payload checked structurally).
     const history = await api.sessions.history(req({ sessionId: sid('fx-alpha'), maxMessages: 100 }))
     if (!history.result.ok) throw new Error('history failed')
-    const appended = history.result.value.events.find(entry => entry.event.seq === acceptedSeq)
-    expect(appended?.event).toMatchObject({
+    const appendedEntry = history.result.value.events.find(entry => 'event' in entry && entry.event.seq === acceptedSeq)
+    const appended = appendedEntry !== undefined && 'event' in appendedEntry ? appendedEntry.event : undefined
+    expect(appended).toMatchObject({
       type: 'session/title',
       data: { title: '重命名', messageSeqs: [], source: { kind: 'user' } },
     })
@@ -1069,13 +1074,13 @@ describe('FixtureApiClient (protocol-level fake carrier)', () => {
 
     const goalHistory = await client.sessions.history({ sessionId: id })
     if (!goalHistory.result.ok) throw new Error('goal history failed')
-    const goalEvents = goalHistory.result.value.events.map(entry => entry.event as unknown as {
+    const goalEvents = goalHistory.result.value.events.flatMap(entry => 'packed' in entry ? decodeStorageRecord(entry.packed) : [entry.event]) as unknown as readonly {
       type: string
       data: {
         operation?: string
         source?: { kind?: string; round?: number }
       }
-    })
+    }[]
     const goalChanges = goalEvents.filter(event => event.type === 'goal/change')
     expect(goalChanges.map(event => event.data.operation))
       .toEqual(['create', 'edit', 'pause', 'resume', 'complete', 'clear'])

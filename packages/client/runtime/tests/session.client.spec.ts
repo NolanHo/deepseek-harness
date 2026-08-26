@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
+import { packChunkRuns } from '@deepseek-ai/dsh-session/chunk-rows'
 import type {} from '@deepseek-ai/dsh-commands/types'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import { Session } from '../src/client/sessions/session.ts'
@@ -388,6 +389,52 @@ describe('paging', () => {
     expect(api.callsOf('session.history')).toMatchObject([{}, { beforeSeq: 6 }].map(p => ({ sessionId: SID, ...p })))
     expect(snapshot.hasMore).toBe(false)
     expect(snapshot.nodes.map(n => n.seq)).toEqual([1, 3, 7, 9])
+  })
+
+  it('expands packed chunk rows to the exact original events on open', async () => {
+    const { api, session } = makeSession()
+    const chunks = [ev.chunkText(6, 1, 'd0'), ev.chunkText(7, 1, 'd1'), ev.chunkText(8, 1, 'd2')]
+    const packed = packChunkRuns(chunks)
+    expect(packed).toHaveLength(1)
+    api.onHistory = () => Promise.resolve(ok({
+      events: [
+        ...entries([ev.turnStart(4, 1), ev.user(5, '问')]),
+        { packed: packed[0] as never },
+        ...entries([ev.assistant(9, 1, '答'), ev.turnEnd(10, 1)]),
+      ] as never[],
+      hasMore: false,
+    }))
+    await session.open()
+    const snapshot = session.getSnapshot()
+    expect(snapshot.openState).toBe('open')
+    // Expansion is observable through the chat store: every event folds into a
+    // node, so the decoded chunk seqs appear in order, not one packed row.
+    expect(chatSeqs(snapshot)).toEqual([4, 5, 6, 7, 8, 9, 10])
+    expect(snapshot.turnEnds.get(1)).toBe(10)
+  })
+
+  it('stitches an older page whose tail is a packed chunk row', async () => {
+    const newer = plainTurn(7, 1, '新问', '新答')
+    const { api, session } = makeSession()
+    const packed = packChunkRuns([ev.chunkText(2, 0, 'x'), ev.chunkText(3, 0, 'y'), ev.chunkText(4, 0, 'z')])
+    expect(packed).toHaveLength(1)
+    api.onHistory = payload => payload.beforeSeq === undefined
+      ? histResponse(newer, true)
+      : Promise.resolve(ok({
+        events: [
+          ...entries([ev.turnStart(0, 0), ev.user(1, '旧问')]),
+          { packed: packed[0] as never },
+          ...entries([ev.assistant(5, 0, '旧答'), ev.turnEnd(6, 0)]),
+        ] as never[],
+        hasMore: false,
+      }))
+    await session.open()
+    await session.loadOlder()
+    const snapshot = session.getSnapshot()
+    // Continuity holds across the packed tail: seq 6 (decoded tail) + 1 = the
+    // newer page's baseSeq 7, and the older chunks land in transcript order.
+    expect(snapshot.hasMore).toBe(false)
+    expect(chatSeqs(snapshot)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
   })
 
   it('installs a page without interpreting business replacement metadata', async () => {

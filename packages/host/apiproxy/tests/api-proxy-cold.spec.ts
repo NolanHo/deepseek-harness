@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import SessionStore from '@deepseek-ai/dsh-session'
+import SessionStore, { decodeStorageRecord } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { TypertLookupFailure } from '@deepseek-ai/dsh-typert-protocol'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
@@ -302,7 +302,7 @@ describe('cold history recovery view', () => {
 
     const history = await api.sessions.history(request({ sessionId, beforeSeq: 2, maxMessages: 10 }))
     if (!history.result.ok) throw new Error('history failed')
-    expect(history.result.value.events.map(entry => entry.event)).toMatchInlineSnapshot(`
+    expect(history.result.value.events.flatMap(entry => 'packed' in entry ? decodeStorageRecord(entry.packed) : [entry.event])).toMatchInlineSnapshot(`
       [
         {
           "data": {
@@ -470,7 +470,7 @@ describe('subagent ownership fence', () => {
     const history = await api.sessions.history(request({ sessionId }))
     expect(history.result.ok).toBe(true)
     if (history.result.ok) {
-      expect(history.result.value.events.map(entry => entry.event.type)).toEqual(events.map(event => event.type))
+      expect(history.result.value.events.flatMap(entry => 'packed' in entry ? decodeStorageRecord(entry.packed) : [entry.event]).map(event => event.type)).toEqual(events.map(event => event.type))
     }
     expect(ctx.agents.get(sessionId)).toBeUndefined()
 

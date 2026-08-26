@@ -18,7 +18,7 @@
  * @module @deepseek-ai/dsh-session/chunk-rows
  */
 
-import { CallId, assertNever } from '@deepseek-ai/dsh-llm'
+import { CallId } from '@deepseek-ai/dsh-llm/brand'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from './types.ts'
 
@@ -68,6 +68,11 @@ export type ChunkRow =
 
 /** One durable log line's JSON value: a session event verbatim, or a packed chunk row. */
 export type StorageRecord = SessionEvent | ChunkRow
+
+/** Whether a storage record is a packed chunk row (bare slash-less tags, never event types). */
+export function isChunkRow(record: StorageRecord): record is ChunkRow {
+  return record.type === 'text-chunks' || record.type === 'reasoning-chunks' || record.type === 'tool-call-chunks'
+}
 
 /**
  * Minimum members before a run packs. Below it a row's envelope rivals the
@@ -315,7 +320,7 @@ function expandRow(row: ChunkRow): SessionEvent[] {
         break
       /* v8 ignore next 2 -- validateRow only returns the three row tags */
       default:
-        return assertNever(row, 'chunk-rows expandRow')
+        return malformed('chunk-row', 'expandRow: unknown row tag')
     }
     events.push({
       type: 'assistant/chunk',

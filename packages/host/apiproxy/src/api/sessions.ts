@@ -7,6 +7,7 @@
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type { AttachmentIdType, ImageAttachmentLimits, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
+import type { ChunkRow } from './chunk-rows.ts'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session/types'
 // The pure-type outlet: api/ is browser-importable, and the package root's
 // cordis Context merge (via dsh-agent) must not enter client aggregates.
@@ -65,10 +66,9 @@ declare module '@deepseek-ai/dsh-llm' {
  * intent (same semantics as the mux frame's `view` slot — a pagination-time
  * derivation, never persisted).
  */
-export interface HistoryEntry {
-  event: SessionEvent
-  view?: ToolEventView
-}
+export type HistoryEntry =
+  | { event: SessionEvent; view?: ToolEventView }
+  | { packed: ChunkRow }
 
 /**
  * The projection baseline riding the history tail page: one synchronous cut
@@ -276,8 +276,14 @@ export interface SessionsApi {
    * page (beforeSeq absent) additionally carries the in-flight
    * partial — chunk events already emitted for the last unfinalized message.
    * Each entry pairs the raw SessionEvent with the host-computed view (tool events whose
-   * presenter produced one, evaluated against the registry at pagination time); the client
-   * rebuilds the surface from the events with the shared fold.
+   * presenter produced one, evaluated against the registry at pagination time), or carries
+   * one packed chunk row: consecutive delta-chunk runs (3+) fold into a single
+   * `{ packed }` entry with the storage codec (`text-chunks`/`reasoning-chunks`/
+   * `tool-call-chunks`) — the client expands it back to the exact original events before
+   * the fold. The client rebuilds the surface from the events with the shared fold.
+   * Carrier responses are compressed with the strongest advertised coding (zstd, then
+   * gzip) when the payload is worth it; clients without an Accept-Encoding get the body
+   * verbatim.
    * The tail page — and only the tail page — additionally carries `projections`
    * when the deployment mounts the session-projection registry: every moment
    * the client needs a fresh baseline already pulls the tail page, and

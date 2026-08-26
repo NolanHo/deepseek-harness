@@ -1,3 +1,5 @@
+import { randomBytes as cryptoRandomBytes } from 'node:crypto'
+import { gunzipSync, zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import type { ApiProxy, HostFrame, MuxFrame } from '../src/api/index.ts'
 import type { ClientResponse, RpcMessage, RpcReceipt, RpcRequest } from '../src/api/rpc.ts'
@@ -801,5 +803,100 @@ describe('resolveBase', () => {
     } finally {
       delete globalWithLocation.location
     }
+  })
+})
+
+describe('response compression (carrier layer)', () => {
+  const bigSnippet = 'x'.repeat(200_000)
+
+  /** A handler whose session.list answer is large enough to compress. */
+  function bigHandler(): { fetch: typeof fetch } {
+    const api = fakeApi()
+    return toFetchHandler({
+      ...api,
+      sessions: {
+        ...api.sessions,
+        list: async request => ({
+          rpcId: request.rpcId,
+          result: { ok: true as const, value: { items: [{ sessionId: 's1' as never, snippet: bigSnippet }] } },
+        } as never),
+      },
+    })
+  }
+
+  function post(handler: { fetch: typeof fetch }, acceptEncoding?: string): Promise<Response> {
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    if (acceptEncoding !== undefined) headers['accept-encoding'] = acceptEncoding
+    return handler.fetch(new Request('http://carrier/api/session.list', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'client-request', rpcId: 'compress-probe', method: 'session.list', payload: {} }),
+    }))
+  }
+
+  it('gzip-compresses a large JSON response and decompresses to the identical JSON', async () => {
+    const plain = await (await post(bigHandler())).text()
+    const compressed = await post(bigHandler(), 'gzip')
+    expect(compressed.headers.get('content-encoding')).toBe('gzip')
+    expect(compressed.headers.get('vary')).toBe('accept-encoding')
+    expect(gunzipSync(new Uint8Array(await compressed.arrayBuffer())).toString('utf8')).toBe(plain)
+  })
+
+  it('prefers zstd when the client advertises both', async () => {
+    const plain = await (await post(bigHandler())).text()
+    const compressed = await post(bigHandler(), 'zstd, gzip')
+    expect(compressed.headers.get('content-encoding')).toBe('zstd')
+    expect(zstdDecompressSync(new Uint8Array(await compressed.arrayBuffer())).toString('utf8')).toBe(plain)
+  })
+
+  it('leaves a tiny response and a non-JSON response uncompressed', async () => {
+    const tiny = await post(toFetchHandler(fakeApi()), 'gzip')
+    expect(tiny.headers.get('content-encoding')).toBeNull()
+    // The size-gate early return still serves the complete body (the bytes
+    // were read before the gate — a consumed stream must not leak).
+    expect((await tiny.text()).includes('items')).toBe(true)
+
+    const notFound = await toFetchHandler(fakeApi()).fetch(new Request('http://carrier/api/nope', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'accept-encoding': 'gzip' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'x', method: 'nope', payload: {} }),
+    }))
+    expect(notFound.headers.get('content-encoding')).toBeNull()
+  })
+
+  it('serves the full body when compression would not shrink it (consumed stream must not leak)', async () => {
+    const api = fakeApi()
+    const handler = toFetchHandler({
+      ...api,
+      sessions: {
+        ...api.sessions,
+        // Incompressible payload: 2 KiB of high-entropy content defeats gzip
+        // and zstd alike, exercising the re-body branch.
+        list: async request => ({
+          rpcId: request.rpcId,
+          result: { ok: true as const, value: { items: [{ sessionId: 's1' as never, snippet: zstdCompressSync(cryptoRandomBytes(200_000)).toString('base64') }] } },
+        } as never),
+      },
+    })
+    const response = await post(handler, 'gzip')
+    expect(response.status).toBe(200)
+    // Either the payload compressed (zstd/gzip header) or the incompressible
+    // re-body branch served it plain — but the body must always arrive
+    // complete: the consumed-stream regression was an EMPTY HTTP response.
+    const raw = new Uint8Array(await response.arrayBuffer())
+    const encoding = response.headers.get('content-encoding')
+    const text = encoding === 'gzip'
+      ? gunzipSync(raw).toString('utf8')
+      : encoding === 'zstd'
+        ? zstdDecompressSync(raw).toString('utf8')
+        : Buffer.from(raw).toString('utf8')
+    expect(text.length).toBeGreaterThan(250_000)
+    expect(text.includes('items')).toBe(true)
+  })
+
+  it('serves verbatim when the client advertises no coding', async () => {
+    const response = await post(bigHandler())
+    expect(response.headers.get('content-encoding')).toBeNull()
+    expect((await response.text()).includes(bigSnippet)).toBe(true)
   })
 })

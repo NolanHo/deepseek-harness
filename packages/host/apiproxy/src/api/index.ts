@@ -81,6 +81,8 @@ export type {
 
 // ---- Errors and ids ----
 export { RpcId, transportError } from './rpc.ts'
+export { decodeStorageRecord } from './chunk-rows.ts'
+export type { ChunkRow } from './chunk-rows.ts'
 export type { RpcError, RpcErrorCode, RpcErrorDetailsMap, RpcResult } from './rpc.ts'
 export {
   clientRequestSchema,

@@ -198,11 +198,21 @@ export const toolEventViewSchema = z.discriminatedUnion('for', [
   z.object({ for: z.literal('result'), view: z.looseObject({ card: z.string() }) }),
 ]) as unknown as z.ZodType<ToolEventView>
 
-/** One session.history item: the session event plus its optional host-computed tool view. */
-export const historyEntrySchema: z.ZodType<Wire<HistoryEntry>> = z.object({
-  event: sessionEventSchema,
-  view: toolEventViewSchema.optional(),
-}) as unknown as z.ZodType<Wire<HistoryEntry>>
+/** One packed chunk run on the wire: the storage codec's bare-tagged row, expanded client-side. */
+export const chunkRowSchema = z.object({
+  type: z.enum(['text-chunks', 'reasoning-chunks', 'tool-call-chunks']),
+}).and(z.looseObject({ seq0: z.number().int().min(0), time0: z.number().int() }))
+
+/**
+ * One session.history item: a session event with its optional host-computed
+ * tool view, or a packed chunk run (host folds consecutive delta-chunk
+ * events into one row with the storage codec; the client expands it back to
+ * the exact original events — the fold never meets a packed row).
+ */
+export const historyEntrySchema: z.ZodType<Wire<HistoryEntry>> = z.union([
+  z.object({ event: sessionEventSchema, view: toolEventViewSchema.optional() }),
+  z.object({ packed: chunkRowSchema }),
+]) as unknown as z.ZodType<Wire<HistoryEntry>>
 
 /**
  * Projection baseline passthrough: `values` stays a wide record — each value

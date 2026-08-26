@@ -9,7 +9,7 @@ import type {
 } from '@deepseek-ai/dsh-api-remotes/client'
 // Value import from the inline-safe wire layer (not the connection plugin):
 // plugin-to-plugin value imports are a bundle purity error.
-import { transportError } from '@deepseek-ai/dsh-host-apiproxy/api'
+import { decodeStorageRecord, transportError } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { SessionFace } from '../contract/session.ts'
 import { ConversationNodeAssembler } from './conversation-assembler.ts'
 import type { ConversationRuntime } from './conversation-assembler.ts'
@@ -393,20 +393,21 @@ export class Session implements SessionFace {
         this.conversation.prepend([], this.hasMore)
         return
       }
-      const tail = older[older.length - 1]
-      if (tail === undefined || tail.event.seq + 1 !== this.baseSeq) {
+      const expanded = expandEntries(older)
+      const tail = expanded.events[expanded.events.length - 1]
+      if (tail === undefined || tail.seq + 1 !== this.baseSeq) {
         // Continuity assertion: on violation drop the page fail-soft rather than render an out-of-order stream.
-        console.error(`[web-runtime] history page discontinuous: tail seq ${tail?.event.seq} vs baseSeq ${this.baseSeq}`)
+        console.error(`[web-runtime] history page discontinuous: tail seq ${tail?.seq} vs baseSeq ${this.baseSeq}`)
         this.hasMore = false
         this.conversation.prepend([], false)
         return
       }
-      this.events = [...older.map(e => e.event), ...this.events]
-      this.views = [...older.map(e => e.view), ...this.views]
+      this.events = [...expanded.events, ...this.events]
+      this.views = [...expanded.views, ...this.views]
       /* v8 ignore next -- the ?? arm needs older[0] undefined, but the empty-page branch above already returned. */
-      this.baseSeq = older[0]?.event.seq ?? this.baseSeq
+      this.baseSeq = expanded.events[0]?.seq ?? this.baseSeq
       this.hasMore = result.value.hasMore
-      this.conversation.prepend(older.map(conversationInput), this.hasMore)
+      this.conversation.prepend(expandedInputs(expanded), this.hasMore)
     } catch (error) {
       console.error('[web-runtime] loadOlder failed:', error)
     } finally {
@@ -657,12 +658,13 @@ export class Session implements SessionFace {
    *  baseline cannot overwrite a newer push frame); the window events themselves are
    *  never folded — the host is the only computation site. */
   private installWindow(entries: HistoryEntry[], hasMore: boolean, projections?: ProjectionsBaseline): void {
-    this.events = entries.map(e => e.event)
-    this.views = entries.map(e => e.view)
+    const expanded = expandEntries(entries)
+    this.events = expanded.events
+    this.views = expanded.views
     this.baseSeq = this.events[0]?.seq ?? 0
     this.hasMore = hasMore
     if (this.events.some(event => event.type === 'turn/start')) this.firstPromptPendingTurn = false
-    this.conversation.replaceWindow(entries.map(conversationInput), hasMore)
+    this.conversation.replaceWindow(expandedInputs(expanded), hasMore)
     if (projections !== undefined) this.projections.seed(projections)
     const buffered = this.liveBuffer
     this.liveBuffer = []
@@ -786,8 +788,31 @@ export class Session implements SessionFace {
 }
 
 /** Convert one wire history row into the assembler's transport-neutral input. */
-function conversationInput(entry: HistoryEntry): ConversationEventInput {
-  return { event: entry.event, view: entry.view }
+/**
+ * Expand a wire page to its exact event sequence: packed chunk rows decode
+ * back to the original delta-chunk events (the storage codec is lossless and
+ * validated), so the conversation fold never meets a packed row. Scalar
+ * entries pass through; packed rows carry no view (chunk events never do).
+ */
+function expandEntries(entries: readonly HistoryEntry[]): { events: SessionEvent[]; views: (ToolEventView | undefined)[] } {
+  const events: SessionEvent[] = []
+  const views: (ToolEventView | undefined)[] = []
+  for (const entry of entries) {
+    if ('packed' in entry) {
+      const decoded = decodeStorageRecord(entry.packed)
+      events.push(...decoded)
+      views.push(...decoded.map(() => undefined))
+    } else {
+      events.push(entry.event)
+      views.push(entry.view)
+    }
+  }
+  return { events, views }
+}
+
+/** Conversation assembler inputs for an expanded window (events and views stay index-aligned). */
+function expandedInputs(expanded: { events: SessionEvent[]; views: (ToolEventView | undefined)[] }): ConversationEventInput[] {
+  return expanded.events.map((event, index) => ({ event, view: expanded.views[index] }))
 }
 
 /** A generic command row alone remains control-plane content; every other visible Chat Node activates the conversation. */

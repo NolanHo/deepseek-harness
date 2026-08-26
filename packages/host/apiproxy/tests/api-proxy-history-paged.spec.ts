@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import SessionStore from '@deepseek-ai/dsh-session'
+import SessionStore, { decodeStorageRecord } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -121,7 +121,7 @@ describe('paged cold history', () => {
     if (!response.result.ok) return
     // Two user messages = turns 2 and 3; the cut lands AT turn 2's user
     // message (turn 1's boundary stays on the earlier page).
-    expect(response.result.value.events.map(entry => entry.event.type)).toEqual([
+    expect(wireTypes(response.result.value.events)).toEqual([
       'user/message', 'assistant/chunk', 'assistant/chunk', 'assistant/message', 'turn/end',
       'turn/start', 'user/message', 'assistant/chunk', 'assistant/chunk', 'assistant/message', 'turn/end',
     ])
@@ -137,7 +137,7 @@ describe('paged cold history', () => {
     const response = await h.api.sessions.history(request({ sessionId: sid('s'), beforeSeq: 10, maxMessages: 1 }))
     expect(response.result.ok).toBe(true)
     if (!response.result.ok) return
-    const types = response.result.value.events.map(entry => entry.event.type)
+    const types = wireTypes(response.result.value.events)
     // The page starts at turn 2's user message and ends at beforeSeq: the
     // older page supplies the head the client's current page is missing.
     expect(types).toEqual(['user/message', 'assistant/chunk', 'assistant/chunk'])
@@ -166,7 +166,7 @@ describe('paged cold history', () => {
     const response = await h.api.sessions.history(request({ sessionId: sid('s'), maxMessages: 2 }))
     expect(response.result.ok).toBe(true)
     if (!response.result.ok) return
-    const page = response.result.value.events.map(entry => entry.event.seq)
+    const page = wireEvents(response.result.value.events).map(event => event.seq)
     // The final page holds the last two whole turns, ending at the log tail.
     expect(page).toEqual([589, 590, 591, 592, 593, 594, 595, 596, 597, 598, 599])
     expect(response.result.value.hasMore).toBe(true)
@@ -182,7 +182,7 @@ describe('paged cold history', () => {
     const response = await h.api.sessions.history(request({ sessionId: sid('s'), maxMessages: 10 }))
     expect(response.result.ok).toBe(true)
     if (!response.result.ok) return
-    expect(response.result.value.events.map(entry => entry.event.seq)).toEqual(events.map(event => event.seq))
+    expect(wireEvents(response.result.value.events).map(event => event.seq)).toEqual(events.map(event => event.seq))
     expect(response.result.value.hasMore).toBe(false)
   })
 
@@ -196,7 +196,7 @@ describe('paged cold history', () => {
     if (!response.result.ok) return
     // The page is the inspection's output (whose closers synthesis the real
     // coordinator owns — exercised by api-proxy-cold's repair test).
-    expect(response.result.value.events.map(entry => entry.event.type)).toEqual(['turn/start'])
+    expect(wireTypes(response.result.value.events)).toEqual(['turn/start'])
     expect(h.inspect).toHaveBeenCalledOnce()
   })
 
@@ -244,3 +244,14 @@ describe('paged cold history', () => {
     expect(response.result.value.projections).toBeUndefined()
   })
 })
+
+
+/** Expand wire entries to the raw event stream they encode (packed chunk rows decode losslessly). */
+function wireEvents(entries: readonly { event?: SessionEvent; packed?: unknown }[]): SessionEvent[] {
+  return entries.flatMap(entry => entry.packed === undefined ? [entry.event as SessionEvent] : decodeStorageRecord(entry.packed))
+}
+
+/** The event-type sequence one history page encodes, expanded. */
+function wireTypes(entries: readonly { event?: SessionEvent; packed?: unknown }[]): string[] {
+  return wireEvents(entries).map(event => event.type)
+}

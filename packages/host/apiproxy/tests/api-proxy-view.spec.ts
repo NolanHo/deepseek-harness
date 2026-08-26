@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import SessionStore from '@deepseek-ai/dsh-session'
+import SessionStore, { decodeStorageRecord } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import { CallId, createMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -19,7 +19,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
-import type { MuxFrame, RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { HistoryEntry, MuxFrame, RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { createApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
 
@@ -60,6 +60,15 @@ function appendAssistantText(session: Session, text: string, step: number): Sess
  * declares no compaction vocabulary; the cast writes the real event shape without
  * depending on the owning package.
  */
+/** Append one text-delta chunk event (chunk events never carry surface metadata). */
+function appendChunk(session: Session, step: number, index: number, text: string): SessionEvent {
+  return session.append('assistant/chunk', {
+    turn: 1,
+    step,
+    chunk: { type: 'text-delta', index, text },
+  })
+}
+
 function appendExtension(session: Session, type: string, data: unknown): SessionEvent {
   return (session.append as unknown as (type: string, data: unknown) => SessionEvent)(type, data)
 }
@@ -221,7 +230,9 @@ describe('mux live view computation', () => {
     expect(response.result.ok).toBe(true)
     if (!response.result.ok) throw new Error('unreachable')
     const entries = response.result.value.events
-    const byKey = new Map(entries
+    // Tool events never pack: their wire entries are always scalar.
+    const scalar = entries.filter((entry): entry is Extract<HistoryEntry, { event: SessionEvent }> => 'event' in entry)
+    const byKey = new Map(scalar
       .filter(entry => entry.event.type === 'tool/call' || entry.event.type === 'tool/result')
       .map(entry => [
         `${entry.event.type}:${entry.event.type === 'tool/call'
@@ -234,6 +245,42 @@ describe('mux live view computation', () => {
     expect('view' in (byKey.get('tool/result:h-orphan') ?? {})).toBe(false)
     expect('view' in (byKey.get('tool/result:h-bad') ?? {})).toBe(false)
     expect('view' in (byKey.get('tool/result:h-plain') ?? {})).toBe(false)
+  })
+
+
+  it('packs consecutive delta-chunk runs into one wire row that decodes to the exact events', async () => {
+    const { ctx } = await harness()
+    const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
+    const session = ctx.sessions.create()
+    ctx.agents.register({ id: session.id, session, status: 'idle', ctx } as Agent)
+    session.append('turn/start', { turn: 1 })
+    appendUserText(session, 'q')
+    const run = [appendChunk(session, 1, 0, 'd0'), appendChunk(session, 1, 0, 'd1'), appendChunk(session, 1, 0, 'd2'), appendChunk(session, 1, 0, 'd3')]
+    const pair = [appendChunk(session, 1, 1, 'e0'), appendChunk(session, 1, 1, 'e1')]
+    appendAssistantText(session, 'answer', 1)
+
+    const response = await api.sessions.history({
+      rpcId: RpcId('t-wire-pack'),
+      payload: { sessionId: session.id },
+    })
+    if (!response.result.ok) throw new Error('unreachable')
+    const entries = response.result.value.events
+
+    // The 4-chunk run is one packed row; the 2-chunk run stays scalar (below
+    // the packing minimum) and every other event ships verbatim.
+    const packed = entries.filter(entry => 'packed' in entry)
+    expect(packed).toHaveLength(1)
+    const row = packed[0]?.packed
+    expect(row).toMatchObject({ type: 'text-chunks', seq0: run[0]?.seq, data: { texts: ['d0', 'd1', 'd2', 'd3'] } })
+    expect(packed[0]?.packed !== undefined && decodeStorageRecord(packed[0].packed)).toEqual(run)
+
+    // Expansion preserves the exact event stream end to end.
+    const wire = entries.flatMap(entry => 'packed' in entry ? decodeStorageRecord(entry.packed) : [entry.event])
+    expect(wire).toEqual(session.events)
+    // The 2-chunk pair arrived as scalar chunk entries.
+    const scalarChunks = entries.filter(entry => 'event' in entry && entry.event.type === 'assistant/chunk')
+    expect(scalarChunks).toHaveLength(2)
+    expect(pair).toHaveLength(2)
   })
 
   it('counts only user messages toward maxMessages and keeps each compaction summary with its replacement', async () => {
@@ -270,7 +317,7 @@ describe('mux live view computation', () => {
       payload: { sessionId: session.id, maxMessages: 1 },
     })
     if (!response.result.ok) throw new Error('unreachable')
-    const page = response.result.value.events.map(entry => entry.event)
+    const page = response.result.value.events.flatMap(entry => 'packed' in entry ? decodeStorageRecord(entry.packed) : [entry.event])
     // One user message fills the page: the page cut lands at the second
     // prompt's group head, so the assistant reply that follows rides the same
     // page (assistant messages never cut a page), and the replacement copy of
@@ -319,7 +366,7 @@ describe('mux live view computation', () => {
         payload: { sessionId: session.id, maxMessages: 1 },
       })
       if (!response.result.ok) throw new Error('unreachable')
-      expect(response.result.value.events.map(entry => entry.event.seq)).toEqual([...sources, message.seq])
+      expect(response.result.value.events.flatMap(entry => 'packed' in entry ? decodeStorageRecord(entry.packed) : [entry.event]).map(event => event.seq)).toEqual([...sources, message.seq])
       expect(response.result.value.hasMore).toBe(true)
     } finally {
       min.mockRestore()
