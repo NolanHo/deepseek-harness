@@ -114,6 +114,13 @@ import { canOpenNativePath, openNativePath, openNativeTextFile } from './native-
 /** Page size when history is called without maxMessages. */
 const DEFAULT_MAX_MESSAGES = 50
 
+/**
+ * Events per user message used to size the first paged cold-read window. The
+ * widening loop re-reads with halved `fromSeq` until the suffix contains a
+ * complete page, so the estimate only sets the typical case's first cut.
+ */
+const ESTIMATE_EVENTS_PER_MESSAGE = 256
+
 /** Provider work budget: at most 100 calls and 2,000 inspected hits. */
 const SESSION_SEARCH_PROVIDER_CALL_LIMIT = 100
 
@@ -122,8 +129,14 @@ const COLD_SUMMARY_BATCH_SIZE = 16
 /** Default maximum artifact size eligible for one cold blankness read. */
 export const DEFAULT_COLD_BLANK_PROBE_MAX_BYTES = 1024
 
-/** Conversation message event types (the pagination counting unit). */
+/** Conversation message event types (correlation matching; see {@link PAGE_BOUNDARY_TYPES} for pagination). */
 const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
+
+/** Pagination cut boundary: pages start at user messages, so one page holds whole turns. */
+const PAGE_BOUNDARY_TYPES = new Set(['user/message'])
+
+/** Pagination fallback for synthetic logs that carry no user message at all. */
+const PAGE_FALLBACK_TYPES = new Set(['assistant/message'])
 
 /** Validate one prompt as a batch before publishing any durable image object. */
 async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
@@ -216,41 +229,50 @@ function isAborted(signal: AbortSignal): boolean {
 }
 
 /**
- * Message-boundary pagination: count maxMessages append-origin messages
- * backwards from the window tail. Replacement copies never entered the
- * conversation a reader sees — they restate a shadowed range for the model
- * alone — so they consume no quota; the page stays one contiguous raw range,
- * which keeps a compaction's log-only `compaction/summary` record on the same page as its
- * replacement. The cut is the starting seq of the oldest message group (chunks
- * group via sourceEventSeqs — never cut mid-message). The tail page naturally
- * includes the in-progress partial.
+ * Turn-boundary pagination: one page = whole turns. The backward walk counts
+ * `maxMessages` user messages (each cut lands at that message's group head,
+ * so a page starts at the user's question and carries that turn's complete
+ * tool/assistant content — never sliced mid-answer). Replacement copies never
+ * entered the conversation a reader sees — they restate a shadowed range for
+ * the model alone — so they consume no quota; the page stays one contiguous
+ * raw range, which keeps a compaction's log-only `compaction/summary` record
+ * on the same page as its replacement. Logs without any user message
+ * (synthetic transcripts) fall back to assistant-message boundaries. The cut
+ * is the starting seq of the oldest message group (chunks group via
+ * sourceEventSeqs — never cut mid-message). The tail page naturally includes
+ * the in-progress partial.
  */
 function paginate(
   events: readonly SessionEvent[],
   beforeSeq: number | undefined,
   maxMessages: number,
-): { events: SessionEvent[]; hasMore: boolean } {
+): { events: SessionEvent[]; hasMore: boolean; cut: number; messages: number } {
   const window = beforeSeq === undefined ? [...events] : events.filter(event => event.seq < beforeSeq)
-  let count = 0
-  let cut = 0
-  for (let i = window.length - 1; i >= 0; i--) {
-    const event = window[i] as SessionEvent
-    if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
-    count++
-    const sources = (event as { sourceEventSeqs?: number[] }).sourceEventSeqs
-    let groupStart = event.seq
-    if (sources !== undefined) {
-      for (const source of sources) {
-        if (source < groupStart) groupStart = source
+  const boundaryOf = (boundaryTypes: ReadonlySet<string>) => {
+    let count = 0
+    let cut = 0
+    for (let i = window.length - 1; i >= 0; i--) {
+      const event = window[i] as SessionEvent
+      if (!boundaryTypes.has(event.type) || !isAppendSurfaceEvent(event)) continue
+      count++
+      const sources = (event as { sourceEventSeqs?: number[] }).sourceEventSeqs
+      let groupStart = event.seq
+      if (sources !== undefined) {
+        for (const source of sources) {
+          if (source < groupStart) groupStart = source
+        }
+      }
+      if (count >= maxMessages) {
+        cut = groupStart
+        break
       }
     }
-    if (count >= maxMessages) {
-      cut = groupStart
-      break
-    }
+    return { count, cut }
   }
-  const page = window.filter(event => event.seq >= cut)
-  return { events: page, hasMore: cut > 0 }
+  const preferred = boundaryOf(PAGE_BOUNDARY_TYPES)
+  const chosen = preferred.count > 0 ? preferred : boundaryOf(PAGE_FALLBACK_TYPES)
+  const page = window.filter(event => event.seq >= chosen.cut)
+  return { events: page, hasMore: chosen.cut > 0, cut: chosen.cut, messages: chosen.count }
 }
 
 /** Wrap an ok result echoing the request's rpcId. */
@@ -751,13 +773,15 @@ function historyPage(
   scope?: ScopeKey,
 ): { events: HistoryEntry[]; hasMore: boolean } {
   const page = paginate(events, beforeSeq, maxMessages ?? DEFAULT_MAX_MESSAGES)
-  return {
-    events: page.events.map((event) => {
-      const view = viewFor(ctx, event, callId => backscanArgs(page.events, callId), scope)
-      return { event, ...view === undefined ? {} : { view } }
-    }),
-    hasMore: page.hasMore,
-  }
+  return { events: pageEntries(ctx, page.events, scope), hasMore: page.hasMore }
+}
+
+/** Presenter-decorated entries for one already-paginated event slice. */
+function pageEntries(ctx: Context, page: readonly SessionEvent[], scope: ScopeKey | undefined): HistoryEntry[] {
+  return page.map((event) => {
+    const view = viewFor(ctx, event, callId => backscanArgs(page, callId), scope)
+    return { event, ...view === undefined ? {} : { view } }
+  })
 }
 
 /**
@@ -1515,6 +1539,130 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
   }
 
   /**
+   * Whether a stored suffix cannot prove its log tail is clean: true when the
+   * last turn boundary in the window is a `turn/start`, or the window carries
+   * no turn boundary at all (a turn may have opened before the window cut).
+   * A tail that provably ends with `turn/end` needs none of the inspection
+   * path's interrupted-turn closers, so the paged read may serve it verbatim;
+   * everything else falls back to the full inspection, which synthesizes
+   * them.
+   * @param events - a stored suffix ending at the log tail.
+   * @returns true when the fast path must not serve this suffix.
+   */
+  function needsRepairTail(events: readonly SessionEvent[]): boolean {
+    for (let index = events.length - 1; index >= 0; index--) {
+      const event = events[index]
+      if (event === undefined) continue
+      if (event.type === 'turn/end') return false
+      if (event.type === 'turn/start') return true
+    }
+    return true
+  }
+
+  /**
+   * The tail page's projection baseline for a cold session: the persisted
+   * projection cache's cold-read ladder (cached checkpoint rows + a
+   * `readFrom` tail refold), which reads no full log. Fail-soft like
+   * {@link subagentHistoryProjections}: a throwing fold serves the page
+   * without the block instead of blocking transcript reading.
+   * @param sessionId - the session being read.
+   * @returns the baseline, or undefined when the cache is absent or failed.
+   */
+  async function tailProjections(sessionId: SessionId): Promise<SessionProjectionsBlock | undefined> {
+    const cache = ctx.get('sessionProjectionCache')
+    if (cache === undefined) return undefined
+    try {
+      return await cache.coldSnapshot(sessionId)
+    } catch (error) {
+      ctx.logger.warn(`session.history: projections for "${sessionId}" failed (serving the page without them): ${String(error)}`)
+      return undefined
+    }
+  }
+
+  /**
+   * The legacy detached read: one full `inspect()` (which also synthesizes
+   * interrupted-turn closers) plus the shared cut. Used as the paged path's
+   * fallback for repair-ambiguous tails and for sessions without a usable
+   * projection-cache watermark.
+   */
+  async function legacyDetachedHistory(
+    sessionId: SessionId,
+    beforeSeq: number | undefined,
+    maxMessages: number,
+  ): Promise<{ entries: HistoryEntry[]; hasMore: boolean; projections?: SessionProjectionsBlock }> {
+    const source = await historySourceFor(sessionId)
+    const scope = await presenterScopeFor(sessionId, sourceSession(source))
+    const cut = historyCutOf(source, beforeSeq === undefined)
+    const page = historyPage(ctx, cut.events, beforeSeq, maxMessages, scope)
+    return {
+      entries: page.events,
+      hasMore: page.hasMore,
+      ...cut.projections === undefined ? {} : { projections: cut.projections },
+    }
+  }
+
+  /**
+   * Paged cold read for a detached session: `readFrom` suffixes instead of a
+   * full `inspect()`, so a seek-capable backend (the SQLite provider) serves
+   * a history page from a tail window in constant time. The first window
+   * anchors on the projection cache's stored watermark (tail pages) or on
+   * `beforeSeq` (loadOlder pages); a halving widening loop re-reads earlier
+   * suffixes until the page's cut and message count are provably complete
+   * (`fromSeq === 0` is exact by construction, so the loop always exits and
+   * never serves a partial page).
+   *
+   * Presenter scope resolves from the suffix: a preset selected before the
+   * read window falls back to the header value — view-only degradation,
+   * confined to switched-blank sessions whose switch lies outside the page.
+   * @param sessionId - the persisted session to read.
+   * @param beforeSeq - exclusive upper bound (loadOlder), undefined for the tail page.
+   * @param maxMessages - page size in user messages.
+   * @returns the page's raw events, exact hasMore, and tail projections when requested.
+   */
+  async function detachedHistoryRead(
+    sessionId: SessionId,
+    beforeSeq: number | undefined,
+    maxMessages: number,
+  ): Promise<{ entries: HistoryEntry[]; hasMore: boolean; projections?: SessionProjectionsBlock }> {
+    const persistence = ctx.get('sessionPersistence')
+    if (persistence === undefined) {
+      throw new Error('session persistence is not configured (load a dsh-session-persistence backend)')
+    }
+    const listed = (await persistence.list()).find(candidate => candidate.id === sessionId)
+    if (listed === undefined || listed.cwd === undefined) {
+      throw new SessionNotFound(`session "${sessionId}" not found`)
+    }
+    const cache = ctx.get('sessionProjectionCache')
+    const watermark = beforeSeq === undefined && cache !== undefined
+      ? cache.cachedSnapshot(listed)?.asOfSeq
+      : undefined
+    let fromSeq = watermark === undefined || watermark < 0
+      ? 0
+      : Math.max(0, watermark - maxMessages * ESTIMATE_EVENTS_PER_MESSAGE)
+    if (beforeSeq !== undefined) {
+      fromSeq = Math.max(0, beforeSeq - maxMessages * ESTIMATE_EVENTS_PER_MESSAGE)
+    }
+    for (;;) {
+      const suffix = await persistence.readFrom(sessionId, fromSeq)
+      if (needsRepairTail(suffix.events)) {
+        return legacyDetachedHistory(sessionId, beforeSeq, maxMessages)
+      }
+      const paged = paginate(suffix.events, beforeSeq, maxMessages)
+      if (fromSeq === 0 || (paged.cut >= fromSeq && paged.messages >= maxMessages)) {
+        const scope = await presenterScopeFor(sessionId, { header: suffix.meta, events: suffix.events })
+        const projections = beforeSeq === undefined ? await tailProjections(sessionId) : undefined
+        return {
+          entries: pageEntries(ctx, paged.events, scope),
+          hasMore: paged.hasMore,
+          ...projections === undefined ? {} : { projections },
+        }
+      }
+      fromSeq = Math.max(0, Math.floor(fromSeq / 2))
+    }
+  }
+
+
+  /**
    * The registry view scope a transcript's presenters resolve in.
    *
    * A live agent is that scope itself (its chain passes through its preset's
@@ -2154,20 +2302,36 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       async history(request) {
         const { sessionId, beforeSeq, maxMessages } = request.payload
         try {
-          const source = await historySourceFor(sessionId)
-          // Both awaits happen BEFORE the cut. Ensuring the recorded
-          // composition's standing mount is what registers its projection
-          // units, so a first cold read would otherwise serve a baseline
-          // missing every preset-owned key; and an attached session keeps
-          // appending, so awaiting between the two reads would pair events cut
-          // at N with a baseline folded to N+1.
-          const scope = await presenterScopeFor(sessionId, sourceSession(source))
-          const cut = historyCutOf(source, beforeSeq === undefined)
-          const page = historyPage(ctx, cut.events, beforeSeq, maxMessages, scope)
+          const pageMax = maxMessages ?? DEFAULT_MAX_MESSAGES
+          const attached = ctx.sessions.get(sessionId)
+          // A live session serves its in-memory snapshot; a cold one is a
+          // paged persistence read (suffix windows via readFrom — the SQLite
+          // backend seeks) with the full-inspection fallback for repair-
+          // ambiguous tails.
+          let page: { entries: HistoryEntry[]; hasMore: boolean; projections?: SessionProjectionsBlock }
+          if (attached !== undefined) {
+            // Both awaits happen BEFORE the cut. Ensuring the recorded
+            // composition's standing mount is what registers its projection
+            // units, so a first cold read would otherwise serve a baseline
+            // missing every preset-owned key; and an attached session keeps
+            // appending, so awaiting between the two reads would pair events
+            // cut at N with a baseline folded to N+1.
+            const source: HistorySource = { kind: 'attached', session: attached }
+            const scope = await presenterScopeFor(sessionId, sourceSession(source))
+            const cut = historyCutOf(source, beforeSeq === undefined)
+            const sliced = historyPage(ctx, cut.events, beforeSeq, pageMax, scope)
+            page = {
+              entries: sliced.events,
+              hasMore: sliced.hasMore,
+              ...cut.projections === undefined ? {} : { projections: cut.projections },
+            }
+          } else {
+            page = await detachedHistoryRead(sessionId, beforeSeq, pageMax)
+          }
           return ok(request, {
-            events: page.events,
+            events: page.entries,
             hasMore: page.hasMore,
-            ...cut.projections === undefined ? {} : { projections: cut.projections },
+            ...page.projections === undefined ? {} : { projections: page.projections },
           })
         } catch (error: unknown) {
           if (error instanceof SessionNotFound) {

@@ -28,8 +28,10 @@ import type { ProjectionsBaseline } from './projection-store.ts'
 import { resolvedClientTimeZone } from '../time-zone.ts'
 import { SessionQueueMirror } from './queue-mirror.ts'
 
-/** Messages requested per history page. */
-export const PAGE_MESSAGES = 50
+/** User messages requested per history page. Pages are turn-aligned (the
+ *  host cuts at user messages), so 25 turns carries roughly the payload the
+ *  previous 50-mixed-message page did. */
+export const PAGE_MESSAGES = 25
 
 /** Manager-owned observers of a Session object's local state edges. */
 export interface SessionOptions {

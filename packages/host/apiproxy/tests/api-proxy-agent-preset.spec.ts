@@ -692,12 +692,11 @@ describe('session.history presenter scope', () => {
     // header would render that history through the older preset's layer,
     // where the tools it is made of have no presenter at all.
     const meta = { id: SessionId('p4'), createdAt: 1, cwd: '/tmp/p4', agentPreset: 'standard' }
+    const events = [{ type: 'agent-preset/selected', seq: 1, time: 0, data: { agentPreset: 'minimal' } }]
     const { api } = await harness(['standard', 'minimal'], {
       list: () => Promise.resolve([meta]),
-      inspect: () => Promise.resolve({
-        meta,
-        events: [{ type: 'agent-preset/selected', seq: 1, time: 0, data: { agentPreset: 'minimal' } }],
-      }),
+      inspect: () => Promise.resolve({ meta, events }),
+      readFrom: (_id: string, fromSeq: number) => Promise.resolve({ meta, events: events.filter(event => event.seq >= fromSeq) }),
     })
 
     standingKeyRequests.length = 0
@@ -713,6 +712,7 @@ describe('session.history presenter scope', () => {
     const { api } = await harness(['standard'], {
       list: () => Promise.resolve([meta]),
       inspect: () => Promise.resolve({ meta, events: [] }),
+      readFrom: (_id: string, _fromSeq: number) => Promise.resolve({ meta, events: [] }),
     })
     // The preset broke after the session ran: the roster rejects the mount.
     failingStandingKeys.add('standard')

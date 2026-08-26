@@ -279,6 +279,11 @@ describe('cold history recovery view', () => {
     const backend: PersistenceBackend<never> = {
       name: 'history-recovery-test',
       loadStored: id => Promise.resolve(id === sessionId ? structuredClone(stored) : undefined),
+      loadStoredFrom: (id, fromSeq) => Promise.resolve(
+        id === sessionId
+          ? { meta: structuredClone(meta), events: structuredClone(stored).events.filter(event => event.seq >= fromSeq) }
+          : undefined,
+      ),
       readStoredRevision: id => Promise.resolve(
         id === sessionId ? SessionPersistenceRevision('history-recovery-test:1') : undefined,
       ),
@@ -290,6 +295,7 @@ describe('cold history recovery view', () => {
     ctx.provide('sessionPersistence', {
       list: (signal?: AbortSignal) => backend.list(signal),
       inspect: (id: SessionId, signal?: AbortSignal) => coordinator.inspect(id, signal),
+      readFrom: (id: SessionId, fromSeq: number, signal?: AbortSignal) => coordinator.readFrom(id, fromSeq, signal),
       locate: () => undefined,
     } as never)
     const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
@@ -448,9 +454,14 @@ describe('subagent ownership fence', () => {
       { type: 'turn/end', seq: 3, time: 4, data: { turn: 1, reason: { kind: 'completed' } } },
     ] as SessionEvent[]
     const inspect = vi.fn(() => Promise.resolve({ meta, events }))
+    const readFrom = vi.fn((_id: SessionId, fromSeq: number) => Promise.resolve({
+      meta,
+      events: events.filter(event => event.seq >= fromSeq),
+    }))
     ctx.provide('sessionPersistence', {
       list: () => Promise.resolve([meta]),
       inspect,
+      readFrom,
       locate: () => undefined,
     } as never)
     const resume = vi.spyOn(ctx.agents, 'resume')
@@ -481,7 +492,10 @@ describe('subagent ownership fence', () => {
     if (!create.result.ok) expect(create.result.error.code).toBe('agent-busy')
     expect(resume).not.toHaveBeenCalled()
     expect(ctx.agents.get(sessionId)).toBeUndefined()
-    expect(inspect).toHaveBeenCalledTimes(3)
+    // The clean-tailed child serves its history through the paged read (no
+    // full inspection); the prompt and create ownership probes each inspect.
+    expect(readFrom).toHaveBeenCalledOnce()
+    expect(inspect).toHaveBeenCalledTimes(2)
   })
 
   it('no longer treats a descriptor-only cold child without origin as subagent-owned', async () => {

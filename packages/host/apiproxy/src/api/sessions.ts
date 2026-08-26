@@ -266,10 +266,13 @@ export interface SessionsApi {
   Promise<RpcResponse<{ sessionId: SessionId; agentPreset?: string }>>
 
   /**
-   * Reads a window of history events; page boundaries align to append-origin message
-   * boundaries: one page = all raw events owned by a whole number of such messages (including
-   * their chunk / tool events), never cut mid-message. Model-only replacement copies consume no
-   * `maxMessages`, so a compaction's `compaction/summary` record stays on the page of its replacement. The tail
+   * Reads a window of history events; page boundaries align to user messages:
+   * one page = whole turns — it starts at a user message and carries that
+   * turn's complete tool/assistant content, never cut mid-turn or
+   * mid-message. Logs without any user message (synthetic transcripts) fall
+   * back to assistant-message boundaries. Model-only replacement copies
+   * consume no `maxMessages`, so a compaction's `compaction/summary` record
+   * stays on the page of its replacement. The tail
    * page (beforeSeq absent) additionally carries the in-flight
    * partial — chunk events already emitted for the last unfinalized message.
    * Each entry pairs the raw SessionEvent with the host-computed view (tool events whose
@@ -280,7 +283,7 @@ export interface SessionsApi {
    * the client needs a fresh baseline already pulls the tail page, and
    * loadOlder (the only beforeSeq path) is the only path that never needs one.
    * A deployment without the registry serves histories without the block.
-   * Reading history uses an attached Session or persistence inspection and
+   * Reading history uses an attached Session or a paged persistence read and
    * never resumes or publishes an Agent.
    */
   history(request: RpcRequest<{ sessionId: SessionId; beforeSeq?: number; maxMessages?: number }>):

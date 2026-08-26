@@ -236,7 +236,7 @@ describe('mux live view computation', () => {
     expect('view' in (byKey.get('tool/result:h-plain') ?? {})).toBe(false)
   })
 
-  it('counts only append-origin messages toward maxMessages and keeps each compaction summary with its replacement', async () => {
+  it('counts only user messages toward maxMessages and keeps each compaction summary with its replacement', async () => {
     const { ctx } = await harness()
     const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
     const session = ctx.sessions.create()
@@ -267,12 +267,14 @@ describe('mux live view computation', () => {
 
     const response = await api.sessions.history({
       rpcId: RpcId('t-hist-compact'),
-      payload: { sessionId: session.id, maxMessages: 2 },
+      payload: { sessionId: session.id, maxMessages: 1 },
     })
     if (!response.result.ok) throw new Error('unreachable')
     const page = response.result.value.events.map(entry => entry.event)
-    // Two append-origin messages fill the page even though a replacement copy of
-    // the same event type sits in the window: the copy is model-only.
+    // One user message fills the page: the page cut lands at the second
+    // prompt's group head, so the assistant reply that follows rides the same
+    // page (assistant messages never cut a page), and the replacement copy of
+    // the same event type in the window consumes no quota: the copy is model-only.
     const messages = page.filter(event => event.type === 'user/message' || event.type === 'assistant/message')
     expect(messages.map(event => event.seq)).toEqual([third.seq, third.seq + 1, third.seq + 3])
     expect(page.some(event => event.seq === first.seq)).toBe(false)
