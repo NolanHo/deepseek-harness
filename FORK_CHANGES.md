@@ -28,3 +28,8 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: Turn-fold + mobile-shell stabilization round (Agent Note `2026-08-23-transcript-turn-fold-and-mobile-shell`, updated in place): fold expansion moved into the per-session chat store (view-tab remounts were collapsing the transcript and breaking scroll restoration); the mobile grid collapses to one in-flow track (three-track templates auto-placed the center column into the zero-width sidebar track); a frame-owned floating drawer opener (`Open sidebar`) is the mobile navigation entry; Escape gating follows the sheet's actual visibility; browser e2e adapted to fold/mobile behavior (`expandAllTurnFolds` helper) and goldens refreshed.
 - ZH: 回合折叠与移动外壳的稳定化收尾（Agent Note `2026-08-23-transcript-turn-fold-and-mobile-shell`，原地更新）：折叠展开状态移入按会话的 chat store（视图标签重挂载会折叠转录并破坏滚动恢复）；移动端网格收成单一在流轨道（三轨模板会把对话列自动放进 0 宽侧栏轨道）；框架自有浮动按钮成为移动端抽屉入口；Escape 分层跟随 sheet 实际可见性；浏览器 e2e 适配折叠/移动行为（`expandAllTurnFolds` 辅助函数）并刷新 goldens。
+
+### 2026-08-26 — Web 会话存储切换 SQLite / Web session storage switches to SQLite
+
+- EN: The web profile now composes the SQLite session-persistence backend (single `sessions.sqlite` beside the JSONL tree) instead of the JSONL backend; headless/CLI profiles keep JSONL. The SQLite provider implements the seek-capable `loadStoredFrom` hook, the precondition for paged cold history reads. Migration to the database remains a manual one-shot (`/root/dsh-web/migrate-to-sqlite.sh`); the JSONL tree stays as a read-only backup.
+- ZH: web 配置改为组装 SQLite 会话持久化后端（`sessions.sqlite` 单文件，位于 JSONL 目录树旁），headless/CLI 配置保持 JSONL。SQLite 后端实现了可定位读取的 `loadStoredFrom` 钩子，是历史分页冷读的前提。迁移到数据库仍是手动一次性操作（`/root/dsh-web/migrate-to-sqlite.sh`）；JSONL 目录树保留为只读备份。
