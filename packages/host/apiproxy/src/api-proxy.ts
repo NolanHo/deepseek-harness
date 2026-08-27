@@ -116,13 +116,13 @@ const DEFAULT_MAX_MESSAGES = 50
 
 /**
  * Events per user message used to size the first paged cold-read window.
- * Deliberately aggressive: one SQLite row is cheap and pages hold many rows,
- * so a larger first window costs little per message — the latency jump only
- * appears crossing storage pages, which the extra headroom avoids by making
- * the first read complete in nearly every session. The widening loop (density
- * re-estimation) only runs when a session is denser than even this estimate.
+ * Kept small on purpose: measured on the production store, `readFrom` scales
+ * ~linearly with the window (decode is CPU-bound — there is no cheap
+ * within-page plateau to spend headroom on), so an oversized first window
+ * wastes a full linear read. The widening loop re-estimates from the suffix's
+ * observed density and only reads more when the session genuinely needs it.
  */
-const ESTIMATE_EVENTS_PER_MESSAGE = 4096
+const ESTIMATE_EVENTS_PER_MESSAGE = 256
 
 /** Provider work budget: at most 100 calls and 2,000 inspected hits. */
 const SESSION_SEARCH_PROVIDER_CALL_LIMIT = 100
@@ -249,7 +249,7 @@ function paginate(
   events: readonly SessionEvent[],
   beforeSeq: number | undefined,
   maxMessages: number,
-): { events: SessionEvent[]; hasMore: boolean; cut: number; messages: number } {
+): { events: SessionEvent[]; hasMore: boolean; cut: number; messages: number; userMessages: number } {
   const window = beforeSeq === undefined ? [...events] : events.filter(event => event.seq < beforeSeq)
   const boundaryOf = (boundaryTypes: ReadonlySet<string>) => {
     let count = 0
@@ -275,7 +275,11 @@ function paginate(
   const preferred = boundaryOf(PAGE_BOUNDARY_TYPES)
   const chosen = preferred.count > 0 ? preferred : boundaryOf(PAGE_FALLBACK_TYPES)
   const page = window.filter(event => event.seq >= chosen.cut)
-  return { events: page, hasMore: chosen.cut > 0, cut: chosen.cut, messages: chosen.count }
+  // `messages` counts the boundary set the cut used (assistant fallback on
+  // synthetic logs); `userMessages` is the preferred count, used by the
+  // widening loop's density estimate — a suffix can hold assistant messages
+  // but no user message, which yields no density sample.
+  return { events: page, hasMore: chosen.cut > 0, cut: chosen.cut, messages: chosen.count, userMessages: preferred.count }
 }
 
 /** Wrap an ok result echoing the request's rpcId. */
@@ -1671,15 +1675,19 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           ...projections === undefined ? {} : { projections },
         }
       }
-      // Re-estimate from the observed density instead of halving: the suffix
-      // covered (tail - fromSeq) events holding `paged.messages` user messages,
-      // so maxMessages need ~maxMessages * that per-message width; double it as
-      // headroom. The bound guards non-progress (an empty suffix would divide
-      // by zero otherwise — then halving remains the only way forward).
+      // A suffix holding no user message yields no density sample: halving is
+      // the only honest widening step. With at least one sample, re-estimate:
+      // the suffix covered (tail - fromSeq) events per user message, so
+      // maxMessages need ~maxMessages * that width; double it as headroom.
+      // The bound guards non-progress.
       const tail = suffix.events[suffix.events.length - 1]?.seq ?? fromSeq
-      const eventsPerMessage = Math.max(1, Math.floor((tail - fromSeq + 1) / Math.max(1, paged.messages)))
-      const estimated = Math.max(0, tail - maxMessages * eventsPerMessage * 2)
-      fromSeq = estimated < fromSeq ? estimated : Math.max(0, Math.floor(fromSeq / 2))
+      if (paged.userMessages === 0) {
+        fromSeq = Math.max(0, Math.floor(fromSeq / 2))
+      } else {
+        const eventsPerMessage = Math.max(1, Math.floor((tail - fromSeq + 1) / paged.userMessages))
+        const estimated = Math.max(0, tail - maxMessages * eventsPerMessage * 2)
+        fromSeq = estimated < fromSeq ? estimated : Math.max(0, Math.floor(fromSeq / 2))
+      }
     }
   }
 

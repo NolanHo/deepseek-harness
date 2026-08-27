@@ -48,3 +48,8 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: The first cold-read window now anchors `maxMessages × 4096` events back (SQLite rows are cheap; latency jumps only across storage pages, so headroom wins), and the widening loop re-estimates from the observed events-per-message density instead of halving (one halving step overshot 6.4k → 275k events on dense agent sessions). Measured on the migrated store: dense-session cold reads previously spent ~800ms re-decoding overshot suffixes.
 - ZH: 冷读首窗改为锚定在 `maxMessages × 4096` 事件处（SQLite 行读取便宜、延迟跳变只在跨存储页出现，余量更划算），加宽循环按实测每消息事件密度重估而非减半（密集 agent 会话上一步减半会从 6.4k 超调到 27.5 万事件）。迁移库实测：密集会话冷读此前有 ~800ms 浪费在超调后缀的重复解码上。
+
+### 2026-08-27 — Correction: the aggressive first window (×4096) was measured and reverted / 更正：激进首窗（×4096）经实测回退
+
+- EN: A benchmark against the live production store showed `readFrom` scales ~linearly with the window (decode is CPU-bound — no cheap within-page plateau), and the densest session needs ~200k events per 25-message page no matter the window. The first-cut estimate stays at 256 events/message; the widening loop re-estimates from the observed events-per-USER-message density (a suffix without a user message halves instead — the assistant-message fallback count must not feed the density sample).
+- ZH: 对线上生产库的实测显示 `readFrom` 随窗口近似线性增长（解码是 CPU 界，没有页内便宜的平台期），最密会话每 25 条消息页无论窗口多大都需要 ~20 万事件。首切估计保持在 256 事件/消息；加宽循环按实测的每“用户消息”事件密度重估（后缀无用户消息时减半——assistant 回退计数不能当作密度样本）。

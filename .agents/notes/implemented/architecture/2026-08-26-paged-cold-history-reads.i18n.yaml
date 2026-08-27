@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-26-paged-cold-history-reads.md
-2026-08-26-paged-cold-history-reads.md: dd7584bc0ead83633e2f14ee1dffb1aa4e88ec67
-2026-08-26-paged-cold-history-reads.zh.md: a2d20f18a5592b2c4d6eaa3221145da74a2bd342
+2026-08-26-paged-cold-history-reads.md: a3a0c091c03ba2bf2b299b246ba8df9705ea79d7
+2026-08-26-paged-cold-history-reads.zh.md: b99c8f8bcb727cc19839d365e320d9e3650e104b

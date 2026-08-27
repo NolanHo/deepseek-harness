@@ -144,9 +144,7 @@ describe('paged cold history', () => {
     expect(response.result.value.hasMore).toBe(true)
   })
 
-  it('widens the window when the first suffix cannot hold a complete page', async () => {
-    // 100 turns (600 events): the cache watermark anchors the first window
-    // well above seq 0, so the widening loop has room to converge.
+  it('widens by halving when the suffix holds no user message (no density sample)', async () => {
     const events: SessionEvent[] = []
     for (let turn = 1; turn <= 100; turn++) {
       const base = (turn - 1) * 6
@@ -156,15 +154,13 @@ describe('paged cold history', () => {
     let calls = 0
     const readFrom = vi.fn((_id: string, fromSeq: number) => {
       calls += 1
-      // First read simulates a too-short suffix (fewer than maxMessages user
-      // messages inside); later reads serve the requested suffix faithfully.
+      // First read simulates a suffix with zero user messages (only the last
+      // assistant message and turn/end); later reads serve faithfully.
       const start = calls === 1 ? 598 : fromSeq
       return Promise.resolve({ meta, events: events.filter(event => event.seq >= start) })
     })
-    // Watermark far above the estimate headroom: fromSeq = 9000 - 2*4096
-    // stays above seq 0, so the loop has room to re-estimate by density
-    // (three reads: too-short, one-message, then the complete page).
-    const cache = stubCache(9000)
+    // Watermark keeps the first window (fromSeq = 800 - 2*256 = 288) above 0.
+    const cache = stubCache(800)
     const h = await harness({ events, readFrom, cache })
     const response = await h.api.sessions.history(request({ sessionId: sid('s'), maxMessages: 2 }))
     expect(response.result.ok).toBe(true)
@@ -173,11 +169,40 @@ describe('paged cold history', () => {
     // The final page holds the last two whole turns, ending at the log tail.
     expect(page).toEqual([589, 590, 591, 592, 593, 594, 595, 596, 597, 598, 599])
     expect(response.result.value.hasMore).toBe(true)
-    expect(calls).toBe(3)
-    expect(readFrom.mock.calls[0]?.[1]).toBeGreaterThan(0)
-    // Monotone descent, no halving jump: 808 -> density-estimated -> complete.
-    expect(readFrom.mock.calls[1]?.[1]).toBeLessThan(readFrom.mock.calls[0]?.[1] as number)
-    expect(readFrom.mock.calls[2]?.[1]).toBeLessThan(readFrom.mock.calls[1]?.[1] as number)
+    expect(calls).toBe(2)
+    expect(readFrom.mock.calls[0]?.[1]).toBe(288)
+    expect(readFrom.mock.calls[1]?.[1]).toBe(144)
+    expect(h.inspect).not.toHaveBeenCalled()
+  })
+
+  it('re-estimates the window from the observed message density', async () => {
+    const events: SessionEvent[] = []
+    for (let turn = 1; turn <= 100; turn++) {
+      const base = (turn - 1) * 6
+      events.push(...closedTurn(base, turn, base + 1))
+    }
+    const meta = header('s')
+    let calls = 0
+    const readFrom = vi.fn((_id: string, fromSeq: number) => {
+      calls += 1
+      // First read simulates a suffix holding one user message — a density
+      // sample, but fewer than maxMessages; later reads serve faithfully.
+      const start = calls === 1 ? 594 : fromSeq
+      return Promise.resolve({ meta, events: events.filter(event => event.seq >= start) })
+    })
+    const cache = stubCache(800)
+    const h = await harness({ events, readFrom, cache })
+    const response = await h.api.sessions.history(request({ sessionId: sid('s'), maxMessages: 2 }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    const page = wireEvents(response.result.value.events).map(event => event.seq)
+    expect(page).toEqual([589, 590, 591, 592, 593, 594, 595, 596, 597, 598, 599])
+    expect(response.result.value.hasMore).toBe(true)
+    // One sample underestimates the per-message width so far that the density
+    // estimate floors to a full read — the honest outcome, still only two reads.
+    expect(calls).toBe(2)
+    expect(readFrom.mock.calls[0]?.[1]).toBe(288)
+    expect(readFrom.mock.calls[1]?.[1]).toBe(0)
     expect(h.inspect).not.toHaveBeenCalled()
   })
 
