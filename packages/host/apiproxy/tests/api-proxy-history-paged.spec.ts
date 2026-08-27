@@ -161,7 +161,10 @@ describe('paged cold history', () => {
       const start = calls === 1 ? 598 : fromSeq
       return Promise.resolve({ meta, events: events.filter(event => event.seq >= start) })
     })
-    const cache = stubCache(599)
+    // Watermark far above the estimate headroom: fromSeq = 9000 - 2*4096
+    // stays above seq 0, so the loop has room to re-estimate by density
+    // (three reads: too-short, one-message, then the complete page).
+    const cache = stubCache(9000)
     const h = await harness({ events, readFrom, cache })
     const response = await h.api.sessions.history(request({ sessionId: sid('s'), maxMessages: 2 }))
     expect(response.result.ok).toBe(true)
@@ -170,9 +173,11 @@ describe('paged cold history', () => {
     // The final page holds the last two whole turns, ending at the log tail.
     expect(page).toEqual([589, 590, 591, 592, 593, 594, 595, 596, 597, 598, 599])
     expect(response.result.value.hasMore).toBe(true)
-    expect(calls).toBeGreaterThan(1)
+    expect(calls).toBe(3)
     expect(readFrom.mock.calls[0]?.[1]).toBeGreaterThan(0)
-    expect(readFrom.mock.calls[calls - 1]?.[1]).toBeLessThan(readFrom.mock.calls[0]?.[1] as number)
+    // Monotone descent, no halving jump: 808 -> density-estimated -> complete.
+    expect(readFrom.mock.calls[1]?.[1]).toBeLessThan(readFrom.mock.calls[0]?.[1] as number)
+    expect(readFrom.mock.calls[2]?.[1]).toBeLessThan(readFrom.mock.calls[1]?.[1] as number)
     expect(h.inspect).not.toHaveBeenCalled()
   })
 

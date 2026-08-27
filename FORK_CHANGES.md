@@ -43,3 +43,8 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: History pages ship consecutive delta-chunk runs as single `{ packed }` wire entries (the storage codec, lossless; the client expands them back to the exact events before the fold), and the fetch carrier compresses JSON responses with the strongest advertised coding (zstd, then gzip) — the wire fix for the 35MB cold-open pages the paged read exposed. Browser packages import the codec through `@deepseek-ai/dsh-host-apiproxy/api` only; client packages must not import `dsh-session`'s main entry (host `sessions` augmentation breaks the two-face typecheck split). Agent Note `2026-08-26-wire-chunk-packing-and-compression`.
 - ZH: 历史页把连续 delta-chunk 流折叠成单个 `{ packed }` 线上条目（存储编解码器、无损；客户端在折叠前展开回精确事件），fetch 载体按客户端声明的最强编码（zstd，其次 gzip）压缩 JSON 响应——针对分页读暴露出的 35MB 冷打开页的线上修复。浏览器包只经 `@deepseek-ai/dsh-host-apiproxy/api` 导入编解码器；客户端包不得导入 `dsh-session` 主入口（宿主的 `sessions` 增强会破坏两面 typecheck 分离）。Agent Note `2026-08-26-wire-chunk-packing-and-compression`。
+
+### 2026-08-27 — Paged-read window sizing: aggressive first cut + density re-estimation / 分页读窗口估计：激进首切 + 密度重估
+
+- EN: The first cold-read window now anchors `maxMessages × 4096` events back (SQLite rows are cheap; latency jumps only across storage pages, so headroom wins), and the widening loop re-estimates from the observed events-per-message density instead of halving (one halving step overshot 6.4k → 275k events on dense agent sessions). Measured on the migrated store: dense-session cold reads previously spent ~800ms re-decoding overshot suffixes.
+- ZH: 冷读首窗改为锚定在 `maxMessages × 4096` 事件处（SQLite 行读取便宜、延迟跳变只在跨存储页出现，余量更划算），加宽循环按实测每消息事件密度重估而非减半（密集 agent 会话上一步减半会从 6.4k 超调到 27.5 万事件）。迁移库实测：密集会话冷读此前有 ~800ms 浪费在超调后缀的重复解码上。

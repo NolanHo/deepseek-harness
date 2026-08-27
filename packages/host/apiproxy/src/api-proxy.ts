@@ -115,11 +115,14 @@ import { canOpenNativePath, openNativePath, openNativeTextFile } from './native-
 const DEFAULT_MAX_MESSAGES = 50
 
 /**
- * Events per user message used to size the first paged cold-read window. The
- * widening loop re-reads with halved `fromSeq` until the suffix contains a
- * complete page, so the estimate only sets the typical case's first cut.
+ * Events per user message used to size the first paged cold-read window.
+ * Deliberately aggressive: one SQLite row is cheap and pages hold many rows,
+ * so a larger first window costs little per message — the latency jump only
+ * appears crossing storage pages, which the extra headroom avoids by making
+ * the first read complete in nearly every session. The widening loop (density
+ * re-estimation) only runs when a session is denser than even this estimate.
  */
-const ESTIMATE_EVENTS_PER_MESSAGE = 256
+const ESTIMATE_EVENTS_PER_MESSAGE = 4096
 
 /** Provider work budget: at most 100 calls and 2,000 inspected hits. */
 const SESSION_SEARCH_PROVIDER_CALL_LIMIT = 100
@@ -1615,10 +1618,12 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
    * full `inspect()`, so a seek-capable backend (the SQLite provider) serves
    * a history page from a tail window in constant time. The first window
    * anchors on the projection cache's stored watermark (tail pages) or on
-   * `beforeSeq` (loadOlder pages); a halving widening loop re-reads earlier
-   * suffixes until the page's cut and message count are provably complete
-   * (`fromSeq === 0` is exact by construction, so the loop always exits and
-   * never serves a partial page).
+   * `beforeSeq` (loadOlder pages), sized aggressively (the SQLite row/page
+   * cost curve favors headroom); when a session is denser than the estimate,
+   * a widening loop re-estimates from the suffix's observed events-per-message
+   * density and re-reads earlier until the page's cut and message count are
+   * provably complete (`fromSeq === 0` is exact by construction, so the loop
+   * always exits and never serves a partial page).
    *
    * Presenter scope resolves from the suffix: a preset selected before the
    * read window falls back to the header value — view-only degradation,
@@ -1666,7 +1671,15 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           ...projections === undefined ? {} : { projections },
         }
       }
-      fromSeq = Math.max(0, Math.floor(fromSeq / 2))
+      // Re-estimate from the observed density instead of halving: the suffix
+      // covered (tail - fromSeq) events holding `paged.messages` user messages,
+      // so maxMessages need ~maxMessages * that per-message width; double it as
+      // headroom. The bound guards non-progress (an empty suffix would divide
+      // by zero otherwise — then halving remains the only way forward).
+      const tail = suffix.events[suffix.events.length - 1]?.seq ?? fromSeq
+      const eventsPerMessage = Math.max(1, Math.floor((tail - fromSeq + 1) / Math.max(1, paged.messages)))
+      const estimated = Math.max(0, tail - maxMessages * eventsPerMessage * 2)
+      fromSeq = estimated < fromSeq ? estimated : Math.max(0, Math.floor(fromSeq / 2))
     }
   }
 
