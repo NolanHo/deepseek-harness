@@ -297,6 +297,7 @@ describe('cold history recovery view', () => {
       inspect: (id: SessionId, signal?: AbortSignal) => coordinator.inspect(id, signal),
       readFrom: (id: SessionId, fromSeq: number, signal?: AbortSignal) => coordinator.readFrom(id, fromSeq, signal),
       locate: () => undefined,
+      messageCut: () => Promise.resolve(undefined),
     } as never)
     const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
 
@@ -344,6 +345,7 @@ describe('Remote Agent and Session lookup policy', () => {
       list: () => Promise.resolve([meta]),
       inspect,
       locate: () => undefined,
+      messageCut: () => Promise.resolve(undefined),
     } as never)
     const resumedSession = { id: sessionId, header: meta, events: [] } as unknown as import('@deepseek-ai/dsh-session').Session
     const resumedAgent = { id: sessionId, session: resumedSession, status: 'idle', ctx } as Agent
@@ -389,6 +391,7 @@ describe('Remote Agent and Session lookup policy', () => {
       list: () => Promise.resolve([coldMeta]),
       inspect,
       locate: () => undefined,
+      messageCut: () => Promise.resolve(undefined),
     } as never)
     const liveSession = ctx.sessions.create(sid('session-remote-live-child'), {
       meta: { cwd: '/proj', parentSession: sid('session-parent'), origin: 'subagent' },
@@ -463,6 +466,7 @@ describe('subagent ownership fence', () => {
       inspect,
       readFrom,
       locate: () => undefined,
+      messageCut: () => Promise.resolve(undefined),
     } as never)
     const resume = vi.spyOn(ctx.agents, 'resume')
     const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
@@ -520,6 +524,7 @@ describe('subagent ownership fence', () => {
       list: () => Promise.resolve([meta]),
       inspect: () => Promise.resolve({ meta, events }),
       locate: () => undefined,
+      messageCut: () => Promise.resolve(undefined),
     } as never)
     // Stores whose headers predate `origin` classify a child only through the
     // descriptor event; the pre-release decision stops recognizing them, so
@@ -785,6 +790,7 @@ describe('sessions.prompt synchronous rejection', () => {
       list: () => Promise.resolve([meta]),
       inspect: () => Promise.resolve({ meta, events: [] as SessionEvent[] }),
       locate: () => undefined,
+      messageCut: () => Promise.resolve(undefined),
     } as never)
     // The raced winner: a live parent-owned subagent publishes the identity
     // while the generic cold resume is in flight, so the resume collides.

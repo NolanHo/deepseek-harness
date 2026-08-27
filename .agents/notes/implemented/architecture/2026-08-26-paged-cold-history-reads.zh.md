@@ -12,7 +12,7 @@ web GUI 打开大会话时，每次冷读都付出全量日志重建：history �
 
 ## Decision
 
-**冷历史读取改为带加宽循环的分页后缀读取。** api proxy 的 `detachedHistoryRead` 先用 `persistence.list()` 解析会话头（缺失映射为 `session-not-found`），选择首个窗口（`fromSeq`）：tail 页锚定在投影缓存水印减去 `maxMessages × 256` 事件处，loadOlder 页锚定在 `beforeSeq` 减去同一估计处——刻意保持小，因为生产库实测 `readFrom` 随窗口近似线性增长（解码是 CPU 界，不存在页内便宜的平台期可花余量）——循环：`readFrom(id, fromSeq)` → `paginate` → 若页切点可证明落在后缀内（`cut >= fromSeq`）且窗口至少含 `maxMessages` 条用户消息则直接服务；否则按后缀实测的每用户消息事件密度重估 `fromSeq`（翻倍余量；后缀没有任何用户消息时无样本可估，减半）再读。`fromSeq === 0` 构造上即精确，循环必然终止；最坏情况等于今天的全量读。非 seek 后端（JSONL）在协调器内部降级（`readFrom` 回退为全前缀 + 跳过），不低于今天的行为。
+**冷历史读取改为带加宽循环的分页后缀读取。** api proxy 的 `detachedHistoryRead` 先用 `persistence.list()` 解析会话头（缺失映射为 `session-not-found`），选择首个窗口（`fromSeq`）：tail 页锚定在投影缓存水印减去 `maxMessages × 256` 事件处，loadOlder 页锚定在 `beforeSeq` 减去同一估计处——刻意保持小，因为生产库实测 `readFrom` 随窗口近似线性增长（解码是 CPU 界，不存在页内便宜的平台期可花余量）——循环：`readFrom(id, fromSeq)` → `paginate` → 若页切点可证明落在后缀内（`cut >= fromSeq`）且窗口至少含 `maxMessages` 条用户消息则直接服务；否则按后缀实测的每用户消息事件密度重估 `fromSeq`（翻倍余量；后缀没有任何用户消息时无样本可估，减半）再读。消息可索引的后端先精确给出页切点：`sessionPersistence.messageCut`（SQLite：对 `type`/`surface_op` 的一次 `LIMIT` 扫描，生产库上 ~3ms）直接定窗，估计器对 SQLite 永不触发；顺序介质回答 undefined，保持估计路径。`fromSeq === 0` 构造上即精确，循环必然终止；最坏情况等于今天的全量读。非 seek 后端（JSONL）在协调器内部降级（`readFrom` 回退为全前缀 + 跳过），不低于今天的行为。
 
 **页切点只在用户消息上。** `paginate` 只数 `user/message` 边界（无用户消息的合成日志回退到 `assistant/message`），因此一页 = 整数个回合：切点落在用户提问上，该回合的完整工具/助手内容随页携带——绝不切在回合中间或回答中间。旧行为两类消息都数，会在用户消息与其回答之间切开。`maxMessages` 语义变为"每页用户消息数"（默认 50 = 50 个回合）。
 

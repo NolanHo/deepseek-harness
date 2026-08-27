@@ -124,6 +124,15 @@ const DEFAULT_MAX_MESSAGES = 50
  */
 const ESTIMATE_EVENTS_PER_MESSAGE = 256
 
+/**
+ * Headroom read before a message-indexed cut: the cut seqs an append-origin
+ * user message, while the page cut lands at its group head (turn boundary and
+ * any source events a few seqs earlier). The margin covers the ordinary lead
+ * without re-reading a whole window; a longer lead re-enters the widening
+ * loop, which is correct, only slightly less direct.
+ */
+const PAGE_CUT_LEAD_MARGIN = 128
+
 /** Provider work budget: at most 100 calls and 2,000 inspected hits. */
 const SESSION_SEARCH_PROVIDER_CALL_LIMIT = 100
 
@@ -1654,10 +1663,16 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     const watermark = beforeSeq === undefined && cache !== undefined
       ? cache.cachedSnapshot(listed)?.asOfSeq
       : undefined
-    let fromSeq = watermark === undefined || watermark < 0
-      ? 0
-      : Math.max(0, watermark - maxMessages * ESTIMATE_EVENTS_PER_MESSAGE)
-    if (beforeSeq !== undefined) {
+    // A message-indexed backend answers the page cut exactly (one indexed
+    // scan, ~3ms on the production store): size the first window from it.
+    // Sequential media answers nothing and falls back to the estimate.
+    const cut = await persistence.messageCut(sessionId, maxMessages, beforeSeq)
+    let fromSeq = cut !== undefined
+      ? Math.max(0, cut - PAGE_CUT_LEAD_MARGIN)
+      : watermark === undefined || watermark < 0
+        ? 0
+        : Math.max(0, watermark - maxMessages * ESTIMATE_EVENTS_PER_MESSAGE)
+    if (cut === undefined && beforeSeq !== undefined) {
       fromSeq = Math.max(0, beforeSeq - maxMessages * ESTIMATE_EVENTS_PER_MESSAGE)
     }
     for (;;) {

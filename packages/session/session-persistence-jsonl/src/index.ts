@@ -199,6 +199,11 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
     return this.coordinator.readFrom(id, fromSeq, signal)
   }
 
+  /** The sequential medium cannot index message rows; the caller falls back to its own estimate. */
+  messageCut(_id: SessionId, _maxMessages: number, _beforeSeq?: number): Promise<number | undefined> {
+    return Promise.resolve(undefined)
+  }
+
   // One method serves both public `list` and the backend hook; delegating it to
   // the coordinator would call this hook recursively.
 

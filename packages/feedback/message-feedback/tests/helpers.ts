@@ -154,6 +154,10 @@ class TestPersistence extends SessionPersistence {
       : { meta: stored.meta, events: stored.events.filter(event => event.seq >= fromSeq) }
   }
 
+  messageCut(_id: SessionId, _maxMessages: number, _beforeSeq?: number): Promise<number | undefined> {
+    return Promise.resolve(undefined)
+  }
+
   list(): Promise<SessionHeader[]> {
     return Promise.resolve([...this.durable.values()].map(value => value.meta))
   }

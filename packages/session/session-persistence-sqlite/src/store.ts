@@ -150,6 +150,22 @@ export class SqliteStore implements PersistenceBackend<number> {
     }
   }
 
+  async userMessageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined> {
+    await this.observe(signal)
+    const snapshot = this.readTransaction(() => {
+      const row = this.rowFor(id)
+      if (row === undefined) return undefined
+      const ranked = beforeSeq === undefined
+        ? this.db.prepare(sql('select-user-message-cut')).all(id, maxMessages)
+        : this.db.prepare(sql('select-user-message-cut-before')).all(id, beforeSeq, maxMessages)
+      const last = ranked.at(-1)
+      const cut = last === undefined ? null : (last as { cut: number | null }).cut
+      return cut ?? null
+    })
+    signal?.throwIfAborted()
+    return snapshot ?? undefined
+  }
+
   async readStoredRevision(id: SessionId, signal?: AbortSignal): Promise<PersistenceRevision | undefined> {
     await this.observe(signal)
     const row = this.rowFor(id)

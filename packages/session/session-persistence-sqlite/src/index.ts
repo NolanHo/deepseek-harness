@@ -126,6 +126,11 @@ export class SqliteSessionPersistence extends SessionPersistence {
     return this.store.list(signal)
   }
 
+  /** Indexed message-rank seek: the store answers in one scan; sequential media answers nothing. */
+  messageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined> {
+    return this.store.userMessageCut(id, maxMessages, beforeSeq, signal)
+  }
+
   listSnapshots(signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]> {
     return this.store.listSnapshots(signal)
   }

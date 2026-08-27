@@ -88,6 +88,7 @@ async function harness(options: {
   readFrom?: (id: string, fromSeq: number) => Promise<{ meta: SessionHeader; events: SessionEvent[] } | undefined>
   cache?: ReturnType<typeof stubCache>
   inspectThrows?: boolean
+  messageCut?: (id: string, maxMessages: number, beforeSeq?: number) => Promise<number | undefined>
 }): Promise<PagedHarness> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
@@ -104,6 +105,7 @@ async function harness(options: {
     inspect,
     readFrom,
     locate: () => undefined,
+    messageCut: options.messageCut ?? (() => Promise.resolve(undefined)),
   } as never)
   if (options.cache !== undefined) ctx.provide('sessionProjectionCache', options.cache as never)
   const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
@@ -240,6 +242,33 @@ describe('paged cold history', () => {
     if (response.result.ok) return
     expect(response.result.error.code).toBe('session-not-found')
     expect(h.readFrom).not.toHaveBeenCalled()
+  })
+
+  it('sizes the first window from a message-indexed cut in a single read', async () => {
+    const events = threeTurns()
+    const cuts: number[] = []
+    const h = await harness({
+      events,
+      messageCut: (_id, _maxMessages, _beforeSeq) => {
+        // The 25-message cut would sit at turn 2's user message in a real
+        // index; simulate the exact cut for maxMessages=2 pages.
+        return Promise.resolve(7)
+      },
+      readFrom: (_id, fromSeq) => {
+        cuts.push(fromSeq)
+        return Promise.resolve({ meta: header('s'), events: events.filter(event => event.seq >= fromSeq) })
+      },
+    })
+    const response = await h.api.sessions.history(request({ sessionId: sid('s'), maxMessages: 2 }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    expect(cuts).toEqual([7 - 128 > 0 ? 7 - 128 : 0])
+    expect(wireTypes(response.result.value.events)).toEqual([
+      'user/message', 'assistant/chunk', 'assistant/chunk', 'assistant/message', 'turn/end',
+      'turn/start', 'user/message', 'assistant/chunk', 'assistant/chunk', 'assistant/message', 'turn/end',
+    ])
+    expect(response.result.value.hasMore).toBe(true)
+    expect(h.inspect).not.toHaveBeenCalled()
   })
 
   it('carries the cold projection baseline on the tail page and skips it on loadOlder', async () => {

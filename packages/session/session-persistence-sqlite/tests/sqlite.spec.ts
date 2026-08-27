@@ -340,6 +340,47 @@ describe('SessionPersistenceSqlite physical packing', () => {
     await store.close()
   })
 
+  it('locates the Nth append-origin user message by index and bounds it by beforeSeq', async () => {
+    const path = await freshDbPath('dsh-sqlite-message-cut-')
+    const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
+    const header = meta('message-cut')
+    const user = (seq: number): SessionEvent => ({
+      type: 'user/message',
+      seq,
+      time: seq,
+      surfaceOp: 'append',
+      data: { role: 'user', id: `u${seq}` as never, content: [{ type: 'text', text: `q${seq}` }], source: { kind: 'user' } },
+    })
+    const replace = (seq: number): SessionEvent => ({
+      type: 'user/message',
+      seq,
+      time: seq,
+      surfaceOp: { op: 'replace', start: 0, end: 4 },
+      sourceEventSeqs: [0, 1, 2, 3, 4],
+      data: { role: 'user', id: `r${seq}` as never, content: [{ type: 'text', text: 'checkpoint' }], source: { kind: 'plugin', plugin: 'compact' } },
+    })
+    await store.appendBatch(header, [
+      chunk(0),
+      user(1),
+      chunk(2),
+      replace(3),
+      user(4),
+      chunk(5),
+      user(6),
+      user(7),
+    ], false)
+
+    // Append-origin only: the replace copy never counts.
+    expect(await store.userMessageCut(header.id, 1)).toBe(7)
+    expect(await store.userMessageCut(header.id, 3)).toBe(4)
+    expect(await store.userMessageCut(header.id, 99)).toBe(1)
+    // loadOlder bound: strictly below the given seq.
+    expect(await store.userMessageCut(header.id, 2, 7)).toBe(4)
+    expect(await store.userMessageCut(header.id, 1, 4)).toBe(1)
+    expect(await store.userMessageCut(header.id, 1, 1)).toBeUndefined()
+    await store.close()
+  })
+
   it('waits for a competing process within the configured busy timeout', async () => {
     const path = await freshDbPath('dsh-sqlite-busy-')
     const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: 1_000 })

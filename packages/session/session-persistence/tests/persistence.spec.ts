@@ -77,6 +77,10 @@ class MemoryPersistence extends SessionPersistence implements PersistenceBackend
   /** The whole durable store: materialized sessions only (no lazy entries). */
   private store: MemoryStore
   private coordinator: PersistenceCoordinator<never>
+  /** Tests reach the coordinator through this alias (the field stays private). */
+  get coordinatorForTest(): PersistenceCoordinator<never> {
+    return this.coordinator
+  }
 
   constructor(ctx: Context, config?: MemoryConfig) {
     super(ctx)
@@ -116,6 +120,24 @@ class MemoryPersistence extends SessionPersistence implements PersistenceBackend
 
   readFrom(id: SessionId, fromSeq: number, signal?: AbortSignal): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
     return this.coordinator.readFrom(id, fromSeq, signal)
+  }
+
+  /** Service-level: the coordinator owns validation and delegates to the backend index hook. */
+  messageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined> {
+    return this.coordinator.messageCut(id, maxMessages, beforeSeq, signal)
+  }
+
+  /** The Map store indexes message rows in memory; the coordinator's messageCut reads this hook. */
+  userMessageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined> {
+    signal?.throwIfAborted()
+    const entry = this.store.get(id)
+    if (!entry) return Promise.resolve(undefined)
+    const seqs = entry.events
+      .filter(event => event.type === 'user/message' && event.surfaceOp === 'append' && (beforeSeq === undefined || event.seq < beforeSeq))
+      .map(event => event.seq)
+      .sort((a, b) => b - a)
+    // The Nth message when fewer than N exist: the earliest of the top N.
+    return Promise.resolve(seqs.slice(0, maxMessages).at(-1))
   }
 
   // --- PersistenceBackend hooks (the Map storage primitives) ---
@@ -1303,6 +1325,27 @@ describe('PersistenceCoordinator observation cancellation', () => {
       await fiber.dispose()
       await ctx.fiber.dispose()
     }
+  })
+
+  it('messageCut delegates the indexed message-rank seek and validates its arguments', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const backend = new MemoryPersistence(ctx)
+    const coordinator = backend.coordinatorForTest
+    const cutMeta = meta(SessionId('cut-session'))
+    await backend.appendBatch(cutMeta, [
+      { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
+      { type: 'user/message', seq: 1, time: 1, surfaceOp: 'append', data: { role: 'user', id: 'u1' as never, content: [], source: { kind: 'user' } } },
+      { type: 'assistant/message', seq: 2, time: 2, surfaceOp: 'append', data: { turn: 1, step: 1, message: { role: 'assistant', id: 'a1' as never, content: [], source: { kind: 'model', provider: 'p', model: 'm' } } } },
+      { type: 'user/message', seq: 3, time: 3, surfaceOp: 'append', data: { role: 'user', id: 'u2' as never, content: [], source: { kind: 'user' } } },
+    ], false)
+
+    expect(await coordinator.messageCut(cutMeta.id, 1)).toBe(3)
+    expect(await coordinator.messageCut(cutMeta.id, 2)).toBe(1)
+    expect(await coordinator.messageCut(cutMeta.id, 1, 3)).toBe(1)
+    expect(await coordinator.messageCut(cutMeta.id, 1, 1)).toBeUndefined()
+    expect(await coordinator.messageCut(cutMeta.id, 99)).toBe(1)
+    await expect(coordinator.messageCut(cutMeta.id, 0)).rejects.toThrow(/positive safe integer/)
   })
 
   it('readFrom via the seek hook: serves the suffix, maps undefined to not-found, and relays hook failures by abort state', async () => {

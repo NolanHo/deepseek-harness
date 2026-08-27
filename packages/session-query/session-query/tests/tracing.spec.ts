@@ -83,6 +83,10 @@ class TracePersistence extends SessionPersistence {
     return { meta: whole.meta, events: whole.events.filter(event => event.seq >= fromSeq) }
   }
 
+  messageCut(_id: SessionId, _maxMessages: number, _beforeSeq?: number): Promise<number | undefined> {
+    return Promise.resolve(undefined)
+  }
+
   list(): Promise<SessionHeader[]> {
     TracePersistence.listCalls += 1
     if (TracePersistence.listFailure !== undefined) return Promise.reject(TracePersistence.listFailure)

@@ -53,3 +53,8 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: A benchmark against the live production store showed `readFrom` scales ~linearly with the window (decode is CPU-bound — no cheap within-page plateau), and the densest session needs ~200k events per 25-message page no matter the window. The first-cut estimate stays at 256 events/message; the widening loop re-estimates from the observed events-per-USER-message density (a suffix without a user message halves instead — the assistant-message fallback count must not feed the density sample).
 - ZH: 对线上生产库的实测显示 `readFrom` 随窗口近似线性增长（解码是 CPU 界，没有页内便宜的平台期），最密会话每 25 条消息页无论窗口多大都需要 ~20 万事件。首切估计保持在 256 事件/消息；加宽循环按实测的每“用户消息”事件密度重估（后缀无用户消息时减半——assistant 回退计数不能当作密度样本）。
+
+### 2026-08-27 — Message-indexed page cuts: exact window sizing for paged cold reads / 消息索引切点：分页冷读的精确定窗
+
+- EN: `sessionPersistence.messageCut` (new backend hook `userMessageCut`; SQLite answers with one `LIMIT` scan over `type`/`surface_op`, ~3ms on the production store) sizes the history page's first window from the exact Nth append-origin user-message seq instead of estimating. Measured: the density estimator's tail-biased sample made dense-session pages re-read ~2.7x the necessary events (~2.1s vs the ~0.8s minimum decode); the indexed cut reads the page's minimal window in one pass. Sequential media (JSONL) answers undefined and keeps the estimator.
+- ZH: `sessionPersistence.messageCut`（新后端钩子 `userMessageCut`；SQLite 对 `type`/`surface_op` 做一次 `LIMIT` 扫描即答，生产库 ~3ms）按第 N 条追加来源用户消息的精确 seq 为历史页首窗定窗，不再依赖估计。实测：密度估计器受尾部样本偏差影响，密集会话页多读了 ~2.7 倍必要事件（~2.1s vs ~0.8s 的最小解码）；索引切点一次读齐页面的最小窗口。顺序介质（JSONL）回答 undefined，保留估计路径。

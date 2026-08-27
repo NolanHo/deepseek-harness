@@ -111,7 +111,7 @@ async function harness(
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(UserQuestionService)
-  ctx.provide('sessionPersistence', (persistence ?? { list: () => Promise.resolve([]) }) as never)
+  ctx.provide('sessionPersistence', (persistence ?? { list: () => Promise.resolve([]), messageCut: () => Promise.resolve(undefined) }) as never)
   if (presets !== undefined) ctx.provide('agentPresets', roster(presets, options.userIds) as never)
 
   const factory: AgentFactory = {
@@ -697,6 +697,7 @@ describe('session.history presenter scope', () => {
       list: () => Promise.resolve([meta]),
       inspect: () => Promise.resolve({ meta, events }),
       readFrom: (_id: string, fromSeq: number) => Promise.resolve({ meta, events: events.filter(event => event.seq >= fromSeq) }),
+      messageCut: () => Promise.resolve(undefined),
     })
 
     standingKeyRequests.length = 0
@@ -713,6 +714,7 @@ describe('session.history presenter scope', () => {
       list: () => Promise.resolve([meta]),
       inspect: () => Promise.resolve({ meta, events: [] }),
       readFrom: (_id: string, _fromSeq: number) => Promise.resolve({ meta, events: [] }),
+      messageCut: () => Promise.resolve(undefined),
     })
     // The preset broke after the session ran: the roster rejects the mount.
     failingStandingKeys.add('standard')

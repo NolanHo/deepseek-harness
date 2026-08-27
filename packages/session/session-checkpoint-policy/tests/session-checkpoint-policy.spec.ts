@@ -27,6 +27,10 @@ class TestPersistence extends SessionPersistence {
   readFrom(_id: SessionId, _fromSeq: number): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
     return Promise.reject(new Error('not used'))
   }
+  messageCut(_id: SessionId, _maxMessages: number, _beforeSeq?: number): Promise<number | undefined> {
+    return Promise.resolve(undefined)
+  }
+
   list(): Promise<SessionHeader[]> { return Promise.resolve([]) }
   listSnapshots(): Promise<never[]> { return Promise.resolve([]) }
 }

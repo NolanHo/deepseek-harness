@@ -33,6 +33,8 @@ const SQL_RESOURCES = [
   'select-synchronous',
   'select-tail-events',
   'select-trusted-schema',
+  'select-user-message-cut',
+  'select-user-message-cut-before',
   'select-user-object-count',
   'select-user-version',
   'set-application-id',
