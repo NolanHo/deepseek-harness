@@ -27,6 +27,8 @@ export interface ILayout {
   openDetails(): void
   /** Close the details panel. */
   closeDetails(): void
+  /** Close the mobile sidebar drawer (no-op when already closed). */
+  closeDrawer(): void
 }
 
 /** Cross-plugin panel-action face (ctx.layout). */
@@ -57,6 +59,11 @@ export class LayoutController implements ILayout {
   /** Close the details panel. */
   closeDetails(): void {
     this.#require().closeDetails()
+  }
+
+  /** Close the mobile sidebar drawer (no-op when already closed). */
+  closeDrawer(): void {
+    this.#require().setDrawerOpen(false)
   }
 
   #require(): PanelActions {
