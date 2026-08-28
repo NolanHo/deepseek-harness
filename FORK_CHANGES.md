@@ -87,3 +87,8 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: The generic client brand (sidebar fallback brand name, default document title, `apps/web` index title and Vite default) reads `DSH` instead of `DSH Local Build`. The build-revision badge keeps its existing desktop/mobile behavior. Affected tests and snapshots updated; ui-sidebar/ui-renderer/apps-web suites green (97 tests) and client typecheck green. The deployment title (`DSH_CLIENT_TITLE`) still overrides the default.
 - ZH: 通用客户端品牌（侧栏兜底品牌名、默认文档标题、`apps/web` index 标题与 Vite 默认值）从 `DSH Local Build` 改为 `DSH`。构建版本徽标保留原有桌面/移动端行为。相关测试与快照已更新；ui-sidebar/ui-renderer/apps-web 套件全绿（97 用例），client typecheck 全绿。部署标题（`DSH_CLIENT_TITLE`）仍可覆盖默认值。
+
+### 2026-08-28 — dsh-ext-nolan extension monorepo added as a submodule / 扩展插件 monorepo 以子仓库引入
+
+- EN: `dsh-ext-nolan` (github.com/NolanHo/dsh-ext-nolan) is now a git submodule at the fork root: the personal, self-contained collection of DSH web plugins (dsh-app-views, dsh-github-inbox, dsh-herdr, dsh-rewind). Each package ships its own lockfile and committed `lib/`; profiles install them via `link:` paths.
+- ZH: `dsh-ext-nolan`（github.com/NolanHo/dsh-ext-nolan）现作为 git 子仓库挂载在 fork 根目录：个人自包含的 DSH Web 插件集合（dsh-app-views、dsh-github-inbox、dsh-herdr、dsh-rewind）。每个包自带 lockfile 并提交 `lib/` 产物；profile 通过 `link:` 路径安装。
