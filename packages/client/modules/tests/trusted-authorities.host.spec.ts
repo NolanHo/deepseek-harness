@@ -41,7 +41,12 @@ function construct(packageName: string): ClientModuleRegistry {
   ctx.baseUrl = pathToFileURL(root!).href + '/'
   ctx.provide('loader', {
     *entries() {
-      yield { options: { name: packageName }, fiber: {}, disabled: false }
+      yield {
+        options: { name: packageName },
+        fiber: {},
+        disabled: false,
+        parent: { tree: { ctx: { baseUrl: ctx.baseUrl } } },
+      }
     },
   })
   const webServer: Pick<WebServer, 'port' | 'register' | 'tapIndex'> = {

@@ -1,13 +1,6 @@
-// ProducedFiles: the produced-file row a finished turn ends with. The paths
-// come pre-matched by the turn-tail chain from the mutation tools'
-// follow-along locations, never from the closing prose. Clicking one goes
-// through the same openFile the tool rows use — the Host's own opener, on the
-// Host machine.
-
-import { useLayoutEffect, useRef, useState } from 'react'
-import type { HostDescriptionSource } from '@deepseek-ai/dsh-client-connection/client'
-import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { HostObservable, InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { basename } from './turn-deliverables.ts'
 import type { NS } from './locales.ts'
 import css from './ProducedFiles.module.css'
@@ -48,11 +41,13 @@ export function fitProducedFiles(
 
 /** Registration-side Host capability facts. */
 export interface ProducedFilesInjected {
-  /** Whether the page authority is one this deployment serves at. */
-  isServingAuthority: boolean
+  /** Whether the browser itself is connected over loopback. */
+  isLoopback: boolean
+  /** Load the opener capability when this row first reaches the page. */
+  ensureWorkspacePathOpen(): void
   hooks: {
-    /** Current generation's Host description, bound by the slot renderer. */
-    hostDescription: HostDescriptionSource
+    /** Current generation's Session workspace opener capability. */
+    workspacePathOpen: HostObservable<boolean | undefined>
   }
 }
 
@@ -71,10 +66,11 @@ function moreLabel(t: ProducedFilesProps['t'], count: number): string {
  * @returns The produced-files row.
  */
 export function ProducedFiles({
-  matched: paths, openFile, isServingAuthority, useHostDescription, t,
+  matched: paths, openFile, isLoopback, ensureWorkspacePathOpen, useWorkspacePathOpen, t,
 }: ProducedFilesProps) {
-  const hostCanOpenPath = useHostDescription(description => description?.canOpenPath === true)
-  const canOpenPath = isServingAuthority && hostCanOpenPath
+  useEffect(() => { ensureWorkspacePathOpen() }, [ensureWorkspacePathOpen])
+  const hostCanOpenPath = useWorkspacePathOpen(available => available === true)
+  const canOpenPath = isLoopback && hostCanOpenPath
   const limit = Math.min(paths.length, SHOWN_LIMIT)
   const [shownCount, setShownCount] = useState(limit)
   const rowRef = useRef<HTMLDivElement>(null)

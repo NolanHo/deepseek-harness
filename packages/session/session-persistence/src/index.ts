@@ -7,12 +7,13 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { SessionPreparation } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionId, SessionHeader } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionId, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionPersistenceRevision } from './revision.ts'
 
 // Re-export the metadata vocabulary so Consumers import it from the Service Definition.
 export type { SessionHeader } from '@deepseek-ai/dsh-session'
 export { SessionPersistenceRevision } from './revision.ts'
+export { SessionPersistenceNotFoundError } from './errors.ts'
 
 /** Lightweight immutable source identity returned without loading a full log. */
 export interface SessionPersistenceSnapshot {
@@ -29,6 +30,26 @@ export interface SessionInspection {
   /** Validated contiguous logical event log. */
   readonly events: readonly SessionEvent[]
 }
+
+/** A borrowed exact Session source returned from a cold materialization or concurrent live owner. */
+export type BorrowedSessionSource = Disposable & (
+  | {
+    /** A reusable unpublished Session is pinned until this observation is disposed. */
+    readonly source: 'prepared'
+    /** Immutable header and logical event prefix observed together. */
+    readonly inspection: SessionInspection
+    /** Durable revision represented by the prepared source. */
+    readonly revision: SessionPersistenceRevision
+    /** Exact unpublished Session retained for a later {@link prepare}. */
+    readonly preparedSession: Session
+  }
+  | {
+    /** A live Session won source resolution while the persistence read was starting. */
+    readonly source: 'live'
+    /** Immutable live header and event prefix observed together. */
+    readonly inspection: SessionInspection
+  }
+)
 
 /** A backend's own raw artifact text for one session, verbatim. */
 export interface SessionRawArtifact {
@@ -133,6 +154,16 @@ export abstract class SessionPersistence extends Service {
   abstract create(meta: SessionHeader): Promise<void>
 
   /**
+   * Ensure a live session has a durable header even when it has no events.
+   * Ordinary sessions remain lazily materialized; lifecycle frontends call
+   * this only when an empty session itself is a durable resumable resource.
+   * @param _session - exact live session whose registered header is materialized.
+   */
+  ensureMaterialized(_session: Session): Promise<void> {
+    return Promise.reject(new Error('this session persistence backend cannot materialize an empty session'))
+  }
+
+  /**
    * Durably persist a batch of events. Honors the append-only and contiguous-
    * seq contracts: the first event's `seq` MUST equal the stored next-seq
    * (after `load` has durably closed any interrupted turn). Rejects non-JSON-
@@ -200,6 +231,17 @@ export abstract class SessionPersistence extends Service {
   abstract inspect(id: SessionId, signal?: AbortSignal): Promise<SessionInspection>
 
   /**
+   * Borrow one exact inspection while retaining any reusable prepared source.
+   * A cold observation must pin the exact prepared Session that a later
+   * {@link prepare} reserves. Implementations must not degrade this operation
+   * to a detached {@link inspect} result.
+   * @param id - persisted session to observe.
+   * @param signal - optional cancellation for preparation work.
+   * @returns a disposable immutable observation.
+   */
+  abstract borrowSession(id: SessionId, signal?: AbortSignal): Promise<BorrowedSessionSource>
+
+  /**
    * Read the stored events from `fromSeq` onward — the read-from-seq
    * primitive for read models that resume from a watermark (e.g. a persisted
    * projection cache folding only the tail past its checkpoint). Unlike
@@ -230,6 +272,7 @@ export abstract class SessionPersistence extends Service {
    * @param maxMessages - message rank to locate (1 = the last user message).
    * @param beforeSeq - optional exclusive upper bound (loadOlder pages).
    * @param signal - optional cancellation for backend read work.
+   * @returns the located seq, or undefined when the backend cannot answer or no message matches.
    */
   abstract messageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal):
   Promise<number | undefined>

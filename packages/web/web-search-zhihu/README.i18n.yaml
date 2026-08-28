@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/web/web-search-zhihu/README.md
-README.md: 388f66f5af3e651c9b475fd121690135e3cbbdd1
-README.zh.md: 3341b96d720da73a4a8ea8275d9b6c730ae65a39
+README.md: fc841cc925f6640e12cfa35ea6f733b294cec611
+README.zh.md: 42cc80acc533ccf0e0f863ecd669d3237c6a41ee

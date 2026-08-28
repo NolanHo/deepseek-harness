@@ -10,6 +10,7 @@ import { parseBootManifest } from '../src/client/index.ts'
 const WIRE = {
   rev: 'graph',
   entries: [{ id: 'a', url: '/plugins/a/client.js', rev: '1' }],
+  batches: [{ phase: 'application', url: '/batch.js', rev: 'batch', entries: ['a'] }],
 }
 
 describe('boot manifest trustedAuthorities', () => {

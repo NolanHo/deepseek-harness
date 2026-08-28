@@ -18,6 +18,7 @@ import type { ReactNode } from 'react'
 import type { PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { computeColumns, MOBILE_VIEWPORT, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
+import { DocumentTitle } from './DocumentTitle.tsx'
 import type { createLayoutStore } from './stores.ts'
 import css from './AppFrame.module.css'
 
@@ -110,6 +111,7 @@ export function AppFrame({
   useSessions,
   actions,
   renderSlot,
+  SessionProvider,
   t,
 }: AppFrameProps) {
   const panels = useStore(s => s)
@@ -117,6 +119,10 @@ export function AppFrame({
   const detailsSession = useSessions((s) => {
     const current = s.current
     return current !== undefined && s.byId[current]?.blank === false ? current : undefined
+  })
+  const documentTitle = useSessions((s) => {
+    const current = s.current
+    return current === undefined ? undefined : s.byId[current]?.title
   })
   const frameRef = useRef<HTMLDivElement | null>(null)
   const [viewport, setViewport] = useState(() => window.innerWidth)
@@ -221,6 +227,7 @@ export function AppFrame({
   const onDetailsDrag = useCallback((dx: number) => {
     actions.setDetails(detailsBase.current - dx)
   }, [actions])
+  const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')
 
   const detailsOpen = mobile ? panels.details > 0 && detailsSession !== undefined : cols.details > 0
   return (
@@ -235,6 +242,10 @@ export function AppFrame({
       data-details-collapsed={cols.details === 0 || undefined}
       data-dragging={dragging || undefined}
     >
+      <DocumentTitle
+        productTitle={productTitle}
+        {...documentTitle === undefined ? {} : { title: documentTitle }}
+      />
       {!mobile && (
         <div className={css.sidebarCol}>
           {/* Render-site slot call with live concession output: a closed
@@ -276,8 +287,8 @@ export function AppFrame({
         {/* Both column occupants stay at fixed tree positions from first
             paint — no loading gate: a bare status line reads worse than
             the shell's own pending rendering. The conversation
-            is session-maybe; the strict details entry naturally renders
-            empty while no session is current. */}
+            is session-maybe; SessionProvider withholds the strict details
+            entry while no session is current. */}
         <CenterColumn>{renderSlot('conversation', {})}</CenterColumn>
         <DetailsColumn
           mobile={mobile}
@@ -285,7 +296,7 @@ export function AppFrame({
           onClose={actions.closeDetails}
           closeLabel={t('details.close')}
         >
-          {renderSlot('details', {})}
+          <SessionProvider>{renderSlot('details', {})}</SessionProvider>
         </DetailsColumn>
       </>
       {mobile && detailsOpen && <div className={css.scrim} data-sheet="" onClick={actions.closeDetails} />}
