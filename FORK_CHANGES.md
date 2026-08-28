@@ -54,7 +54,26 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 - EN: A benchmark against the live production store showed `readFrom` scales ~linearly with the window (decode is CPU-bound — no cheap within-page plateau), and the densest session needs ~200k events per 25-message page no matter the window. The first-cut estimate stays at 256 events/message; the widening loop re-estimates from the observed events-per-USER-message density (a suffix without a user message halves instead — the assistant-message fallback count must not feed the density sample).
 - ZH: 对线上生产库的实测显示 `readFrom` 随窗口近似线性增长（解码是 CPU 界，没有页内便宜的平台期），最密会话每 25 条消息页无论窗口多大都需要 ~20 万事件。首切估计保持在 256 事件/消息；加宽循环按实测的每“用户消息”事件密度重估（后缀无用户消息时减半——assistant 回退计数不能当作密度样本）。
 
+### 2026-08-27 — AGENTS.md: 运行中 dsh 禁止私自重启 / AGENTS.md: never restart the running dsh
+
+- EN: `AGENTS.md` gains a "Restarting the running dsh" rule: host-half (node) plugin changes take effect only after a dsh restart, so the agent must stop and ask the user to restart (or wait for explicit approval) instead of killing or restarting the process itself; client-half changes (rebuild the client bundle, refresh the browser) do not require a restart.
+- ZH: `AGENTS.md` 新增「Restarting the running dsh」规则：host 半（node）插件改动只有在 dsh 重启后才生效，agent 必须停下请用户重启（或等待明确批准），不得自行 kill 或重启进程；client 半改动（重建 client bundle 后刷新浏览器）无需重启。
+
+ Updated upstream
 ### 2026-08-27 — Message-indexed page cuts: exact window sizing for paged cold reads / 消息索引切点：分页冷读的精确定窗
 
 - EN: `sessionPersistence.messageCut` (new backend hook `userMessageCut`; SQLite answers with one `LIMIT` scan over `type`/`surface_op`, ~3ms on the production store) sizes the history page's first window from the exact Nth append-origin user-message seq instead of estimating. Measured: the density estimator's tail-biased sample made dense-session pages re-read ~2.7x the necessary events (~2.1s vs the ~0.8s minimum decode); the indexed cut reads the page's minimal window in one pass. Sequential media (JSONL) answers undefined and keeps the estimator.
 - ZH: `sessionPersistence.messageCut`（新后端钩子 `userMessageCut`；SQLite 对 `type`/`surface_op` 做一次 `LIMIT` 扫描即答，生产库 ~3ms）按第 N 条追加来源用户消息的精确 seq 为历史页首窗定窗，不再依赖估计。实测：密度估计器受尾部样本偏差影响，密集会话页多读了 ~2.7 倍必要事件（~2.1s vs ~0.8s 的最小解码）；索引切点一次读齐页面的最小窗口。顺序介质（JSONL）回答 undefined，保留估计路径。
+
+### 2026-08-27 — OnePlus 13 移动端体验一轮治理 / OnePlus 13 mobile UX pass
+
+- EN: A phone-viewport pass over the web client verified in a real browser at 412×915 (Agent Note `2026-08-27-oneplus-13-mobile-ux-pass`): the session-header breadcrumb gets a 88px floor and header actions shrink with ellipsis instead of crushing it; composer/sidebar/workspace/settings/goal controls gain ≤560px thumb floors (32–40px); the settings modal portals to `document.body` (the transform-animated drawer would pin it to 320px); the job popover becomes a fixed bottom panel on phones; HoverCard gains a long-press touch path with viewport clamping. Desktop breakpoints untouched; 94 files / 1487 client tests green, client typecheck and lint green.
+- ZH: 面向 Web 客户端的手机视口一轮治理，在真实浏览器 412×915 下往返验证（Agent Note `2026-08-27-oneplus-13-mobile-ux-pass`）：会话 header 面包屑获得 88px 底线、header actions 以省略号收缩而不再把它压成 16px；composer/侧栏/工作区/设置/goal 控件获得 ≤560px 拇指底线（32–40px）；设置弹层 portal 到 `document.body`（带 transform 动画的抽屉会把它钉在 320px 内）；job 弹层在手机上变为固定底部面板；HoverCard 增加长按触控路径并 clamp 在视口内。桌面断点不变；94 文件 / 1487 客户端测试全绿，client typecheck 与 lint 全绿。
+- EN: Follow-up fix — the mobile drawer opener and the details-sheet close were invisible in the light theme (white glyph on the white floating fill: `button-floating-fill` + `label-primary-inverted`, the dark-surface pairing). Both now pair `label-primary` glyph + `border-l2` hairline + `shadow-lv2` like the desktop scroll-to-bottom button; sheet close also grows 24→32px. Verified in light and dark themes.
+- ZH: 追加修复——移动抽屉入口与 details sheet 关闭按钮在浅色主题下不可见（白底白图标：`button-floating-fill` + `label-primary-inverted`，实为深色底配对）。两者现改为与桌面「回到底部」按钮一致的 `label-primary` 图标 + `border-l2` 细描边 + `shadow-lv2`；sheet 关闭按钮同时 24→32px。深浅主题均验证。
+
+
+### 2026-08-28 — layout face gains closeDrawer for app views on mobile / 布局契约新增 closeDrawer 供移动端应用视图关闭抽屉
+
+- EN: `ILayout`/`LayoutController` gain `closeDrawer()` (delegates to the layout store's `setDrawerOpen(false)`). The mobile drawer overlays the single-track center column; app views (dsh-app-views) occupy that column, and the drawer must close like it does on session selection. dsh-app-views v0.1.4 calls it on view open. UI-layout README updated in the same commit.
+- ZH: `ILayout`/`LayoutController` 新增 `closeDrawer()`（委托布局 store 的 `setDrawerOpen(false)`）。移动端抽屉覆盖单轨中间列；应用视图（dsh-app-views）占据该列时，抽屉需要像会话切换时一样关闭。dsh-app-views v0.1.4 在视图打开时调用它。ui-layout README 同提交更新。
