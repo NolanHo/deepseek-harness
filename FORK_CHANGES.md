@@ -77,3 +77,13 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: `ILayout`/`LayoutController` gain `closeDrawer()` (delegates to the layout store's `setDrawerOpen(false)`). The mobile drawer overlays the single-track center column; app views (dsh-app-views) occupy that column, and the drawer must close like it does on session selection. dsh-app-views v0.1.4 calls it on view open. UI-layout README updated in the same commit.
 - ZH: `ILayout`/`LayoutController` 新增 `closeDrawer()`（委托布局 store 的 `setDrawerOpen(false)`）。移动端抽屉覆盖单轨中间列；应用视图（dsh-app-views）占据该列时，抽屉需要像会话切换时一样关闭。dsh-app-views v0.1.4 在视图打开时调用它。ui-layout README 同提交更新。
+
+### 2026-08-28 — Mobile trim: session-log capsule and commit badge off the phone chrome / 移动端精简：session log 胶囊与 commit 徽标移出手机 chrome
+
+- EN: Phone chrome drops two desktop-only surfaces: the session-log export capsule in the header utilities (`display: none` ≤560px; the `/export` command and its shared dialog stay available) and the sidebar brand row's commit-hash badge (`display: none` ≤560px). Workspace drag-and-drop was left as is: HTML5 DnD never activates on touch. The message icon-actions time label (`timeStart`/`timeEnd`, always visible on touch devices) also elides at ≤560px — it previously pushed past the 412px viewport with long run-duration strings.
+- ZH: 手机 chrome 去掉两块桌面专属表面：header utilities 的 session log 导出胶囊（≤560px `display: none`；`/export` 命令与弹窗仍可用）与侧栏品牌行的 commit hash 徽标（≤560px `display: none`）。工作区拖拽保持原样：HTML5 DnD 在触屏上从不激活。消息图标操作行的时间标签（`timeStart`/`timeEnd`，触屏设备常显）在 ≤560px 下省略号化——此前长运行时长字符串会冲出 412px 视口。
+
+### 2026-08-28 — Brand fallback renamed to plain DSH / 品牌兜底文案改为 DSH
+
+- EN: The generic client brand (sidebar fallback brand name, default document title, `apps/web` index title and Vite default) reads `DSH` instead of `DSH Local Build`. The build-revision badge keeps its existing desktop/mobile behavior. Affected tests and snapshots updated; ui-sidebar/ui-renderer/apps-web suites green (97 tests) and client typecheck green. The deployment title (`DSH_CLIENT_TITLE`) still overrides the default.
+- ZH: 通用客户端品牌（侧栏兜底品牌名、默认文档标题、`apps/web` index 标题与 Vite 默认值）从 `DSH Local Build` 改为 `DSH`。构建版本徽标保留原有桌面/移动端行为。相关测试与快照已更新；ui-sidebar/ui-renderer/apps-web 套件全绿（97 用例），client typecheck 全绿。部署标题（`DSH_CLIENT_TITLE`）仍可覆盖默认值。
