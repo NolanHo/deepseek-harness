@@ -222,6 +222,16 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   private _persistenceEpoch = 0
   private _globalGeneration = 0
   private _localGeneration = 0
+  /**
+   * Live observations memoized by session: `observeLive` clones and
+   * fingerprints every event (tens of millions of JSON bytes for large
+   * attached logs), and `_observeStable` recomputed it for every attached
+   * session on every search. Attached logs mutate by append only
+   * (replacements and edits append too), so the event count plus the tail
+   * seq/time identifies the observation content; recompute only when that
+   * key changes.
+   */
+  private readonly _liveObservationMemo = new Map<SessionId, { key: string; observation: ObservedSession }>()
   private _tail: Promise<void> = Promise.resolve()
   private _closed = false
   private _closePromise: Promise<void> | undefined
@@ -533,11 +543,12 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       }
       const live = new Map<SessionId, ObservedSession>()
       for (const session of this.ctx.sessions.list()) {
-        const observed = observeLive(session)
+        const observed = this._observeLiveCached(session)
         const durable = persisted.get(session.id)
         if (durable !== undefined) assertSessionHeadersCompatible(observed.header, durable.header)
         live.set(session.id, observed)
       }
+      this._evictDetachedLiveObservations(live)
       if (!sameSessionIds(initiallyLive, live)) continue
       return { persistenceBinding, persisted, live }
     }
@@ -545,6 +556,23 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       'session-search persistence observation did not stabilize after one retry',
       'SESSION_QUERY_PERSISTENCE_FAILED',
     )
+  }
+
+  private _observeLiveCached(session: Session): ObservedSession {
+    const tail = session.events.at(-1)
+    const key = `${session.events.length}:${tail?.seq ?? 'none'}:${tail?.time ?? 'none'}`
+    const cached = this._liveObservationMemo.get(session.id)
+    if (cached !== undefined && cached.key === key) return cached.observation
+    const observation = observeLive(session)
+    this._liveObservationMemo.set(session.id, { key, observation })
+    return observation
+  }
+
+  /** Bound the memo to the currently attached sessions. */
+  private _evictDetachedLiveObservations(live: ReadonlyMap<SessionId, ObservedSession>): void {
+    for (const id of this._liveObservationMemo.keys()) {
+      if (!live.has(id)) this._liveObservationMemo.delete(id)
+    }
   }
 
   private _mainGeneration(): number {

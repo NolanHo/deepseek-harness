@@ -338,6 +338,32 @@ describe('SQLite session search', () => {
       .resolves.toMatchObject({ items: [{ header: { ...session.header, seedLength: 1 }, live: true, persisted: false }] })
   })
 
+  it('reuses the live observation when the attached log has not changed', async () => {
+    const ctx = await liveContext({ path: ':memory:' })
+    const session = ctx.sessions.create(SessionId('memo'))
+    session.append(
+      'user/message',
+      createUserMessage({ content: [{ type: 'text', text: 'memo needle' }], source: { kind: 'user' } }),
+      { surfaceOp: 'append' },
+    )
+    await ctx.sessionQuery.searchSessions({ query: 'memo' })
+    // A second identical search must not re-clone/re-fingerprint the log:
+    // observeLive's structuredClone is the observable recompute cost.
+    const spy = vi.spyOn(globalThis, 'structuredClone')
+    await ctx.sessionQuery.searchSessions({ query: 'memo' })
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+    // An append invalidates the memo: the next search recomputes and finds
+    // the new content.
+    session.append(
+      'user/message',
+      createUserMessage({ content: [{ type: 'text', text: 'fresh needle' }], source: { kind: 'user' } }),
+      { surfaceOp: 'append' },
+    )
+    await expect(ctx.sessionQuery.searchSessions({ query: 'fresh' }))
+      .resolves.toMatchObject({ items: [{ header: { id: session.id }, bestMatch: { snippet: 'fresh needle' } }] })
+  })
+
   it('excludes assistant reasoning while indexing visible answer text', async () => {
     const ctx = await liveContext()
     const session = ctx.sessions.create(SessionId('reasoning'))
