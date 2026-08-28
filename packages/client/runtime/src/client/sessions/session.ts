@@ -29,9 +29,12 @@ import { resolvedClientTimeZone } from '../time-zone.ts'
 import { SessionQueueMirror } from './queue-mirror.ts'
 
 /** User messages requested per history page. Pages are turn-aligned (the
- *  host cuts at user messages), so 25 turns carries roughly the payload the
- *  previous 50-mixed-message page did. */
-export const PAGE_MESSAGES = 25
+ *  host cuts at user messages). Kept small because the host read cost scales
+ *  with the page's event count: 8 turns on a tool-dense agent conversation
+ *  reads ~90k events instead of the ~270k a 25-turn page needs, cutting the
+ *  cold-open decode (and the client fold) to about a third. Older turns page
+ *  in through the same load-older path. */
+export const PAGE_MESSAGES = 8
 
 /** Manager-owned observers of a Session object's local state edges. */
 export interface SessionOptions {

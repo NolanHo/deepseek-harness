@@ -39,6 +39,6 @@ Measured on the migrated SQLite store (812k-event session, cold process): full `
 ## Verification
 
 - `pnpm exec vitest run packages/host/apiproxy` 21 files / 385 tests green (new `api-proxy-history-paged.spec.ts`: tail-via-readFrom, user-message cuts, widening convergence, unclosed-tail fallback, not-found mapping, projection cache presence/failure/absence).
-- `pnpm run typecheck` and `pnpm run test:gui` green (4044 tests); the client's turn-aligned page size (25) updated three client-runtime specs that pinned the old wire value.
+- `pnpm run typecheck` and `pnpm run test:gui` green (4044 tests); the client's turn-aligned page size (8, reduced from 25 in 2026-08-28 so a cold page reads about a third of the events) updated three client-runtime specs that pinned the old wire value.
 - Browser lane: full `DSH_SNAPSHOT=replay pnpm run test:web:built` replay — 269 passed; the 11 remaining failures are the pre-existing host sandbox set (no sandbox backend on this container: bwrap cannot create namespaces, kernel 5.4 has no Landlock) plus built-boot's official-profile digest, which passes after `DSH_BUILD_CLIENT_PROFILE=official pnpm run build`. Zero failures attribute to the paged read.
 - Measured on the migrated SQLite store: full `inspect()` 820ms vs `readFrom` tail window 40ms for the 812k-event session.

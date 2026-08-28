@@ -506,7 +506,7 @@ describe('prompt and cancel errors', () => {
     expect(prompted).toEqual({ ok: true, value: { accepted: true } })
     expect(cancelled).toEqual({ ok: true, value: { accepted: true } })
     expect(api.callsOf('subagent.history')).toEqual([
-      { parentSessionId: PARENT, childSessionId: SID, mode: 'continuable', maxMessages: 25 },
+      { parentSessionId: PARENT, childSessionId: SID, mode: 'continuable', maxMessages: 8 },
     ])
     expect(api.callsOf('subagent.prompt')).toEqual([
       {
@@ -558,7 +558,7 @@ describe('prompt and cancel errors', () => {
     expect(prompted).toMatchObject({ ok: false, error: { code: 'subagent-not-resumable' } })
     expect(cancelled).toMatchObject({ ok: false, error: { code: 'subagent-delivery-unavailable' } })
     expect(api.callsOf('subagent.history')).toEqual([
-      { parentSessionId: PARENT, childSessionId: SID, mode: 'one-shot', maxMessages: 25 },
+      { parentSessionId: PARENT, childSessionId: SID, mode: 'one-shot', maxMessages: 8 },
     ])
     expect(api.callsOf('subagent.prompt')).toEqual([])
     expect(api.callsOf('subagent.interrupt')).toEqual([])

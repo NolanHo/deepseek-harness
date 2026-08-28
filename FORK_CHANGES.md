@@ -98,3 +98,8 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: `dsh-ext-nolan` (the personal, self-contained collection of DSH web plugins: dsh-app-views, dsh-github-inbox, dsh-herdr, dsh-rewind) is NOT tracked by this fork: the repo is going private, and a submodule pointing at a private repo would break clones. A submodule added earlier the same day was removed; the local checkout instead links the tree with a symlink (`dsh-ext-nolan` → `/root/code/dsh-ext-nolan`, listed in `.git/info/exclude`). Profiles install packages from that tree via `link:` paths.
 - ZH: `dsh-ext-nolan`（个人自包含的 DSH Web 插件集合：dsh-app-views、dsh-github-inbox、dsh-herdr、dsh-rewind）不由本 fork 跟踪：该仓库将设为私有，指向私有仓库的子模块会破坏克隆。同日早些时候添加的子模块已移除；本地 checkout 改用符号链接引用该目录（`dsh-ext-nolan` → `/root/code/dsh-ext-nolan`，记入 `.git/info/exclude`）。profile 通过 `link:` 路径从该目录安装插件。
+
+### 2026-08-28 — Client history pages shrink to 8 turns for faster cold opens / client 历史页缩至 8 回合以加速冷打开
+
+- EN: `PAGE_MESSAGES` drops from 25 to 8. The host read cost scales with the page's event count (decode is CPU-bound), and a 25-turn page of a tool-dense conversation reads ~270k events (~1s) while an 8-turn page reads ~90k (~0.35s); the client fold/render shrinks the same way. Older turns page in through the unchanged load-older path. Client-only: takes effect on a browser refresh, no restart.
+- ZH: `PAGE_MESSAGES` 从 25 降到 8。host 读取成本随页事件数线性增长（解码是 CPU 界），工具密集对话的 25 回合页要读 ~27 万事件（~1s），8 回合页只要 ~9 万（~0.35s）；client 端折叠/渲染同比例缩小。更早的回合走不变的 load-older 路径翻页。纯 client 侧改动：刷新浏览器即生效，无需重启。
