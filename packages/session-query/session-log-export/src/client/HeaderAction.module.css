@@ -34,3 +34,11 @@
 .sessionLogButton span {
   white-space: nowrap;
 }
+
+/* Fork: phone headers keep the breadcrumb and the drawer opener; the export
+   capsule is a desktop-header affordance only. */
+@media (max-width: 560px) {
+  .sessionLogButton {
+    display: none;
+  }
+}
