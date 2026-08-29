@@ -16,6 +16,7 @@ import { ToolCallId, createUserMessage, LlmAdapter, ReasoningEffortId } from '@d
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import InvariantRegistry from '@deepseek-ai/dsh-invariants'
 import { MockAdapter, maxTokensResponse, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
+import SkillRegistry from '../../../skill/skill/src/index.ts'
 import SubagentRuntime, {
   SubagentError,
   SUBAGENT_DESCRIPTOR_VERSION,
@@ -444,6 +445,98 @@ describe('SubagentRuntime.startContinuable', () => {
         label: 'child task',
         toolFilter: { deny: ['noop'] },
       })
+    await drainManager(ctx)
+  })
+
+  it('records a declared cwd and skill filter in the descriptor', async () => {
+    const { ctx, parent } = await setup([])
+    await ctx.plugin(SkillRegistry)
+    const started = await ctx.subagents.startContinuable({
+      ...startSpec(parent),
+      request: {
+        prompt: message('isolated work'),
+        parent,
+        cwd: '/isolated-workspace',
+        skillFilter: { deny: ['web-crawl'] },
+      },
+    })
+    const child = await vi.waitFor(() => {
+      const found = ctx.agents.get(started.childId)
+      expect(found).toBeDefined()
+      return found!
+    })
+    expect(child.session.header.cwd).toBe('/isolated-workspace')
+
+    expect(child.session.events.find(event => event.type === 'subagent/descriptor')?.data)
+      .toEqual({
+        version: SUBAGENT_DESCRIPTOR_VERSION,
+        mode: 'continuable',
+        provider: 'spawn',
+        label: 'child task',
+        agentProvider: 'mock',
+        agentModel: 'mock',
+        cwd: '/isolated-workspace',
+        skillFilter: { deny: ['web-crawl'] },
+      })
+    await drainManager(ctx)
+  })
+
+  it('records no workspace fields when the request declared none', async () => {
+    const { ctx } = await setup([])
+    // A routeless parent declares no provider/model, and this start declares no
+    // cwd or skill filter, so the descriptor records only what exists.
+    const routeless = ctx.agentLoop.create(SessionId('routeless'), {})
+    const started = await ctx.subagents.startContinuable(startSpec(routeless))
+    const child = await vi.waitFor(() => {
+      const found = ctx.agents.get(started.childId)
+      expect(found).toBeDefined()
+      return found!
+    })
+    // The test parent carries no workspace, so the child inherits none.
+    expect(child.session.header.cwd).toBeUndefined()
+    expect(child.session.events.find(event => event.type === 'subagent/descriptor')?.data)
+      .toEqual({
+        version: SUBAGENT_DESCRIPTOR_VERSION,
+        mode: 'continuable',
+        provider: 'spawn',
+        label: 'child task',
+      })
+    await drainManager(ctx)
+  })
+
+  it('reapplies a declared skill filter from the descriptor on cold resume', async () => {
+    const { ctx, parent } = await setup([textResponse('first'), textResponse('resumed')])
+    await ctx.plugin(SkillRegistry)
+    ctx.skills.register({ name: 'alpha', description: 'Alpha', source: 'runtime', content: 'Alpha body.' })
+    ctx.skills.register({ name: 'beta', description: 'Beta', source: 'runtime', content: 'Beta body.' })
+
+    const started = await ctx.subagents.startContinuable({
+      ...startSpec(parent),
+      request: {
+        prompt: message('filtered work'),
+        parent,
+        skillFilter: { allow: ['alpha'] },
+      },
+    })
+    const firstActivation = await vi.waitFor(() => {
+      const found = ctx.agents.get(started.childId)
+      expect(found).toBeDefined()
+      return found!
+    })
+    expect((await ctx.skills.snapshot({ scope: firstActivation })).skills.map(skill => skill.name))
+      .toEqual(['alpha'])
+
+    await waitNoActivation(ctx, started.childId)
+    await followup(ctx, parent, started.childId, message('resume it'))
+    const resumed = await vi.waitFor(() => {
+      const found = ctx.agents.get(started.childId)
+      expect(found).toBeDefined()
+      return found!
+    })
+    // The restriction is reconstructed from the durable descriptor, not from
+    // any caller configuration at resume time.
+    expect((await ctx.skills.snapshot({ scope: resumed })).skills.map(skill => skill.name))
+      .toEqual(['alpha'])
     await drainManager(ctx)
   })
 

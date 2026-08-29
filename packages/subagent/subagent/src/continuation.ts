@@ -39,6 +39,7 @@ import type { SessionObservation, SessionQueryEngine } from '@deepseek-ai/dsh-se
 import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
 import { foldSubagentDescriptor, snapshotSubagentDescriptor } from './descriptor.ts'
 import type { SubagentDescriptorData } from './descriptor.ts'
+import type { SkillFilter } from './types.ts'
 import {
   appendDelegatedPolicyOverrides,
   applyChildComposition,
@@ -263,7 +264,7 @@ interface MaterializeInputs {
     delegatedPolicies: DelegatedPolicyOverrides
   }
   agentOptions: AgentOptions
-  composition: { persona?: string | undefined; toolFilter?: ToolRestriction | undefined }
+  composition: { persona?: string | undefined; toolFilter?: ToolRestriction | undefined; skillFilter?: SkillFilter | undefined }
   signal: AbortSignal
 }
 
@@ -431,6 +432,8 @@ export class SubagentContinuationManager {
       ...agentReasoningEffort !== undefined ? { agentReasoningEffort } : {},
       ...request.persona !== undefined ? { persona: request.persona } : {},
       ...request.toolFilter !== undefined ? { toolFilter: request.toolFilter } : {},
+      ...request.cwd !== undefined ? { cwd: request.cwd } : {},
+      ...request.skillFilter !== undefined ? { skillFilter: request.skillFilter } : {},
     })
     // Capture before the first await: a later parent switch belongs to the
     // parent's future, not to this child.
@@ -463,9 +466,17 @@ export class SubagentContinuationManager {
         childId,
         provider: spec.provider,
         parent,
-        create: { seed, meta: childSessionMeta(parent, childDepth, lineageSeedLength), delegatedPolicies },
+        create: {
+          seed,
+          meta: childSessionMeta(parent, childDepth, lineageSeedLength, request.cwd),
+          delegatedPolicies,
+        },
         agentOptions,
-        composition: { persona: request.persona, toolFilter: request.toolFilter },
+        composition: {
+          persona: request.persona,
+          toolFilter: request.toolFilter,
+          skillFilter: request.skillFilter,
+        },
         signal: spec.signal,
       })
       return this.submitMaterialized(
@@ -993,7 +1004,7 @@ export class SubagentContinuationManager {
             ? { reasoningEffort: ReasoningEffortId(descriptor.agentReasoningEffort) }
             : {},
         },
-        composition: { persona: descriptor.persona, toolFilter: descriptor.toolFilter },
+        composition: { persona: descriptor.persona, toolFilter: descriptor.toolFilter, skillFilter: descriptor.skillFilter },
         signal: options.signal,
       })
     } catch (error: unknown) {

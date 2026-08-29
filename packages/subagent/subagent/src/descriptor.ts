@@ -25,6 +25,7 @@ import { snapshotJsonValue } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
+import type { SkillFilter } from './types.ts'
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
@@ -43,9 +44,11 @@ declare module '@deepseek-ai/dsh-session/types' {
  * The current descriptor format version, stamped into every appended
  * `subagent/descriptor` event and required verbatim by {@link foldSubagentDescriptor}.
  * Supporting another composition input is a deliberate version change, never
- * an implicit extra field.
+ * an implicit extra field. Version 4 added the continuable `cwd` and
+ * `skillFilter` composition inputs; version 3 descriptors read as unsupported
+ * rather than partially resumable.
  */
-export const SUBAGENT_DESCRIPTOR_VERSION = 3
+export const SUBAGENT_DESCRIPTOR_VERSION = 4
 
 /** Fields shared by every supported `subagent/descriptor` payload. */
 interface SubagentDescriptorBase {
@@ -83,6 +86,15 @@ export interface ContinuableSubagentDescriptorData extends SubagentDescriptorBas
   readonly persona?: string
   /** Child tool scoping reapplied on resume. */
   readonly toolFilter?: ToolRestriction
+  /**
+   * Child workspace override recorded at creation. Durable record of the
+   * declared composition: a cold resume restores the session header's own
+   * persisted `cwd` (immutable creation metadata) rather than re-stamping from
+   * this field.
+   */
+  readonly cwd?: string
+  /** Child skill scoping reapplied on resume. */
+  readonly skillFilter?: SkillFilter
 }
 
 /** The supported durable subagent identity and optional continuation composition. */
@@ -120,6 +132,10 @@ export interface ContinuableSubagentDescriptorInput extends SubagentDescriptorIn
   readonly persona?: string
   /** Requested child tool scoping. */
   readonly toolFilter?: ToolRestriction
+  /** Requested child workspace override. */
+  readonly cwd?: string
+  /** Requested child skill scoping. */
+  readonly skillFilter?: SkillFilter
 }
 
 /** Inputs {@link snapshotSubagentDescriptor} validates and detaches. */
@@ -141,6 +157,8 @@ const CONTINUABLE_DESCRIPTOR_KEYS = new Set([
   'agentReasoningEffort',
   'persona',
   'toolFilter',
+  'cwd',
+  'skillFilter',
 ])
 const TOOL_FILTER_KEYS = new Set(['allow', 'deny'])
 
@@ -167,16 +185,16 @@ function optionalString(value: Record<string, unknown>, key: string): string | u
   return field
 }
 
-/** Read one optional string-array field from a persisted tool restriction. */
-function optionalStringArray(value: Record<string, unknown>, key: string): string[] | undefined {
+/** Read one optional string-array field from a persisted filter record. */
+function optionalStringArray(value: Record<string, unknown>, key: string, field: string): string[] | undefined {
   if (!Object.hasOwn(value, key)) return undefined
-  const field = value[key]
-  if (!Array.isArray(field)) {
-    throw new Error(`persisted subagent descriptor toolFilter.${key} must be an array of strings`)
+  const fieldValues = value[key]
+  if (!Array.isArray(fieldValues)) {
+    throw new Error(`persisted subagent descriptor ${field}.${key} must be an array of strings`)
   }
-  const items: unknown[] = field
+  const items: unknown[] = fieldValues
   if (items.some(item => typeof item !== 'string')) {
-    throw new Error(`persisted subagent descriptor toolFilter.${key} must be an array of strings`)
+    throw new Error(`persisted subagent descriptor ${field}.${key} must be an array of strings`)
   }
   return items as string[]
 }
@@ -187,10 +205,27 @@ function parseToolFilter(value: unknown): ToolRestriction {
     throw new Error('persisted subagent descriptor toolFilter must be an object')
   }
   assertKnownKeys(value, TOOL_FILTER_KEYS, 'toolFilter')
-  const allow = optionalStringArray(value, 'allow')
-  const deny = optionalStringArray(value, 'deny')
+  const allow = optionalStringArray(value, 'allow', 'toolFilter')
+  const deny = optionalStringArray(value, 'deny', 'toolFilter')
   if (allow === undefined && deny === undefined) {
     throw new Error('persisted subagent descriptor toolFilter must declare allow and/or deny')
+  }
+  return {
+    ...allow !== undefined ? { allow } : {},
+    ...deny !== undefined ? { deny } : {},
+  }
+}
+
+/** Validate and reconstruct a persisted skill filter. */
+function parseSkillFilter(value: unknown): SkillFilter {
+  if (!isRecord(value)) {
+    throw new Error('persisted subagent descriptor skillFilter must be an object')
+  }
+  assertKnownKeys(value, TOOL_FILTER_KEYS, 'skillFilter')
+  const allow = optionalStringArray(value, 'allow', 'skillFilter')
+  const deny = optionalStringArray(value, 'deny', 'skillFilter')
+  if (allow === undefined && deny === undefined) {
+    throw new Error('persisted subagent descriptor skillFilter must declare allow and/or deny')
   }
   return {
     ...allow !== undefined ? { allow } : {},
@@ -242,6 +277,10 @@ function parseSubagentDescriptor(value: unknown): SubagentDescriptorData | undef
   const toolFilter = Object.hasOwn(value, 'toolFilter')
     ? parseToolFilter(value['toolFilter'])
     : undefined
+  const cwd = optionalString(value, 'cwd')
+  const skillFilter = Object.hasOwn(value, 'skillFilter')
+    ? parseSkillFilter(value['skillFilter'])
+    : undefined
   return {
     version: SUBAGENT_DESCRIPTOR_VERSION,
     mode,
@@ -252,6 +291,8 @@ function parseSubagentDescriptor(value: unknown): SubagentDescriptorData | undef
     ...agentReasoningEffort !== undefined ? { agentReasoningEffort } : {},
     ...persona !== undefined ? { persona } : {},
     ...toolFilter !== undefined ? { toolFilter } : {},
+    ...cwd !== undefined ? { cwd } : {},
+    ...skillFilter !== undefined ? { skillFilter } : {},
   }
 }
 
@@ -294,6 +335,8 @@ export function snapshotSubagentDescriptor(input: SubagentDescriptorInput): Suba
       ...input.agentReasoningEffort !== undefined ? { agentReasoningEffort: input.agentReasoningEffort } : {},
       ...input.persona !== undefined ? { persona: input.persona } : {},
       ...input.toolFilter !== undefined ? { toolFilter: input.toolFilter } : {},
+      ...input.cwd !== undefined ? { cwd: input.cwd } : {},
+      ...input.skillFilter !== undefined ? { skillFilter: input.skillFilter } : {},
     }
   const snapshot = snapshotJsonValue(candidate)
   if (snapshot === undefined) {

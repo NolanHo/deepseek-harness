@@ -1,0 +1,37 @@
+# Agent Note: Per-child cwd and skill scoping for in-process subagents
+
+Status: implemented
+
+English | [中文](2026-08-29-subagent-child-cwd-skillfilter.zh.md)
+
+> Fork deviation: two upstream-increment patches (additive, kept re-appliable) that let one delegated child run in its own workspace and see only an allowed slice of the skill catalog. Upstream keeps a single inherited workspace and an unfiltered catalog for every child.
+
+## Problem
+
+In-process subagent children inherited two things unconditionally. First, the parent session's `cwd`: a child delegated to work on one project always ran in the parent's workspace, so bash working directories, relative-path bases, and skill project-root discovery all pointed at the parent's checkout. Second, the full inherited skill catalog: `toolFilter` could remove the `skill` tool itself, but a role that needed the tool with only some skills had no way to say which — the frontmatter `modelInvocable` flag is per-skill data, not a per-child decision. Meanwhile the skill registry had no restriction surface at all, while the tools registry's `restrict()` had already established the scoped-filter pattern.
+
+## Decision
+
+- `SkillRegistry.restrict({ allow | deny })` (`packages/skill/skill/src/index.ts`) files a compiled filter into the calling scope's layer, mirroring `ToolsRegistry.restrict`'s semantics: restrictions filter the INHERITED surface (global plus every ancestor layer on the viewing scope's chain), the restricting scope's own registrations stay visible, restrictions intersect across the chain, and a restricted-away name reads as nonexistent through `snapshot`/`list`/`get` — one filter governs the skill catalog tool's directory injection and its loads because both read the same `snapshot`. Divergences from `tools.restrict` are deliberate and documented in its JSDoc: `allow` and `deny` are mutually exclusive (a skill catalog's keep-list and drop-list are configured by role, not composed), and filter names are not validated against the catalog because provider discovery is asynchronous — the filter applies to whatever the catalog yields.
+- `SubagentStartRequest` gains `cwd` (absolute path, validated in `childSessionMeta`, stamped over the parent's header value at child creation) and `skillFilter` (applied by `applyChildComposition` as a scoped `skills.restrict()` in the child's creation window, beside the existing `tools.restrict`). `ChildComposition` carries `skillFilter` for both creation and cold resume; the driver and the continuation manager pass both request fields through.
+- Continuable descriptors record both fields (`SUBAGENT_DESCRIPTOR_VERSION` 3 → 4). A cold resume reapplies `skillFilter` from the descriptor (resume reconstructs the composition it was created with, not the caller's current configuration); `cwd` in the descriptor is the durable record of the declared composition, while the resumed session's own persisted header remains the workspace authority — creation metadata is restored, never re-stamped. Version 3 descriptors read as unsupported (the child is not resumable by this runtime) rather than partially applied.
+- The subagent seam stays independent of the skill registry's declarations: `SkillFilter` in `types.ts` is a structural mirror of the registry's `SkillRestriction`, and `applyChildComposition` reaches the registry through `childCtx.get('skills')` narrowed to the one method it needs. A `skillFilter` request against a composition without the registry fails the start rather than silently showing every skill. This avoids growing the fork's `dsh-subagent` → `dsh-skill` dependency edge (the patch stays confined to the two packages' source trees).
+
+## Consequences
+
+- A delegated child can run role-scoped: own workspace (bash, fs, LSP, AGENTS.md discovery, skill project roots all follow the session header), own skill slice (catalog and loads filtered together). Attention and context isolation, not permission isolation — the sandbox policy is unchanged.
+- One-shot children record nothing new on disk (no resume); continuable children persist both fields in the versioned descriptor, and v3 continuable children become non-resumable under this build — pre-release, the repo rejects old on-disk formats rather than partially applying them.
+- The fork's Tier C upstream-conflict surface grows by two files (`skill/src/index.ts`, `subagent/src/{types,child-agent,descriptor,continuation}.ts` plus the driver and both test trees); upstream refactors of the surrounding code cost context-level conflicts, and the descriptor version bump needs manual field-union if upstream bumps v3 concurrently.
+- `ctx.skills` access in `applyChildComposition` is structural (`ctx.get`), so a signature drift in the registry's `restrict` surfaces at the fork's own composition tests rather than at compile time of `dsh-subagent`.
+
+## Alternatives considered
+
+- **Capability flags on `SubagentCapabilities` for `cwd`/`skillFilter`**: the flags gate provider dispatch, but the fields are composition inputs applied by the shared in-process driver and continuation manager, not per-provider capabilities; out-of-process providers simply ignore them (documented on the request fields). Gating would have touched every provider package outside this patch's write set for no behavioral gain.
+- **A dependency on `@deepseek-ai/dsh-skill` in `dsh-subagent`** (type-only import for the real `SkillRestriction` type and `ctx.skills` augmentation): rejected as a fork-patch cost — it adds `package.json`/`tsconfig` reference changes beyond the source trees, grows the upstream-conflict surface, and the structural mirror keeps the patch additive. The optional-`ctx.get` pattern (`agentPresets` precedent) carries the runtime side either way.
+- **Applying `cwd` from the descriptor on cold resume**: the session header already persists the child's creation workspace and `resume` reconstructs it; a second application path would give one fact two homes. The descriptor field stays a record.
+- **Validating `allow`/`deny` composition in the request layer before the registry**: the registry's own `restrict()` is the single enforcement point (empty filter, both directions, unscoped context all throw there), so the descriptor parse validates only structure and the composition window fails loud with the registry's own diagnostic.
+- **`tools.restrict`-style unknown-name validation for skills**: tool names are registered synchronously and checkable at restrict time; the skill catalog is discovered asynchronously per provider, so a restrict-time check could not see providers that have not answered. The filter names whatever the catalog later yields.
+
+## Testing
+
+`packages/skill/skill` covers the restriction semantics (allow/deny directions, both-directions and empty and unscoped rejections, own-layer exemption, chain intersection, dispose restore, collect-cache invalidation). `packages/subagent/subagent` covers `childSessionMeta` cwd override/rejection, descriptor v4 round-trip plus the v3 unsupported read plus parse rejections, and the continuable descriptor record and cold-resume reapplication. `packages/subagent/subagent-in-process-driver` covers the spawn path end to end: header stamping, parent-workspace regression, relative-cwd rejection, catalog filtering through the child's scope view in both directions, and the loud failure without a composed registry. The long-standing sandbox-environment failure in `out-of-process.spec.ts` (directory search permission, running as root) predates this change and is unrelated.

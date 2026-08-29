@@ -85,6 +85,7 @@ export type {
   ContinuableCreateRequest,
   ContinuableCreateSpec,
   ResolvedSubagentStartRequest,
+  SkillFilter,
   SubagentCapabilities,
   SubagentProvider,
   SubagentResult,

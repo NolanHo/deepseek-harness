@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { resolveChildAgentOptions } from '../src/child-agent.ts'
+import { childSessionMeta, resolveChildAgentOptions } from '../src/child-agent.ts'
 
 function parentAgent(): Agent {
   const id = SessionId('parent')
@@ -16,6 +17,11 @@ function parentAgent(): Agent {
     },
     session: Session.create(id),
   } as Agent
+}
+
+/** A parent carrying a live context, so `childSessionMeta` can consult services. */
+function contextfulParent(): Agent {
+  return { ...parentAgent(), ctx: new Context() } as Agent
 }
 
 describe('child Agent options', () => {
@@ -72,5 +78,29 @@ describe('child Agent options', () => {
       maxTokens: 512,
       subagentDepth: 1,
     })
+  })
+})
+
+describe('child session metadata cwd', () => {
+  it('stamps a requested cwd into the child creation metadata', () => {
+    expect(childSessionMeta(contextfulParent(), 1, 0, '/child-workspace')).toMatchObject({
+      cwd: '/child-workspace',
+      parentSession: SessionId('parent'),
+      origin: 'subagent',
+      delegationDepth: 1,
+    })
+  })
+
+  it('omits cwd when neither the request nor the parent header carries one', () => {
+    const meta = childSessionMeta(contextfulParent(), 1, 0)
+    expect(meta.cwd).toBeUndefined()
+    expect(meta.parentSession).toBe(SessionId('parent'))
+  })
+
+  it('rejects a requested cwd that is not absolute', () => {
+    expect(() => childSessionMeta(contextfulParent(), 1, 0, 'relative/path'))
+      .toThrow('child session cwd must be an absolute path')
+    expect(() => childSessionMeta(contextfulParent(), 1, 0, 'relative/path'))
+      .toThrow('got "relative/path"')
   })
 })

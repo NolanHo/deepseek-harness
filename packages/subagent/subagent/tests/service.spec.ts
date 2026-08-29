@@ -393,6 +393,48 @@ describe('subagent descriptors', () => {
     })).toThrow('not losslessly JSON-serializable')
   })
 
+  it('round-trips a continuable composition carrying cwd and skillFilter', () => {
+    const isolated = {
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'continuable' as const,
+      provider: 'spawn',
+      label: 'isolated child',
+      persona: 'implementer',
+      toolFilter: { allow: ['read'] },
+      cwd: '/isolated/workspace',
+      skillFilter: { deny: ['web-crawl'] },
+    }
+    expect(snapshotSubagentDescriptor({
+      mode: 'continuable',
+      provider: isolated.provider,
+      label: isolated.label,
+      persona: isolated.persona,
+      toolFilter: isolated.toolFilter,
+      cwd: isolated.cwd,
+      skillFilter: isolated.skillFilter,
+    })).toEqual(isolated)
+    expect(foldSubagentDescriptor([event(isolated)])).toEqual(isolated)
+    expect(foldSubagentDescriptor([event({
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'continuable',
+      provider: 'spawn',
+      label: 'l',
+      cwd: '/resumed/workspace',
+      skillFilter: { allow: ['dev-sop'] },
+    })])).toMatchObject({ cwd: '/resumed/workspace', skillFilter: { allow: ['dev-sop'] } })
+  })
+
+  it('reads a v3 descriptor as unsupported without throwing', () => {
+    expect(foldSubagentDescriptor([event({
+      version: 3,
+      mode: 'continuable',
+      provider: 'spawn',
+      label: 'legacy child',
+      persona: 'reviewer',
+      toolFilter: { deny: ['bash'] },
+    })])).toBeUndefined()
+  })
+
   it.each([
     ['string payload', 'invalid', 'payload must be an object'],
     ['null payload', null, 'payload must be an object'],
@@ -500,6 +542,62 @@ describe('subagent descriptors', () => {
       label: 'l',
       toolFilter: { deny: [7] },
     }, 'toolFilter.deny must be an array of strings'],
+    ['non-string cwd', {
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'continuable',
+      provider: 'spawn',
+      label: 'l',
+      cwd: 7,
+    }, 'cwd must be a string'],
+    ['cwd on a one-shot payload', {
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'one-shot',
+      provider: 'spawn',
+      label: 'l',
+      cwd: '/w',
+    }, 'payload has unknown field "cwd"'],
+    ['skillFilter on a one-shot payload', {
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'one-shot',
+      provider: 'spawn',
+      label: 'l',
+      skillFilter: { deny: ['bash'] },
+    }, 'payload has unknown field "skillFilter"'],
+    ['non-object skill filter', {
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'continuable',
+      provider: 'spawn',
+      label: 'l',
+      skillFilter: [],
+    }, 'skillFilter must be an object'],
+    ['unknown skill-filter field', {
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'continuable',
+      provider: 'spawn',
+      label: 'l',
+      skillFilter: { except: ['bash'] },
+    }, 'skillFilter has unknown field "except"'],
+    ['empty skill filter', {
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'continuable',
+      provider: 'spawn',
+      label: 'l',
+      skillFilter: {},
+    }, 'skillFilter must declare allow and/or deny'],
+    ['non-array skill-filter allow list', {
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'continuable',
+      provider: 'spawn',
+      label: 'l',
+      skillFilter: { allow: 'dev-sop' },
+    }, 'skillFilter.allow must be an array of strings'],
+    ['non-string skill-filter deny item', {
+      version: SUBAGENT_DESCRIPTOR_VERSION,
+      mode: 'continuable',
+      provider: 'spawn',
+      label: 'l',
+      skillFilter: { deny: [7] },
+    }, 'skillFilter.deny must be an array of strings'],
   ])('rejects a malformed persisted descriptor: %s', (_case, data, detail) => {
     expect(() => foldSubagentDescriptor([event(data)])).toThrow(detail)
   })

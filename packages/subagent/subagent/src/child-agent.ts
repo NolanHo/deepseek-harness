@@ -14,6 +14,7 @@ import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { PERSONA_ORDER } from '@deepseek-ai/dsh-system-prompt'
 import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
+import { isAbsolute } from 'node:path'
 // Type-only: make `ctx.get('sandboxPolicy')` / `ctx.get('approval')` resolve
 // to the policy services when composed — delegation consumes both
 // opportunistically (the documented `ctx.get` pattern), never as a hard dep —
@@ -27,6 +28,7 @@ import type {} from '@deepseek-ai/dsh-user-approval'
 // them through the tool registry's global layer.
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import { delegationDepthOf } from './depth.ts'
+import type { SkillFilter } from './types.ts'
 
 /** Thrown when starting a child would exceed the requested depth cap. */
 export class SubagentDepthError extends Error {
@@ -119,8 +121,8 @@ export function resolveChildAgentOptions(
 }
 
 /**
- * Build the child session's durable creation metadata: the parent's workspace,
- * its direct lineage, coarse product origin, the recursion budget that must
+ * Build the child session's durable creation metadata: the workspace, its
+ * direct lineage, coarse product origin, the recursion budget that must
  * survive persistence, the seed boundary that separates inherited parent
  * history from child work, and the composition the child runs under.
  *
@@ -130,20 +132,31 @@ export function resolveChildAgentOptions(
  * makes a child's history reconstructable: without it a cold read of the child
  * resolves the deployment default and rebuilds turns under a tool set the
  * child never had.
+ *
+ * The workspace is immutable creation metadata: `cwd` overrides the parent's
+ * header value once, at creation, and a resumed child restores its own
+ * persisted header rather than re-reading this value.
  * @param parent - the delegating parent agent.
  * @param childDepth - the resolved delegation depth to persist.
  * @param lineageSeedLength - how many leading events came from the parent's log.
+ * @param cwd - optional absolute workspace stamped over the parent's.
  * @returns the `meta` for `ctx.agents.create()`.
+ * @throws when a requested `cwd` is not an absolute path.
  */
 export function childSessionMeta(
   parent: Agent,
   childDepth: number,
   lineageSeedLength: number,
+  cwd?: string,
 ): NonNullable<CreateAgentOptions['meta']> {
+  if (cwd !== undefined && !isAbsolute(cwd)) {
+    throw new Error(`child session cwd must be an absolute path, got "${cwd}"`)
+  }
   const parentHeader = parent.session.header
   const agentPreset = parent.ctx.get('agentPresets')?.composedPreset(parent.ctx)
+  const resolvedCwd = cwd ?? parentHeader.cwd
   return {
-    ...parentHeader.cwd !== undefined ? { cwd: parentHeader.cwd } : {},
+    ...resolvedCwd !== undefined ? { cwd: resolvedCwd } : {},
     ...agentPreset === undefined ? {} : { agentPreset },
     parentSession: parentHeader.id,
     // Navigation classification only; the descriptor remains the authority
@@ -161,6 +174,18 @@ export interface ChildComposition {
   readonly persona?: string | undefined
   /** Per-child tool scoping. */
   readonly toolFilter?: ToolRestriction | undefined
+  /** Per-child skill scoping. */
+  readonly skillFilter?: SkillFilter | undefined
+}
+
+/**
+ * The `ctx.skills` surface child composition consumes. Structural on purpose:
+ * the subagent seam stays independent of the skill registry's declarations
+ * while `applyChildComposition` still reaches the one method it needs. The
+ * `SkillFilter` request field is the registry's `SkillRestriction` shape.
+ */
+interface SkillsRestrictSurface {
+  restrict(filter: SkillFilter): () => void
 }
 
 /**
@@ -177,9 +202,9 @@ export const SUBAGENT_DELEGATION_CONTEXT
 /**
  * Compose one child inside its creation window: join its parent's preset,
  * register the fixed delegation-scope statement, then apply the child's own
- * shadowing persona section and tool restriction, all owned by the child's
- * scope and therefore invisible to its parent and siblings. Creation and cold
- * resume both pass through here.
+ * shadowing persona section, tool restriction, and skill restriction, all owned
+ * by the child's scope and therefore invisible to its parent and siblings.
+ * Creation and cold resume both pass through here.
  *
  * The join comes first and the child's own registrations second, which is the
  * order the layering already implies — the nearest scope wins a name, and a
@@ -194,7 +219,7 @@ export const SUBAGENT_DELEGATION_CONTEXT
  * unrepresentable at the call sites.
  * @param childCtx - the child agent's scoped creation context.
  * @param parent - the delegating parent whose composition the child joins.
- * @param composition - the per-child persona and tool filter to install.
+ * @param composition - the per-child persona, tool filter, and skill filter to install.
  */
 export function applyChildComposition(
   childCtx: Context,
@@ -208,6 +233,16 @@ export function applyChildComposition(
     childCtx.systemPrompt.section({ name: 'deployment:persona', order: PERSONA_ORDER, text: composition.persona })
   }
   if (composition.toolFilter !== undefined) childCtx.tools.restrict(composition.toolFilter)
+  if (composition.skillFilter !== undefined) {
+    // The skill registry is an optional composition member; `ctx.get` returns
+    // `any` for untyped names, and this package deliberately does not depend
+    // on the registry's declarations, so the structural surface narrows it.
+    const skills: SkillsRestrictSurface | undefined = childCtx.get('skills')
+    if (skills === undefined) {
+      throw new Error('skillFilter requires the skill registry: compose @deepseek-ai/dsh-skill before restricting a child\'s skills')
+    }
+    skills.restrict(composition.skillFilter)
+  }
 }
 
 /** Policy seeded onto a child session's log at the delegation boundary. */

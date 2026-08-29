@@ -81,7 +81,10 @@ export interface SubagentRunEndInfo {
  * continuable children are composed by the continuation manager itself and are
  * gated by {@link SubagentProvider.prepareContinuable} instead. Each flag
  * corresponds one-to-one to a {@link SubagentStartRequest} option: `depthLimit`
- * to `maxDepth`; the other names match.
+ * to `maxDepth`; the other names match. `cwd` and `skillFilter` carry no flag:
+ * they are composition fields every in-process provider applies in the child's
+ * creation window, while out-of-process providers ignore them (their child
+ * runs in its own deployment-configured environment).
  */
 export interface SubagentCapabilities {
   readonly agentOptions: boolean
@@ -89,6 +92,20 @@ export interface SubagentCapabilities {
   readonly depthLimit: boolean
   readonly toolFilter: boolean
   readonly persona: boolean
+}
+
+/**
+ * Per-child skill scoping for an in-process child: its creation window applies
+ * this as a scoped `skills.restrict()` on the skill registry, so restricted-away
+ * names read as nonexistent in the child's catalog views. Structural mirror of
+ * the skill registry's `SkillRestriction`; kept local so this seam does not
+ * depend on the registry's declarations.
+ */
+export interface SkillFilter {
+  /** Skill names that stay visible; every other catalog name is restricted away. */
+  readonly allow?: readonly string[]
+  /** Skill names restricted away from the catalog view. */
+  readonly deny?: readonly string[]
 }
 
 /**
@@ -154,6 +171,23 @@ export interface SubagentStartRequest {
    * persona (strict `{{…}}` interpolation against the registered variables).
    */
   readonly persona?: string
+  /**
+   * Optional absolute workspace stamped over the parent's in the child
+   * session header (bash working directory, relative-path bases, skill
+   * project-root discovery all follow it). In-process backends only: an
+   * out-of-process child runs in its own deployment-configured environment
+   * and ignores this field. Rejected when not absolute.
+   */
+  readonly cwd?: string
+  /**
+   * Optional per-child skill scoping. In-process backends apply it as a scoped
+   * `skills.restrict()` in the child's creation window — restricted-away
+   * names read as nonexistent in the child's catalog and `skill` tool loads.
+   * `allow` and `deny` are mutually exclusive; an absent registry in the
+   * composition fails the start rather than silently showing every skill.
+   * Out-of-process providers ignore this field.
+   */
+  readonly skillFilter?: SkillFilter
 }
 
 /**
