@@ -123,3 +123,8 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: Both history paging paths (the messageCut fast path and the observation fallback) now share one boundary walk: pages anchor at the Nth user message, widen through sourceEventSeqs, and extend back to the owning turn's opening events, so no page starts mid-turn and the Turn Process fold is stable from first render (no re-layout flicker on Load earlier). The indexed fast path retries its suffix read once at a 4096-event margin when a compaction replacement widens the cut beyond the shallow 128-event lead, instead of falling back to the full observation read.
 - ZH: 两条历史分页路径（messageCut 快路径与观察回退）共用同一边界游走：页面锚定第 N 条用户消息、经 sourceEventSeqs 展宽、并回退到所属回合起始事件，页面不再从回合中间开始，Turn Process 折叠从首次渲染即稳定（消除 Load earlier 的重排闪动）。索引快路径在 compaction 替换把切点展宽超出 128 事件浅层前导时，先以 4096 事件深层边距重试一次后缀读取，不再直接回退全量观察。
+
+### 2026-08-30 — Fork patch surface inventory / Fork 差异面清单
+
+- EN: Added FORK_SURFACE.md (bilingual): the upstream-divergence inventory by isolation tier (fork-owned packages, config flags, small patches, semantic core changes) with the optimization plan (extract the paging core into a fork-owned module, move messageCut off the upstream persistence interface, compact marked diffs) and the sync runbook.
+- ZH: 新增 FORK_SURFACE.md（双语）：按隔离层级（fork 自有包、配置开关、小型补丁、语义级核心修改）的上游差异面清单，附优化方案（分页核心抽入 fork 自有模块、messageCut 移出上游持久化接口、保持紧凑带标记的 diff）与同步 runbook。
