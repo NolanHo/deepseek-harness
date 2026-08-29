@@ -1269,3 +1269,133 @@ describe('SkillRegistry scoped layers', () => {
     await preset.dispose()
   })
 })
+
+describe('SkillRegistry restrict', () => {
+  it('keeps only allowed inherited names for the restricting scope and restores them on dispose', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry)
+    registerProvider(ctx, new MemoryProvider([
+      memorySkill('alpha', 'Alpha', 100),
+      memorySkill('beta', 'Beta', 100),
+      memorySkill('gamma', 'Gamma', 100),
+    ]))
+    const preset = createScope(ctx, { preset: 'restrict-allow' })
+    const scope = scopeOf(preset.ctx)
+
+    expect((await ctx.skills.list({ scope })).map(skill => skill.name)).toEqual(['alpha', 'beta', 'gamma'])
+    const dispose = scopedSkills(preset.ctx).restrict({ allow: ['alpha', 'gamma'] })
+    expect((await ctx.skills.snapshot({ scope })).skills.map(skill => skill.name)).toEqual(['alpha', 'gamma'])
+    // Restricted-away names read as nonexistent through get, in the restricted
+    // scope alone.
+    expect(await ctx.skills.get('beta', { scope })).toBeUndefined()
+    expect((await ctx.skills.get('beta'))?.description).toBe('Beta')
+    // A view without the restricting scope inherits the full catalog.
+    expect((await ctx.skills.list()).map(skill => skill.name)).toEqual(['alpha', 'beta', 'gamma'])
+
+    dispose()
+    expect((await ctx.skills.list({ scope })).map(skill => skill.name)).toEqual(['alpha', 'beta', 'gamma'])
+    await preset.dispose()
+  })
+
+  it('removes denied inherited names for the restricting scope', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry)
+    registerProvider(ctx, new MemoryProvider([
+      memorySkill('alpha', 'Alpha', 100),
+      memorySkill('beta', 'Beta', 100),
+    ]))
+    const preset = createScope(ctx, { preset: 'restrict-deny' })
+    const scope = scopeOf(preset.ctx)
+
+    scopedSkills(preset.ctx).restrict({ deny: ['beta'] })
+    expect((await ctx.skills.list({ scope })).map(skill => skill.name)).toEqual(['alpha'])
+    expect(await ctx.skills.get('beta', { scope })).toBeUndefined()
+    await preset.dispose()
+  })
+
+  it('rejects an empty filter, a filter naming both directions, and a context-global call', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry)
+    const preset = createScope(ctx, { preset: 'restrict-reject' })
+
+    expect(() => scopedSkills(preset.ctx).restrict({})).toThrow(/no-op/)
+    expect(() => scopedSkills(preset.ctx).restrict({ allow: ['alpha'], deny: ['beta'] }))
+      .toThrow(/both allow and deny/)
+    expect(() => ctx.skills.restrict({ deny: ['beta'] })).toThrow(/requires a scoped context/)
+    expect(() => ctx.skills.restrict({ allow: ['alpha'] })).toThrow(/requires a scoped context/)
+  })
+
+  it('keeps the restricting scope\'s own registrations while filtering inherited ones', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry)
+    registerProvider(ctx, new MemoryProvider([
+      memorySkill('inherited', 'Inherited', 100),
+      memorySkill('also-inherited', 'Also inherited', 100),
+    ]))
+    const preset = createScope(ctx, { preset: 'restrict-own' })
+    scopedSkills(preset.ctx).register({
+      name: 'own-skill',
+      description: 'Own',
+      source: 'preset',
+      content: 'Own body.',
+    })
+    const scope = scopeOf(preset.ctx)
+
+    scopedSkills(preset.ctx).restrict({ deny: ['inherited', 'own-skill'] })
+    // The own-layer registration stays visible even though the restriction
+    // names it; only the INHERITED surface is masked.
+    expect((await ctx.skills.list({ scope })).map(skill => skill.name)).toEqual(['also-inherited', 'own-skill'])
+    await preset.dispose()
+  })
+
+  it('restricts what a nested scope inherits while its own registrations stay exempt', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry)
+    registerProvider(ctx, new MemoryProvider([
+      memorySkill('one', 'One', 100),
+      memorySkill('two', 'Two', 100),
+      memorySkill('three', 'Three', 100),
+    ]))
+    const preset = createScope(ctx, { preset: 'restrict-chain' })
+    scopedSkills(preset.ctx).restrict({ deny: ['one'] })
+    const agentKey = {}
+    bindScopeParent(agentKey, scopeOf(preset.ctx) as object)
+    const agentScope = createScope(ctx, agentKey)
+    scopedSkills(agentScope.ctx).register({
+      name: 'agent-skill',
+      description: 'Agent',
+      source: 'runtime',
+      content: 'Agent body.',
+    })
+    scopedSkills(agentScope.ctx).restrict({ deny: ['two'] })
+
+    // Restrictions intersect along the chain: the preset masks `one`, the
+    // agent masks `two`, and the agent's own registration stays visible.
+    expect((await ctx.skills.list({ scope: agentKey })).map(skill => skill.name)).toEqual(['agent-skill', 'three'])
+    // The preset's own view is untouched by the agent's restriction.
+    expect((await ctx.skills.list({ scope: scopeOf(preset.ctx) })).map(skill => skill.name)).toEqual(['three', 'two'])
+    await agentScope.dispose()
+    await preset.dispose()
+  })
+
+  it('re-reads a cached catalog view after a restriction lands', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry)
+    const provider = new MemoryProvider([
+      memorySkill('alpha', 'Alpha', 100),
+      memorySkill('beta', 'Beta', 100),
+    ])
+    registerProvider(ctx, provider)
+    const preset = createScope(ctx, { preset: 'restrict-cache' })
+    const scope = scopeOf(preset.ctx)
+
+    // Prime the per-cwd/scope collect cache before restricting.
+    expect(provider.listCalls).toBe(0)
+    expect((await ctx.skills.list({ scope })).map(skill => skill.name)).toEqual(['alpha', 'beta'])
+    expect(provider.listCalls).toBe(1)
+    scopedSkills(preset.ctx).restrict({ deny: ['beta'] })
+    // The restricted view must not be served from the pre-restriction cache.
+    expect((await ctx.skills.list({ scope })).map(skill => skill.name)).toEqual(['alpha'])
+    await preset.dispose()
+  })
+})
