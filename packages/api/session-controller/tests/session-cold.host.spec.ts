@@ -577,7 +577,7 @@ describe('indexed page fast path', () => {
     const meta = header(sessionId, 1000)
     const base = Array.from({ length: 72 }, (_, index) => turn(index * 4, index + 1)).flat()
     const shadowed = base.map(event => event.seq)
-    const replacement: SessionEvent = {
+    const replacement = {
       type: 'user/message',
       seq: base.length,
       time: base.length,
@@ -586,8 +586,8 @@ describe('indexed page fast path', () => {
         content: [{ type: 'text', text: 'checkpoint' }],
         source: { kind: 'plugin', plugin: 'compact' },
       }),
-    } as SessionEvent
-    replacement.sourceEventSeqs = shadowed
+      sourceEventSeqs: shadowed,
+    } as unknown as SessionEvent
     const events = [...base, replacement]
     const borrow = vi.fn(() => Promise.resolve({ inspection: { meta, events }, revision: SessionPersistenceRevision('indexed:1'), source: 'prepared', [Symbol.dispose]: () => {} }))
     const readFrom = vi.fn((id: SessionId, fromSeq: number) => {
