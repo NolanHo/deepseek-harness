@@ -626,6 +626,79 @@ describe('indexed page fast path', () => {
     await ctx.fiber.dispose()
   })
 
+  it('bails softly when the suffix read answers a different session', async () => {
+    const { ctx, sessionId, borrow, readFrom, remote } = await mount(12)
+    readFrom.mockImplementation(async () => ({ meta: { ...header('another-session', 1000), cwd: '/proj' }, events: [] }))
+    const response = await remote.page({
+      address: { kind: 'session', sessionId }, throughSeq: 19, maxMessages: 2,
+    }, new AbortController().signal)
+    // The mismatched identity is a soft bail: the observation path answers.
+    if (!response.ok) throw new Error('page failed')
+    expect(borrow).toHaveBeenCalled()
+    expect(response.value.records.length).toBeGreaterThan(0)
+    await ctx.fiber.dispose()
+  })
+
+  it('answers a beforeSeq-only page without a through cursor as an empty page', async () => {
+    const { ctx, sessionId, remote } = await mount(12)
+    const response = await remote.page({
+      address: { kind: 'session', sessionId }, throughSeq: -1, beforeSeq: 14, maxMessages: 2,
+    }, new AbortController().signal)
+    // throughSeq -1 bounds the window to seq 0 (the empty-log sentinel), so
+    // both the fast path and the observation path answer an empty page.
+    if (!response.ok) throw new Error('page failed')
+    expect(response.value.records).toEqual([])
+    expect(response.value.hasMore).toBe(false)
+    await ctx.fiber.dispose()
+  })
+
+  it('falls back when even the deep margin cannot hold the cut', async () => {
+    // A 72-turn log puts the cut beyond the shallow margin, so the fast path
+    // reads twice (shallow, then deep); both answer empty, and the
+    // observation path answers instead.
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const sessionId = sid('session-deep-bail')
+    const meta = header(sessionId, 1000)
+    const base = Array.from({ length: 72 }, (_, index) => turn(index * 4, index + 1)).flat()
+    const events = [...base]
+    const cut = base.length - 3
+    // Both fast-path reads answer a tail-only suffix (one turn, one user
+    // message): the window can never hold a 2-message page, so the deep
+    // retry bails and the observation path answers from the borrow.
+    let reads = 0
+    const readFrom = vi.fn((id: SessionId, fromSeq: number) => {
+      if (id !== sessionId) return Promise.reject(new Error('not found'))
+      reads++
+      if (reads <= 2) return Promise.resolve({ meta, events: events.filter(event => event.seq >= 284) })
+      return Promise.resolve({ meta, events: events.filter(event => event.seq >= fromSeq) })
+    })
+    const messageCut = vi.fn(
+      (_id: SessionId, _maxMessages: number, beforeSeq?: number) =>
+        Promise.resolve(beforeSeq === undefined ? undefined : cut),
+    )
+    const borrow = vi.fn((id: SessionId) => {
+      if (id !== sessionId) return Promise.reject(new Error('not found'))
+      return Promise.resolve({ inspection: { meta, events }, revision: SessionPersistenceRevision('indexed:1'), source: 'prepared', [Symbol.dispose]: () => {} })
+    })
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: (_id: SessionId) => Promise.resolve({ meta, events }),
+      borrowSession: borrow,
+      messageCut,
+      readFrom,
+      locate: () => undefined,
+    })
+    const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/proj' })
+    const response = await remote.page({
+      address: { kind: 'session', sessionId }, throughSeq: events.at(-1)?.seq ?? 0, maxMessages: 2,
+    }, new AbortController().signal)
+    if (!response.ok) throw new Error(`page failed: ${JSON.stringify('error' in response ? response.error : null)}`)
+    expect(reads).toBeGreaterThanOrEqual(2)
+    expect(response.value.records.length).toBeGreaterThan(0)
+    await ctx.fiber.dispose()
+  })
+
   it('falls back to the full observation when the backend cannot answer', async () => {
     const { ctx, sessionId, borrow, readFrom, remote } = await mount(undefined)
     const response = await remote.page({

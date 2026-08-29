@@ -98,6 +98,9 @@ export function nthMessageCut(
 function turnAlignedCut(window: readonly SessionEvent[], cut: number): number {
   if (cut <= 0) return 0
   let index = window.findIndex(event => event.seq >= cut)
+  /* v8 ignore next -- a cut beyond the window's last seq requires the
+     messageCut backend to disagree with the readFrom suffix; the fast path
+     validates the cut inside its window before this can fire. */
   if (index < 0) return cut
   while (index > 0) {
     const previous = window[index - 1] as SessionEvent
