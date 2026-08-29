@@ -36,6 +36,8 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `ui-chat` StatsLine 绘制后测量 | C | 1 行 + 注释 | 省略号测试从 `useLayoutEffect` 移到 `useEffect`（绘制后）；行为零变化 |
 | `skill` 注册表目录限制 | C | 单文件约 92 行 | `SkillRegistry.restrict` + scope 层过滤（两个注入块：restrict/SkillLayer 接线、`collectFresh` 过滤钩子）；allow/deny 互斥，是相对 `tools.restrict` 的刻意分歧（JSDoc 已写明） |
 | `subagent` 子代理 cwd + skillFilter | C | 5 文件约 170 行 | 请求字段贯穿 `childSessionMeta`/`applyChildComposition`/in-process 驱动/continuation；descriptor v3→4（同步遇上游 bump：字段取并集）；冷恢复的 cwd 权威仍在会话 header |
+| `api/session-controller` 客户端选择通知 + 快照身份 | C | manager/service 约 60 行 | 选择走 `markDirty` 通知（列表投影渲染在交互之外）；`open`/`openSubagent` 经 `followCurrent` 读 manager 快照同步 stage；`buildListSnapshot` 内容未变返回上一个对象，`subagentsByParent`/`jobsBySession` 引用稳定 |
+| `ui-workspace` order store 引用稳定 | C | ~10 行 | `syncSessionOrderAccount` 在 order 未变时保留旧数组引用（时间戳照常推进） |
 
 ## 优化方案（按优先级）
 

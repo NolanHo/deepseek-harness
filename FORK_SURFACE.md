@@ -36,6 +36,8 @@ The 0.1.2-alpha.1 sync (1079 upstream commits) resolved 123 conflicts. The pain 
 | `ui-chat` StatsLine passive measurement | C | 1 line + comment | Ellipsis test in `useEffect` (post-paint) instead of `useLayoutEffect`; no behavior change |
 | `skill` registry catalog restrictions | C | ~92 lines in one file | `SkillRegistry.restrict` + scope-layer filtering (two injection blocks: the restrict/SkillLayer wiring, the `collectFresh` filter hook); allow/deny are mutually exclusive, a deliberate divergence from `tools.restrict` documented in its JSDoc |
 | `subagent` per-child cwd + skillFilter | C | 5 files, ~170 lines | Request fields threaded through `childSessionMeta`/`applyChildComposition`/in-process driver/continuation; descriptor v3→4 (upstream bump at sync: union the version fields); cwd authority stays the session header on cold resume |
+| `api/session-controller` client selection notification + snapshot identity | C | ~60 lines across manager/service | Selection notifies via `markDirty` (the list projection renders outside the interaction); `open`/`openSubagent` stage synchronously through `followCurrent` on the manager snapshot; `buildListSnapshot` returns the previous object on equal content with reference-stabilized `subagentsByParent`/`jobsBySession` |
+| `ui-workspace` order-store reference stability | C | ~10 lines | `syncSessionOrderAccount` keeps the previous array reference when the order did not change (timestamps still advance) |
 
 ## Optimization plan (priority order)
 

@@ -414,6 +414,9 @@ describe('current selection (migrated from ui-layout, arbitrated into the list s
     await feedList(b, [{ id: 's1' }])
     expect(b.svc.list.getSnapshot().current).toBeUndefined()
     b.svc.open(sid('s1'))
+    // The list-store projection lands in the manager's microtask batch (the
+    // interaction itself only stages synchronously).
+    await Promise.resolve()
     expect(b.svc.list.getSnapshot().current).toBe('s1')
     expect(() => { b.svc.open(sid('ghost')) }).toThrow(/unknown session ghost/)
     expect(b.svc.list.getSnapshot().current).toBe('s1') // failed open leaves the selection alone
@@ -430,8 +433,10 @@ describe('current selection (migrated from ui-layout, arbitrated into the list s
     const b = bench()
     await feedList(b, [{ id: 's1' }])
     b.svc.open(sid('s1'))
+    await Promise.resolve()
     expect(storage.get('dsh.sessions.current')).toContain('s1')
     b.svc.clear()
+    await Promise.resolve()
     expect(b.svc.list.getSnapshot().current).toBeUndefined()
     // Persisted wipe: a fresh service with the same storage stays on empty.
     const again = bench()
@@ -458,6 +463,7 @@ describe('current selection (migrated from ui-layout, arbitrated into the list s
     const first = bench()
     await feedList(first, [{ id: 's1' }])
     first.svc.open(sid('s1'))
+    await Promise.resolve()
     expect(storage.get('dsh.sessions.current')).toContain('s1')
     // A fresh boot (same storage) recovers the selection once the list holds the session.
     const second = bench()
@@ -554,7 +560,7 @@ describe('catalog-addressed navigation', () => {
     b.svc.openSubagent({
       parentSessionId: sid('child'), childSessionId: sid('grandchild'), mode: 'continuable',
     })
-
+    await Promise.resolve()
     expect(b.svc.list.getSnapshot().byId[sid('child')]?.displayTitle).toBe('Child')
     expect(b.svc.list.getSnapshot().byId[sid('grandchild')]?.displayTitle).toBe('Grandchild')
   })
@@ -589,7 +595,7 @@ describe('catalog-addressed navigation', () => {
     b.svc.openSubagent({
       parentSessionId: sid('child'), childSessionId: sid('grandchild'), mode: 'continuable',
     })
-
+    await Promise.resolve()
     const list = b.svc.list.getSnapshot()
     expect(list.ids).toEqual([sid('root')])
     expect(list.byId[sid('child')]).toMatchObject({ parentId: sid('root'), origin: 'subagent' })
@@ -598,6 +604,7 @@ describe('catalog-addressed navigation', () => {
     expect(b.svc.subagentAddress(sid('child'))).toBeUndefined()
 
     b.svc.open(sid('child'))
+    await Promise.resolve()
     expect(b.svc.list.getSnapshot().current).toBe(sid('child'))
     expect(b.svc.subagentAddress(sid('child'))).toEqual({
       parentSessionId: sid('root'), childSessionId: sid('child'), mode: 'continuable',
