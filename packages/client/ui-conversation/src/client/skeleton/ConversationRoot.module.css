@@ -479,10 +479,16 @@
 }
 
 /* Narrow viewports (~412px): tighten the header and tab rhythm so the
-   breadcrumb row and tab labels keep their single line. */
+   breadcrumb row and tab labels keep their single line. Fork: phone headers
+   keep the drawer opener and tabs; the session title (with its lineage chip)
+   lives in the drawer instead of crowding the row. */
 @media (max-width: 560px) {
   .header {
     padding: 8px 12px 0 56px;
+  }
+
+  .crumbs {
+    display: none;
   }
 
   .tabs {
