@@ -554,11 +554,12 @@ describe('indexed page fast path', () => {
     })
     if (!response.ok) throw new Error('page failed')
     const events = response.value.records.map(record => record.event)
-    // The cut lands at the second-to-last user message (turn 4's prompt):
-    // the page spans the last two whole turns from seq 13 through 19.
-    expect(events[0]).toMatchObject({ type: 'user/message', seq: 13 })
+    // The cut lands at the second-to-last user message (turn 4's prompt) and
+    // widens through the turn-aligned cut to its turn/start, so the page
+    // spans the last two whole turns from seq 12 through 19.
+    expect(events[0]).toMatchObject({ type: 'turn/start', seq: 12 })
     expect(events.at(-1)).toMatchObject({ type: 'turn/end', seq: 19 })
-    expect(events.length).toBe(7)
+    expect(events.length).toBe(8)
     expect(response.value.hasMore).toBe(true)
     expect(borrow).not.toHaveBeenCalled()
     expect(readFrom).toHaveBeenCalledWith(sessionId, 0, expect.anything())

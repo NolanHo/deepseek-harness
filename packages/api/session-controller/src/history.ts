@@ -368,9 +368,30 @@ function nthMessageCut(
     anyCount++
     if (anyCount === maxMessages) anyCut = groupStart
   }
-  return userCount > 0
+  const chosen = userCount > 0
     ? { cut: userCut, messages: userCount }
     : { cut: anyCut, messages: anyCount }
+  return { cut: turnAlignedCut(window, chosen.cut), messages: chosen.messages }
+}
+
+/**
+ * Widen a message cut back to its owning turn's opening events: a page must
+ * not start mid-turn, or the head turn reaches the client without its
+ * turn/start and renders unfolded until the next page completes it — a
+ * visible layout flip on every Load earlier. The walk stops at the previous
+ * turn/end (or the window head), so only the turn's own opening events
+ * (turn/start, seeds, context injection) join the page.
+ */
+function turnAlignedCut(window: readonly SessionEvent[], cut: number): number {
+  if (cut <= 0) return 0
+  let index = window.findIndex(event => event.seq >= cut)
+  if (index < 0) return cut
+  while (index > 0) {
+    const previous = window[index - 1] as SessionEvent
+    if (previous.type === 'turn/end') return (window[index] as SessionEvent).seq
+    index--
+  }
+  return (window[0] as SessionEvent).seq
 }
 
 /**

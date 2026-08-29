@@ -631,14 +631,15 @@ describe('SessionHistoryController', () => {
       address: { kind: 'session', sessionId: session.id }, throughSeq: replacement.seq, maxMessages: 2,
     }, signal())
     // User-aligned boundary: two append-origin user messages back from the
-    // replacement land on the first prompt, whose group head opens the page.
+    // replacement land on the first prompt, and the turn-aligned cut widens
+    // through the opening turn/start, so the page opens the whole journal.
     expect(page.records.map(entry => entry.event.seq))
-      .toEqual([1, 2, 3, 4, 5, replacement.seq])
-    expect(page.hasMore).toBe(true)
+      .toEqual([0, 1, 2, 3, 4, 5, replacement.seq])
+    expect(page.hasMore).toBe(false)
     const before = await transport.page({
       address: { kind: 'session', sessionId: session.id }, throughSeq: replacement.seq, beforeSeq: 3, maxMessages: 1,
     }, signal())
-    expect(before.records.map(entry => entry.event.seq)).toEqual([1, 2])
+    expect(before.records.map(entry => entry.event.seq)).toEqual([0, 1, 2])
   })
 
   it('keeps cited source events in the page that owns their appended message', async () => {

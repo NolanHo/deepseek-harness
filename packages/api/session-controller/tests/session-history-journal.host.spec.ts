@@ -243,13 +243,15 @@ describe('Session history raw journal', () => {
     // spans both prompts and the replacement keeps its summary adjacent.
     expect(messages.map(event => event.seq)).toEqual([first.seq, first.seq + 1, third.seq, third.seq + 1, third.seq + 3])
     expect(page.some(event => event.seq === first.seq)).toBe(true)
-    expect(response.value.hasMore).toBe(true)
+    // The turn-aligned cut reaches the log head (the opening turn/start), so
+    // this page is the whole journal and nothing remains before it.
+    expect(response.value.hasMore).toBe(false)
     // The range stays contiguous, so the checkpoint's summary record is readable on
     // the same page as the checkpoint itself.
     const summaryIndex = page.findIndex(event => event.seq === summary.seq)
     expect(summaryIndex).toBeGreaterThan(-1)
     expect(page[summaryIndex + 1]?.seq).toBe(summary.seq + 1)
-    expect(page.map(event => event.seq)).toEqual(page.map((_event, index) => first.seq + index))
+    expect(page.map(event => event.seq)).toEqual(page.map((_event, index) => first.seq - 1 + index))
   })
 
   it('paginates a message with many provenance sources without variadic argument expansion', async () => {
@@ -284,9 +286,11 @@ describe('Session history raw journal', () => {
         maxMessages: 1,
       })
       if (!response.ok) throw new Error('unreachable')
-      expect(pageEvents(response.value).map(event => event.seq)).toEqual([...sources, message.seq])
+      expect(pageEvents(response.value).map(event => event.seq)).toEqual([0, ...sources, message.seq])
       expect(response.value.records.filter(record => record.type === 'chunks')).toHaveLength(1)
-      expect(response.value.hasMore).toBe(true)
+      // The turn-aligned cut reaches the log head, so the whole journal fits
+      // one page and nothing remains before it.
+      expect(response.value.hasMore).toBe(false)
     } finally {
       min.mockRestore()
     }
