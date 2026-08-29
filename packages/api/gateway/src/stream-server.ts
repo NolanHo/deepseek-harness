@@ -19,9 +19,19 @@ export type RemoteStreamOpener = (
 /** Convert an invocation or carrier failure to a stable wire value. */
 export type RemoteStreamFailureMapper = (error: unknown) => RemoteStreamFailure
 
+/**
+ * `perMessageDeflate` options for the negotiable RFC 7692 compression: the
+ * threshold keeps sub-kilobyte live frames raw (no deflate latency on the
+ * typing path) while page bursts — one `opened` journal frame carrying the
+ * whole history window — compress before the wire. Browsers negotiate the
+ * extension automatically; a client that does not offer it falls back to raw
+ * frames.
+ */
+const PER_MESSAGE_DEFLATE = { threshold: 1024 } as const
+
 /** Own the no-server WebSocket acceptor and every active logical stream. */
 export class RemoteStreamMuxServer {
-  private readonly server = new WebSocketServer({ noServer: true })
+  private readonly server: WebSocketServer
   private readonly connections = new Set<Promise<void>>()
   private heartbeatTimer: NodeJS.Timeout | undefined
 
@@ -29,12 +39,20 @@ export class RemoteStreamMuxServer {
    * @param open - Gateway stream dispatcher.
    * @param failure - Gateway error-to-wire mapper.
    * @param heartbeatIntervalMs - interval between WebSocket Ping control frames.
+   * @param perMessageDeflate - negotiate RFC 7692 per-message compression with
+   * clients that offer it.
    */
   constructor(
     private readonly open: RemoteStreamOpener,
     private readonly failure: RemoteStreamFailureMapper,
     private readonly heartbeatIntervalMs: number,
-  ) {}
+    perMessageDeflate: boolean = false,
+  ) {
+    this.server = new WebSocketServer({
+      noServer: true,
+      ...(perMessageDeflate ? { perMessageDeflate: PER_MESSAGE_DEFLATE } : {}),
+    })
+  }
 
   /**
    * Upgrade one trusted request and begin serving its logical streams.

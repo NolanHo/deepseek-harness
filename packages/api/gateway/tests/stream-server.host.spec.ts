@@ -1,7 +1,7 @@
 import { once } from 'node:events'
 import { createServer, type Server } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import WebSocket from 'ws'
+import WebSocket, { type RawData } from 'ws'
 import {
   RemoteStreamMuxServer,
   type RemoteStreamFailureMapper,
@@ -47,6 +47,50 @@ describe('Remote stream mux server carrier lifecycle', () => {
 
     const closed = once(client, 'close')
     client.resume()
+    await closed
+  })
+
+  it('negotiates permessage-deflate and carries a page-sized item through it', async () => {
+    const entry = await startMux(async function* () {
+      yield { type: 'opened', page: { entries: ['x'.repeat(1024 * 256)], hasMore: false } }
+    } as unknown as RemoteStreamOpener, 30_000, true)
+    const client = new WebSocket(entry.url, { perMessageDeflate: true })
+    await once(client, 'open')
+    // The negotiated extension appears on both ends.
+    expect(client.extensions).toContain('permessage-deflate')
+    const serverSocket = acceptedSocket(entry.mux)
+    expect(serverSocket.extensions).toContain('permessage-deflate')
+
+    client.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'x', payload: null }))
+    const [message] = await once(client, 'message') as [RawData, boolean]
+    const decoded = JSON.parse(message.toString()) as { type: string; streamId: string }
+    expect(decoded.type).toBe('item')
+    expect(decoded.streamId).toBe('s1')
+
+    const closed = once(client, 'close')
+    await entry.mux.close()
+    client.close()
+    await closed
+  })
+
+  it('declines compression for clients that do not offer it even when enabled', async () => {
+    const entry = await startMux(async function* () {
+      yield { type: 'opened', page: { entries: [], hasMore: false } }
+    } as unknown as RemoteStreamOpener, 30_000, true)
+    // The ws client offers permessage-deflate by default, so the raw-client
+    // case needs an explicit opt-out.
+    const client = new WebSocket(entry.url, { perMessageDeflate: false })
+    await once(client, 'open')
+    // Without the client offer the negotiation stays raw.
+    expect(client.extensions).toBe('')
+
+    client.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'x', payload: null }))
+    const [message] = await once(client, 'message') as [RawData, boolean]
+    expect(JSON.parse(message.toString()).type).toBe('item')
+
+    const closed = once(client, 'close')
+    await entry.mux.close()
+    client.close()
     await closed
   })
 
@@ -193,8 +237,12 @@ const mapFailure: RemoteStreamFailureMapper = error => ({
   details: {},
 })
 
-async function startMux(open: RemoteStreamOpener, heartbeatIntervalMs = 30_000): Promise<RunningMux> {
-  const mux = new RemoteStreamMuxServer(open, mapFailure, heartbeatIntervalMs)
+async function startMux(
+  open: RemoteStreamOpener,
+  heartbeatIntervalMs = 30_000,
+  perMessageDeflate = false,
+): Promise<RunningMux> {
+  const mux = new RemoteStreamMuxServer(open, mapFailure, heartbeatIntervalMs, perMessageDeflate)
   const http = createServer()
   http.on('upgrade', (request, socket, head) => { mux.handleUpgrade(request, socket, head) })
   await new Promise<void>((resolve, reject) => {

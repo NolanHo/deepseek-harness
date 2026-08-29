@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-29-remote-mux-permessage-deflate.md
+2026-08-29-remote-mux-permessage-deflate.md: e3f37af358d164f1cb0ef70860afc81c8f079efc
+2026-08-29-remote-mux-permessage-deflate.zh.md: 7602346de03c5bc04ad6fb6a40bb6d0255c6286e

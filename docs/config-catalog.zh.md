@@ -287,6 +287,14 @@ export interface Config {
 export interface Config {
   /** WebSocket Ping interval from 1 through 2,147,483,647 milliseconds. @default 30000 */
   readonly websocketHeartbeatIntervalMs?: number
+  /**
+   * Negotiate RFC 7692 per-message compression on the Remote stream
+   * WebSocket with clients that offer it. The journal's `opened` frames carry
+   * whole history windows (a megabyte or more on event-dense sessions), so
+   * compression cuts the cold-open wire volume several-fold; sub-threshold
+   * live frames stay raw. @default false
+   */
+  readonly websocketPerMessageDeflate?: boolean
 }
 ```
 

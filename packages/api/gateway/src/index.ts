@@ -117,10 +117,19 @@ const DEFAULT_WEBSOCKET_HEARTBEAT_INTERVAL_MS = 30_000
 export interface Config {
   /** WebSocket Ping interval from 1 through 2,147,483,647 milliseconds. @default 30000 */
   readonly websocketHeartbeatIntervalMs?: number
+  /**
+   * Negotiate RFC 7692 per-message compression on the Remote stream
+   * WebSocket with clients that offer it. The journal's `opened` frames carry
+   * whole history windows (a megabyte or more on event-dense sessions), so
+   * compression cuts the cold-open wire volume several-fold; sub-threshold
+   * live frames stay raw. @default false
+   */
+  readonly websocketPerMessageDeflate?: boolean
 }
 
 interface ResolvedConfig extends Config {
   readonly websocketHeartbeatIntervalMs: number
+  readonly websocketPerMessageDeflate: boolean
 }
 
 /** Dispatch failure produced outside the invoked business method. */
@@ -175,6 +184,7 @@ export class TypertGatewayService extends Service implements TypertGateway {
   static Config: z<Config> = z.object({
     websocketHeartbeatIntervalMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS)
       .default(DEFAULT_WEBSOCKET_HEARTBEAT_INTERVAL_MS),
+    websocketPerMessageDeflate: z.boolean().default(false),
   })
 
   /** Carrier adapter shared by the WebSocket mux and local Host transports. */
@@ -211,6 +221,7 @@ export class TypertGatewayService extends Service implements TypertGateway {
         (endpoint, payload, signal) => this.openWireStream(endpoint, payload, signal),
         this.wireStream.failure,
         resolved.websocketHeartbeatIntervalMs,
+        resolved.websocketPerMessageDeflate,
       )
       webCtx.effect(() => {
         const route: WebUpgradeRoute = {
