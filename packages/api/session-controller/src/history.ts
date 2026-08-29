@@ -28,10 +28,13 @@ const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
  * Headroom read before a message-indexed cut: the cut seqs an append-origin
  * user message while the page cut lands at its group head (turn boundary and
  * any source events a few seqs earlier). The margin covers the ordinary lead
- * without re-reading a whole window; a longer lead fails the completeness
- * check and falls back to the full observation path.
+ * without re-reading a whole window; a compaction replacement widens its
+ * group head across the whole shadowed range, so an incomplete window
+ * retries once at the deep margin before falling back to the observation
+ * path.
  */
 const PAGE_CUT_LEAD_MARGIN = 128
+const PAGE_CUT_DEEP_MARGIN = 4096
 
 /** The optional indexed-seek persistence surface behind the page fast path. */
 interface SeekablePersistence {
@@ -211,26 +214,33 @@ export class SessionHistoryController {
       const cut = await persistence.messageCut(id, maxMessages, end, signal)
       signal.throwIfAborted()
       if (cut === undefined) return undefined
-      const fromSeq = Math.max(0, cut - PAGE_CUT_LEAD_MARGIN)
-      const suffix = await persistence.readFrom(id, fromSeq, signal)
-      signal.throwIfAborted()
-      if (suffix.meta.id !== id) return undefined
-      if (suffix.meta.cwd === undefined) rejectNotFound(request.address)
-      validateAddress(request.address, suffix.meta, undefined)
-      if (request.throughSeq > (suffix.events.at(-1)?.seq ?? -1)) {
-        reject(
-          'bad-request',
-          `session page through seq ${String(request.throughSeq)} is past cursor ${String(suffix.events.at(-1)?.seq ?? -1)}`,
-          {},
-        )
+      let fromSeq = Math.max(0, cut - PAGE_CUT_LEAD_MARGIN)
+      let page: ReturnType<typeof paginateSuffix> | undefined
+      for (let attempt = 0; ; attempt++) {
+        const suffix = await persistence.readFrom(id, fromSeq, signal)
+        signal.throwIfAborted()
+        if (suffix.meta.id !== id) return undefined
+        if (suffix.meta.cwd === undefined) rejectNotFound(request.address)
+        validateAddress(request.address, suffix.meta, undefined)
+        if (request.throughSeq > (suffix.events.at(-1)?.seq ?? -1)) {
+          reject(
+            'bad-request',
+            `session page through seq ${String(request.throughSeq)} is past cursor ${String(suffix.events.at(-1)?.seq ?? -1)}`,
+            {},
+          )
+        }
+        if (request.throughSeq >= 0 && !suffix.events.some(event => event.seq === request.throughSeq)) {
+          reject('internal', `session log does not contain through seq ${String(request.throughSeq)}`, {})
+        }
+        page = paginateSuffix(suffix.events, request.beforeSeq, maxMessages, request.throughSeq)
+        // The window provably holds the page only when the cut lands inside
+        // the read suffix; a compaction replacement widens its group head
+        // across the whole shadowed range, so one deep retry covers it before
+        // the caller re-reads the whole observation.
+        if (page.cut >= fromSeq && page.messages >= maxMessages) break
+        if (attempt > 0 || fromSeq === 0) return undefined
+        fromSeq = Math.max(0, cut - PAGE_CUT_DEEP_MARGIN)
       }
-      if (request.throughSeq >= 0 && !suffix.events.some(event => event.seq === request.throughSeq)) {
-        reject('internal', `session log does not contain through seq ${String(request.throughSeq)}`, {})
-      }
-      const page = paginateSuffix(suffix.events, request.beforeSeq, maxMessages, request.throughSeq)
-      // The window provably holds the page only when the cut lands inside the
-      // read suffix; otherwise the caller re-reads the whole observation.
-      if (!(page.cut >= fromSeq && page.messages >= maxMessages)) return undefined
       return {
         records: pageRecords(page.events),
         hasMore: page.hasMore,

@@ -566,6 +566,65 @@ describe('indexed page fast path', () => {
     await ctx.fiber.dispose()
   })
 
+  it('retries the indexed read once at the deep margin when a replacement widens the cut', async () => {
+    // A compaction replacement carries its whole shadowed range as provenance,
+    // so its group head reaches far behind the message cut; the shallow lead
+    // must widen to the deep margin instead of falling back to the observation.
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const sessionId = sid('session-deep-cut')
+    const meta = header(sessionId, 1000)
+    const base = Array.from({ length: 72 }, (_, index) => turn(index * 4, index + 1)).flat()
+    const shadowed = base.map(event => event.seq)
+    const replacement: SessionEvent = {
+      type: 'user/message',
+      seq: base.length,
+      time: base.length,
+      surfaceOp: 'append',
+      data: createUserMessage({
+        content: [{ type: 'text', text: 'checkpoint' }],
+        source: { kind: 'plugin', plugin: 'compact' },
+      }),
+    } as SessionEvent
+    replacement.sourceEventSeqs = shadowed
+    const events = [...base, replacement]
+    const borrow = vi.fn(() => Promise.resolve({ inspection: { meta, events }, revision: SessionPersistenceRevision('indexed:1'), source: 'prepared', [Symbol.dispose]: () => {} }))
+    const readFrom = vi.fn((id: SessionId, fromSeq: number) => {
+      if (id !== sessionId) return Promise.reject(new Error('not found'))
+      return Promise.resolve({ meta, events: events.filter(event => event.seq >= fromSeq) })
+    })
+    const cut = base.length - 3
+    const messageCut = vi.fn(
+      (_id: SessionId, _maxMessages: number, beforeSeq?: number) =>
+        Promise.resolve(beforeSeq === undefined ? undefined : cut),
+    )
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: (_id: SessionId) => Promise.resolve({ meta, events }),
+      borrowSession: borrow,
+      messageCut,
+      readFrom,
+      locate: () => undefined,
+    })
+    const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/proj' })
+    const response = await remote.page({
+      address: { kind: 'session', sessionId },
+      throughSeq: events.at(-1)?.seq ?? 0,
+      maxMessages: 1,
+    })
+    if (!response.ok) throw new Error('page failed')
+    const seqs = response.value.records.map(record => record.event.seq)
+    // The cut message (seq 9, the turn-3 prompt) widens through its group
+    // head to seq 0 across the shadowed range, so the page starts at the log
+    // head and the fast path never borrows the observation.
+    expect(seqs[0]).toBe(0)
+    expect(readFrom).toHaveBeenCalledTimes(2)
+    expect(readFrom).toHaveBeenNthCalledWith(1, sessionId, cut - 128, expect.anything())
+    expect(readFrom).toHaveBeenNthCalledWith(2, sessionId, Math.max(0, cut - 4096), expect.anything())
+    expect(borrow).not.toHaveBeenCalled()
+    await ctx.fiber.dispose()
+  })
+
   it('falls back to the full observation when the backend cannot answer', async () => {
     const { ctx, sessionId, borrow, readFrom, remote } = await mount(undefined)
     const response = await remote.page({
