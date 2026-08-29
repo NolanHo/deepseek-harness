@@ -7,24 +7,21 @@ import {
 import type { ConversationSettings } from '../src/submission-settings.ts'
 
 describe('ComposerSubmissionPolicy', () => {
-  it('defaults to Queue and only applies the preference while running', () => {
+  it('defaults to Queue and only applies the preference while running and steer-capable', () => {
     const policy = new ComposerSubmissionPolicy()
     expect(policy.busyEnter.getSnapshot()).toBe(DEFAULT_BUSY_ENTER_BEHAVIOR)
-    expect(policy.resolve(false, 'enter', true)).toBe('queue')
-    expect(policy.resolve(false, 'accelerated', true)).toBe('queue')
-    expect(policy.resolve(true, 'enter', true)).toBe('queue')
-    expect(policy.resolve(true, 'accelerated', true)).toBe('steer')
-    expect(policy.resolve(true, 'enter', false)).toBe('queue')
-    expect(policy.resolve(true, 'accelerated', false)).toBe('queue')
+    expect(policy.resolve(false, true)).toBe('queue')
+    expect(policy.resolve(false, false)).toBe('queue')
+    expect(policy.resolve(true, false)).toBe('queue')
+    expect(policy.resolve(true, true)).toBe('queue')
 
     const changed = vi.fn()
     policy.busyEnter.subscribe(changed)
     policy.setBusyEnter('steer')
     expect(changed).toHaveBeenCalledTimes(1)
-    expect(policy.resolve(true, 'enter', true)).toBe('steer')
-    expect(policy.resolve(true, 'accelerated', true)).toBe('queue')
-    expect(policy.resolve(false, 'enter', true)).toBe('queue')
-    expect(policy.resolve(false, 'accelerated', true)).toBe('queue')
+    expect(policy.resolve(true, true)).toBe('steer')
+    expect(policy.resolve(true, false)).toBe('queue')
+    expect(policy.resolve(false, true)).toBe('queue')
   })
 
   it('writes an explicit change through the scope after publishing it locally', () => {

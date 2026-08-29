@@ -48,7 +48,7 @@
   - button "Compact":
     - text: Compact
     - img
-  - text: 繁忙时 Enter 键行为 仅在智能体运行时生效；Cmd/Ctrl+Enter 使用另一行为
+  - text: 繁忙时发送行为 仅在智能体运行时生效；插话发送进入当前轮次，排队发送等当前轮次结束后执行
   - button "排队发送":
     - text: 排队发送
     - img

@@ -23,7 +23,7 @@
 - paragraph: partial
 - status: Deep diving...
 - button "2 queued messages"
-- textbox "Cmd/Ctrl+Enter steers all queued messages"
+- textbox "Message or run a task... / commands, @ files or sessions"
 - button "Commands":
   - img
 - 'button "Access mode, current: Workspace Write"': Workspace Write
@@ -31,3 +31,4 @@
   - text: DeepSeek-V4-Flash
   - img
 - button "Stop generating"
+- button "Send message" [disabled]

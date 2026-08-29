@@ -353,7 +353,6 @@ function makeHarness(
       addImages: () => true,
       removeImage: () => {},
       pruneImages: () => {},
-      submit: () => {},
     },
     useStore: bindSnapshotSelector(chat),
     actions: chat.actions,

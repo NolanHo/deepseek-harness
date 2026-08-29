@@ -74,7 +74,7 @@ describe('web e2e: plan review takeover round trip', () => {
     await input.waitFor({ timeout: 10_000 })
     const settled = scaffold.whenTurnSettled(MODE === 'record' ? 180_000 : 30_000)
     await input.fill(LINE)
-    await input.press('Enter')
+    await input.press('Control+Enter')
 
     // The card takes over the input area while exit_plan_mode blocks. Its
     // presence is a STABLE waiting state (it stays until answered), so a plain

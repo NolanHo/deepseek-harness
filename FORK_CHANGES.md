@@ -135,6 +135,10 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 - ZH: 按 FORK_SURFACE.md 把 fork 对上游的侵入抽入 fork 自有模块：user 对齐分页核心移入 `session-controller/src/page-boundary.ts`（history.ts 只留约 60 行注入，原 205 行）；`messageCut` 移除上游抽象/coordinator/jsonl 桩（具体 SQLite store 保留索引查询，history 以 duck-typing 发现）；移动端机制移入 `ui-layout/src/client/mobile-shell.tsx`（AppFrame 只留约 62 行组合，原 119 行）。coordinator.ts、session-persistence/index.ts、jsonl 回归上游原状。
 
 
+### 2026-08-29 — Headless Host refuses file-open clicks fast with a localized notice / 无桌面主机快速拒绝文件打开点击
+
+- EN: `session/openWorkspacePath` now consults the deployment's own `canOpenPath()` probe (config `nativeOpen`, injected opener, or platform detection) and fails fast with `desktop unavailable` instead of spawning `xdg-open` on a Host that cannot reach a desktop — previously a headless deployment relayed the platform's `no "view" rule for type "text/markdown"` dump into the Chat dialog. The Chat open face maps that refusal to the locale-owned `fileOpen.desktopUnavailable` copy (zh/en); other failures keep the wire reason. Tests pin the gate (opener not spawned) and the localized mapping; session-controller and ui-deliverables READMEs updated.
+- ZH: `session/openWorkspacePath` 现在先查部署自身的 `canOpenPath()` 探测（配置 `nativeOpen`、注入打开器或平台检测），不可用时以 `desktop unavailable` 快速失败，不再在到不了桌面的主机上 spawn `xdg-open`——此前无桌面部署会把平台报错 `no "view" rule for type "text/markdown"` 整段转发进 Chat 对话框。Chat 打开接口还会在第三方 `betterSidebar` 插件安装时把核心文件表面（行内引用、工具行路径）路由到其侧栏编辑器——与其已劫持的产出文件芯片一致——拒绝映射为 locale 所有的 `fileOpen.desktopUnavailable` 文案（中英）；其他失败仍转发线上原因，原生打开器保留为回落。测试钉住门控（不再 spawn 打开器）、路由与本地化映射；session-controller 与 ui-deliverables 的 README 已更新。
 
 ### 2026-08-30 — Web perf: deferred boot batches, stable sidebar promotion, post-paint stats measurement / Web 性能：延迟启动批次、侧栏提升稳定、统计行绘制后测量
 

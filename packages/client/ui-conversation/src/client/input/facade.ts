@@ -55,11 +55,6 @@ export interface SessionInputDeps {
   popup?: (() => PopupDismissFace | undefined) | undefined
   /** Queue read face; overlaid onto InputState.queue (absent = empty). */
   queue?: ObservableSnapshot<readonly QueuedMessage[]> | undefined
-  /**
-   * Steer every still-pending queued message into the running turn, in FIFO
-   * order (the empty-draft accelerated-Enter gesture); absent = unsupported.
-   */
-  steerQueue?: (() => void) | undefined
   /** The plain-message sink (send choreography / materialize fork — the hub owns it). */
   defaultSink(
     text: string,
@@ -138,7 +133,6 @@ export class SessionInputShell implements SessionInput {
     addImages: ids => this.addImages(ids),
     removeImage: (id) => { this.removeImage(id) },
     pruneImages: (ids) => { this.pruneImages(ids) },
-    submit: () => { this.submit('queue') },
   }
 
   private readonly core = new SubmitMachine()
@@ -404,16 +398,6 @@ export class SessionInputShell implements SessionInput {
    */
   arbitrate(key: ArbitrateKey, composing: boolean): ArbitrateOutcome {
     return this.deps.inputTriggers?.()?.arbitrate(key, composing) ?? 'pass'
-  }
-
-  /**
-   * Steer every still-pending queued message into the running turn (the
-   * empty-draft accelerated-Enter gesture). Execution belongs to the hub's
-   * queue choreography; absent dep = the gesture falls back to the machine's
-   * empty-draft no-op.
-   */
-  steerQueue(): void {
-    this.deps.steerQueue?.()
   }
 
   /**

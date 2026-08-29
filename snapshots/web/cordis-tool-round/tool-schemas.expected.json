@@ -769,7 +769,7 @@
     },
     {
       "name": "web_search",
-      "description": "Search the web for current information. Provide 1–4 queries in the required queries array. Returns an optional summary answer and a list of source URLs.",
+      "description": "Search the web for current information. Provide 1–4 queries in the required queries array. Optionally name a search backend with the backend argument to override the configured default for this call alone. Returns an optional summary answer and a list of source URLs.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -779,6 +779,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "backend": {
+            "type": "string",
+            "description": "Optional search backend override. Omit to use the default backend. Naming a backend that is not registered fails with the list of available backends."
           }
         },
         "required": [

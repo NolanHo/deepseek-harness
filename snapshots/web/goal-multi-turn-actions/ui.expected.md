@@ -21,9 +21,9 @@
   - img
   - img
   - text: System prompt
-- button "6 tool calls":
-  - text: 6 tool calls
+- button "Collapsed 6 tool calls · {{duration}}":
   - img
+  - text: Collapsed 6 tool calls · {{duration}}
 - paragraph:
   - strong: Turn 1 / 2
   - text: — 随机选中的包：
@@ -47,9 +47,9 @@
   - img
   - img
   - text: System prompt
-- button "5 tool calls · 2 messages":
-  - text: 5 tool calls · 2 messages
+- button "Collapsed 5 tool calls · 2 messages · {{duration}}":
   - img
+  - text: Collapsed 5 tool calls · 2 messages · {{duration}}
 - paragraph: 两个 turn 都完成了 ✅
 - paragraph:
   - strong: 总结：

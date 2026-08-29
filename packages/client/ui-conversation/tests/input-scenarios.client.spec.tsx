@@ -196,7 +196,7 @@ async function bench(executeImpl?: (line: string) => Promise<SubmitOutcome>) {
   return { ...base, execute, executed, envelopes }
 }
 
-describe('scenario A: menu-pick /goal, type args, enter submits', () => {
+describe('scenario A: menu-pick /goal, type args, cmd+enter submits', () => {
   it('runs the whole claim chain through the real pipeline', async () => {
     const b = await bench()
     b.type('/go')
@@ -218,7 +218,7 @@ describe('scenario A: menu-pick /goal, type args, enter submits', () => {
     b.type('/goal 发布 v1')
     expect(b.shell.snapshot.phase).toBe('claimed')
     // Enter: submitting → command execute → commit clears.
-    fireEvent.keyDown(b.textarea, { key: 'Enter' })
+    fireEvent.keyDown(b.textarea, { key: 'Enter', metaKey: true })
     await vi.waitFor(() => { expect(b.execute).toHaveBeenCalledWith('/goal 发布 v1', []) })
     await vi.waitFor(() => { expect(b.shell.snapshot.draft).toBe('') })
     expect(b.shell.snapshot.phase).toBe('plain')
@@ -227,13 +227,13 @@ describe('scenario A: menu-pick /goal, type args, enter submits', () => {
   })
 })
 
-describe('scenario C: pasted /goal xxx + enter (menu never opened)', () => {
-  it('adjudicates on enter, claims and submits in one stroke', async () => {
+describe('scenario C: pasted /goal xxx + cmd+enter (menu never opened)', () => {
+  it('adjudicates on cmd+enter, claims and submits in one stroke', async () => {
     const b = await bench()
     // Paste lands whole; caret at end means detectTrigger sees no token under
-    // the caret mid-whitespace — menu stays closed; enter runs adjudication.
+    // the caret mid-whitespace — menu stays closed; cmd+enter runs adjudication.
     act(() => { b.shell.setDraft('/goal 尽快发布') })
-    fireEvent.keyDown(b.textarea, { key: 'Enter' })
+    fireEvent.keyDown(b.textarea, { key: 'Enter', metaKey: true })
     await vi.waitFor(() => { expect(b.execute).toHaveBeenCalledWith('/goal 尽快发布', []) })
     await vi.waitFor(() => { expect(b.shell.snapshot.phase).toBe('plain') })
     expect(b.shell.snapshot.draft).toBe('')
@@ -252,17 +252,17 @@ describe('scenario D: execute-kind /compact', () => {
     expect(b.executed).toContain('/compact')
   })
 
-  it('bare /compact + enter executes; trailing text falls to the default sink (scenario I twin)', async () => {
+  it('bare /compact + cmd+enter executes; trailing text falls to the default sink (scenario I twin)', async () => {
     const b = await bench()
     act(() => { b.shell.setDraft('/compact') })
-    fireEvent.keyDown(b.textarea, { key: 'Enter' })
+    fireEvent.keyDown(b.textarea, { key: 'Enter', metaKey: true })
     await vi.waitFor(() => { expect(b.executed).toContain('/compact') })
     // 'handled' flows back as the adjudicated event one microtask later.
     await vi.waitFor(() => { expect(b.shell.snapshot.phase).toBe('plain') })
     cleanup()
     const b2 = await bench()
     act(() => { b2.shell.setDraft('/compact 现在') })
-    fireEvent.keyDown(b2.textarea, { key: 'Enter' })
+    fireEvent.keyDown(b2.textarea, { key: 'Enter', metaKey: true })
     // execute with trailing → matchEnter answers undefined → default sink.
     await vi.waitFor(() => { expect(b2.sink).toHaveBeenCalledWith('/compact 现在', [], 'queue', expect.any(AbortSignal)) })
     expect(b2.executed).toHaveLength(0)
@@ -274,7 +274,7 @@ describe('scenario: images ride an accepting command through the real pipeline',
     const b = await bench()
     act(() => { b.shell.addImages(['img-1' as DraftAttachmentId]) })
     act(() => { b.shell.setDraft('/vision 这张图是什么') })
-    fireEvent.keyDown(b.textarea, { key: 'Enter' })
+    fireEvent.keyDown(b.textarea, { key: 'Enter', metaKey: true })
     await vi.waitFor(() => { expect(b.execute).toHaveBeenCalledWith('/vision 这张图是什么', [PNG]) })
     // The envelope the controller forwarded to matchEnter carried the count.
     expect(b.envelopes).toEqual([{ images: 1 }])
@@ -285,10 +285,10 @@ describe('scenario: images ride an accepting command through the real pipeline',
     expect(b.sink).not.toHaveBeenCalled()
   })
 
-  it('an imageless enter adjudicates with a zero-image envelope', async () => {
+  it('an imageless cmd+enter adjudicates with a zero-image envelope', async () => {
     const b = await bench()
     act(() => { b.shell.setDraft('/goal 发布') })
-    fireEvent.keyDown(b.textarea, { key: 'Enter' })
+    fireEvent.keyDown(b.textarea, { key: 'Enter', metaKey: true })
     await vi.waitFor(() => { expect(b.execute).toHaveBeenCalledWith('/goal 发布', []) })
     expect(b.envelopes).toEqual([{ images: 0 }])
     expect(b.serialize).not.toHaveBeenCalled()
@@ -297,7 +297,7 @@ describe('scenario: images ride an accepting command through the real pipeline',
 })
 
 describe('scenario H: backspace breaks the token', () => {
-  it('claim releases automatically; the enter after that goes through adjudication again', async () => {
+  it('claim releases automatically; the cmd+enter after that goes through adjudication again', async () => {
     const b = await bench()
     b.type('/goal')
     await vi.waitFor(() => { expect(b.controller.menu.getSnapshot().open).toBe(true) })
@@ -341,11 +341,11 @@ describe('scenario: reference decoration lights up when the lexicon settles', ()
   })
 })
 
-describe('scenario I: unknown /xyz + enter', () => {
+describe('scenario I: unknown /xyz + cmd+enter', () => {
   it('adjudication misses in one hop and the whole line rides the default sink', async () => {
     const b = await bench()
     act(() => { b.shell.setDraft('/xyz 干点啥') })
-    fireEvent.keyDown(b.textarea, { key: 'Enter' })
+    fireEvent.keyDown(b.textarea, { key: 'Enter', metaKey: true })
     await vi.waitFor(() => { expect(b.sink).toHaveBeenCalledWith('/xyz 干点啥', [], 'queue', expect.any(AbortSignal)) })
     await vi.waitFor(() => { expect(b.shell.snapshot.phase).toBe('plain') })
     expect(b.execute).not.toHaveBeenCalled()
@@ -361,7 +361,7 @@ describe('scenario I: unknown /xyz + enter', () => {
       } as never)
     })
     act(() => { b.shell.setDraft('/plan 上线') })
-    fireEvent.keyDown(b.textarea, { key: 'Enter' })
+    fireEvent.keyDown(b.textarea, { key: 'Enter', metaKey: true })
     await vi.waitFor(() => { expect(b.view.getByText('目录预热失败')).toBeTruthy() })
     // Never a silent downgrade: draft retained, sink untouched.
     expect(b.shell.snapshot.draft).toBe('/plan 上线')

@@ -90,7 +90,7 @@ describe('web e2e: feedback-gated release under the shipped default mode', () =>
     await input.waitFor({ timeout: 10_000 })
     const settled = scaffold.whenTurnSettled()
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const sessionId = await settled
     if (MODE === 'record') {
       // Re-records the SHARED feedback-command session this lane replays.
@@ -104,7 +104,7 @@ describe('web e2e: feedback-gated release under the shipped default mode', () =>
     expect(uploads).toEqual([])
     const input = page.locator('[data-composer-input]').first()
     await input.fill('/feedback the diff view is unreadable')
-    await input.press('Enter')
+    await input.press('Control+Enter')
 
     await page.getByText(/Feedback recorded for session/).waitFor({ timeout: 10_000 })
     expect(await page.getByText(/recording feedback uploads the session records not yet shared/).count()).toBe(1)
@@ -131,7 +131,7 @@ describe('web e2e: feedback-gated release under the shipped default mode', () =>
     onTestFailed(() => saveFailureShot(page, 'web-e2e-feedback-release-suffix'))
     const input = page.locator('[data-composer-input]').first()
     await input.fill('/feedback the second remark')
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await expect.poll(() => uploads.length, { timeout: 15_000 }).toBe(2)
     // Suffix semantics: the second release starts after the first feedback's
     // handoff, so the drive prompt already shared must not repeat.

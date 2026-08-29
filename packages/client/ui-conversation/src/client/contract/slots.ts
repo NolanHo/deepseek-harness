@@ -18,7 +18,7 @@ import type {
   ComposerKeyboard, DraftAttachmentId, EditSelection, InputActions, InputNotice, InputState,
 } from './input.ts'
 import type { createConversationStore } from '../stores.ts'
-import type { ComposerSubmitGesture, InputSubmitMode } from './composer-submission.ts'
+import type { InputSubmitMode } from './composer-submission.ts'
 import type { ConversationSnapshot } from './snapshot.ts'
 import type { ViewTab } from './views.ts'
 
@@ -267,9 +267,9 @@ export interface ComposerBarInjected {
   addImages: ((files: readonly File[]) => string | null) | undefined
   removeImage: ((id: DraftAttachmentId) => void) | undefined
   draftImages: ((ids: readonly DraftAttachmentId[]) => readonly ComposerAttachment[]) | undefined
+  /** Resolve one submission (send button or Cmd/Ctrl+Enter chord) against the running state and persisted busy-state preference. */
   resolveSubmitMode: (
     running: boolean,
-    gesture: ComposerSubmitGesture,
     steeringAvailable: boolean,
   ) => InputSubmitMode
   toggleCommandMenu: ((selection: EditSelection) => void) | undefined

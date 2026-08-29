@@ -30,3 +30,4 @@
   - text: DeepSeek-V4-Flash
   - img
 - button "Stop generating"
+- button "Send message" [disabled]

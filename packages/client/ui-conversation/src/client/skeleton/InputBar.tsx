@@ -129,8 +129,6 @@ export function InputBar({
   const workspaceTrigger = inert && !removed && onRequestWorkspace !== undefined
   const editorDisabled = removed || (locked && !workspaceTrigger)
   const editable = live && !locked && !machineBusy
-  const canSteerQueue = !locked && !machineBusy && !commandMenuOpen && empty && running && subagent === null
-    && input.queue.some(row => row.placement === 'queued')
 
   useEffect(() => {
     if (input === undefined || inputActions === undefined) return
@@ -247,9 +245,18 @@ export function InputBar({
   // The keymap handlers read live bar state through this ref so the editor
   // registration survives re-renders without re-arming per keystroke.
   const gate = useRef({
-    locked, machineBusy, canSteerQueue, running, subagent, resolveSubmitMode, intakeImages,
+    locked, machineBusy, running, subagent, resolveSubmitMode, intakeImages,
   })
-  gate.current = { locked, machineBusy, canSteerQueue, running, subagent, resolveSubmitMode, intakeImages }
+  gate.current = { locked, machineBusy, running, subagent, resolveSubmitMode, intakeImages }
+
+  // The single submission path shared by the send button and the Cmd/Ctrl+Enter
+  // chord: the policy resolves the busy-state delivery mode for both.
+  const submitDraft = (): void => {
+    const g = gate.current
+    /* v8 ignore next -- defensive: both callers guard keyboard (the button is disabled without a live machine). */
+    if (keyboard === undefined) return
+    keyboard.submit(g.resolveSubmitMode(g.running, g.subagent === null))
+  }
 
   useEffect(() => {
     if (editor === null || keyboard === undefined) return
@@ -261,21 +268,7 @@ export function InputBar({
       },
       dismissPopup: () => { keyboard.dismissPopup() },
       canSubmit: () => !gate.current.locked && !gate.current.machineBusy,
-      submit: (accelerated) => {
-        const g = gate.current
-        // Empty-draft accelerated Enter acts on the queue instead of the
-        // (empty) draft: the machine rejects empty drafts, so the gesture
-        // steers every still-pending queued message into the running turn.
-        if (accelerated && g.canSteerQueue) {
-          keyboard.steerQueue()
-          return
-        }
-        keyboard.submit(g.resolveSubmitMode(
-          g.running,
-          accelerated ? 'accelerated' : 'enter',
-          g.subagent === null,
-        ))
-      },
+      submit: () => { submitDraft() },
       intakeFiles: (files) => { gate.current.intakeImages(files) },
       pasteText: (text) => {
         if (gate.current.machineBusy || gate.current.locked) return
@@ -307,20 +300,15 @@ export function InputBar({
     }
   }
 
-  // An ordinary running session keeps Stop while the composer is empty or
-  // owner-blocked; an actionable draft gets the existing Queue action. A
-  // continuable child keeps Send primary and exposes Stop independently.
-  const primaryStops = running && subagent === null && (empty || blocked !== undefined)
-  const interruptible = running && continuable
-  const primaryLabel = primaryStops ? t('input.stop') : t('input.send')
+  // While the agent is running, the primary control stays Send (delivery
+  // resolved by the busy-state policy) and an independent Stop button sits
+  // beside it; one-shot subagent runs expose neither input nor Stop.
+  const interruptible = running && (subagent === null || continuable)
   const onPrimary = (): void => {
-    if (primaryStops) {
-      stop?.()
-      return
-    }
-    if (inputActions === undefined) return // absent machine: the button is disabled
+    /* v8 ignore next -- defensive: the primary button is disabled without a live machine, so a click cannot reach the undefined arm. */
+    if (inputActions === undefined) return
     /* v8 ignore next -- defensive: the primary button is disabled while empty||disabled, so a click cannot reach the false arm. */
-    if (!empty && !disabled && !machineBusy) inputActions.submit()
+    if (!empty && !disabled && !machineBusy) submitDraft()
   }
 
   // The Access seat: the projection-fed permission chip (renders nothing
@@ -354,12 +342,7 @@ export function InputBar({
     ? t('placeholder.parentOffline')
     : disabled
       ? t('placeholder.unavailable')
-      // The steer hint deliberately outranks the plan placeholder:
-      // while it shows, the whole-queue gesture is genuinely available
-      // (the gate never consults plan mode), so the actionable hint wins.
-      : canSteerQueue
-        ? t('placeholder.steerQueue')
-        : planActive ? t('placeholder.plan') : t('placeholder.default'))
+      : planActive ? t('placeholder.plan') : t('placeholder.default'))
 
   return (
     <div className={clsx(css.root, variant === 'hero' && css.hero)}>
@@ -474,24 +457,18 @@ export function InputBar({
                 </button>
               </Tooltip>
             )}
-            <Tooltip label={primaryLabel} side="top" delayMs={500}>
+            <Tooltip label={t('input.send')} side="top" delayMs={500}>
               <button
                 type="button"
                 className={css.primary}
-                aria-label={primaryLabel}
-                disabled={primaryStops ? stop === undefined : empty || disabled || machineBusy}
+                aria-label={t('input.send')}
+                disabled={empty || disabled || machineBusy}
                 onMouseDown={keepFocus}
                 onClick={onPrimary}
               >
-                {primaryStops ? (
-                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
-                    <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
-                    <path d="M8.3125 0.980183C8.66767 1.0531 8.97902 1.20418 9.2627 1.43233C9.48724 1.61297 9.73029 1.85793 9.97949 2.10714L14.707 6.83468L13.293 8.24874L9 3.95577V15.0417H7V3.95577L2.70703 8.24874L1.29297 6.83468L6.02051 2.10714C6.26971 1.85793 6.51277 1.61297 6.7373 1.43233C6.97662 1.23986 7.28445 1.04402 7.6875 0.980183C7.8973 0.947006 8.1031 0.95516 8.3125 0.980183Z" fill="currentColor" />
-                  </svg>
-                )}
+                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+                  <path d="M8.3125 0.980183C8.66767 1.0531 8.97902 1.20418 9.2627 1.43233C9.48724 1.61297 9.73029 1.85793 9.97949 2.10714L14.707 6.83468L13.293 8.24874L9 3.95577V15.0417H7V3.95577L2.70703 8.24874L1.29297 6.83468L6.02051 2.10714C6.26971 1.85793 6.51277 1.61297 6.7373 1.43233C6.97662 1.23986 7.28445 1.04402 7.6875 0.980183C7.8973 0.947006 8.1031 0.95516 8.3125 0.980183Z" fill="currentColor" />
+                </svg>
               </button>
             </Tooltip>
           </div>

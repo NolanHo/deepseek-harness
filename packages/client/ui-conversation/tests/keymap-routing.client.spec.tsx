@@ -11,48 +11,69 @@ import { registerPlainText } from '@lexical/plain-text'
 import { registerComposerKeymap } from '../src/client/input/editor/keymap.ts'
 
 describe('keymap keydown routing', () => {
-  it('routes Enter to the keymap submit handler', () => {
+  const bench = () => {
     const editor = createEditor({ namespace: 'keymap-routing', onError: (e) => { throw e } })
     const root = document.createElement('div')
     root.contentEditable = 'true'
     document.body.appendChild(root)
     editor.setRootElement(root)
     registerPlainText(editor)
+    return { editor, root }
+  }
+
+  const handlers = (over?: { submit?: () => void; canSubmit?: () => boolean }) => ({
+    arbitrate: () => 'pass' as const,
+    space: () => false,
+    dismissPopup: () => {},
+    canSubmit: over?.canSubmit ?? (() => true),
+    submit: over?.submit ?? (() => {}),
+    intakeFiles: () => {},
+    pasteText: () => {},
+  })
+
+  it('routes plain Enter to the native line break and Cmd/Ctrl+Enter to submit', () => {
+    const { editor, root } = bench()
     const submit = vi.fn()
-    registerComposerKeymap(editor, {
-      arbitrate: () => 'pass',
-      space: () => false,
-      dismissPopup: () => {},
-      canSubmit: () => true,
-      submit,
-      intakeFiles: () => {},
-      pasteText: () => {},
-    })
-    fireEvent.keyDown(root, { key: 'Enter' })
-    expect(submit).toHaveBeenCalledWith(false)
+    registerComposerKeymap(editor, handlers({ submit }))
+    // fireEvent returns true when nothing preventDefaulted: the native
+    // newline proceeds through the plain-text default.
+    expect(fireEvent.keyDown(root, { key: 'Enter' })).toBe(true)
+    expect(fireEvent.keyDown(root, { key: 'Enter', shiftKey: true })).toBe(true)
+    expect(submit).not.toHaveBeenCalled()
+    // The chord is consumed and submitted, never inverted.
+    expect(fireEvent.keyDown(root, { key: 'Enter', metaKey: true })).toBe(false)
+    expect(fireEvent.keyDown(root, { key: 'Enter', ctrlKey: true })).toBe(false)
+    expect(submit).toHaveBeenCalledTimes(2)
+  })
+
+  it('menu arbitration consumes Enter before the chord branch', () => {
+    const { editor, root } = bench()
+    const submit = vi.fn()
+    const arbitrate = vi.fn<(key: string, composing: boolean) => 'consumed' | 'pick-highlighted' | 'pass'>()
+      .mockReturnValue('consumed')
+    registerComposerKeymap(editor, { ...handlers({ submit }), arbitrate })
+    expect(fireEvent.keyDown(root, { key: 'Enter' })).toBe(false)
+    expect(fireEvent.keyDown(root, { key: 'Enter', metaKey: true })).toBe(false)
+    expect(arbitrate).toHaveBeenCalledTimes(2)
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('the composition guard withholds the chord without preventing the IME', () => {
+    const { editor, root } = bench()
+    const submit = vi.fn()
+    registerComposerKeymap(editor, handlers({ submit }))
+    fireEvent.compositionStart(root)
     fireEvent.keyDown(root, { key: 'Enter', metaKey: true })
-    expect(submit).toHaveBeenCalledWith(true)
+    fireEvent.compositionEnd(root)
+    expect(submit).not.toHaveBeenCalled()
   })
 
   it('routes Tab through arbitration and passes when unconsumed', () => {
-    const editor = createEditor({ namespace: 'keymap-routing', onError: (e) => { throw e } })
-    const root = document.createElement('div')
-    root.contentEditable = 'true'
-    document.body.appendChild(root)
-    editor.setRootElement(root)
-    registerPlainText(editor)
+    const { editor, root } = bench()
     const arbitrate = vi.fn<(key: string, composing: boolean) => 'consumed' | 'pick-highlighted' | 'pass'>()
       .mockReturnValueOnce('consumed')
       .mockReturnValue('pass')
-    registerComposerKeymap(editor, {
-      arbitrate,
-      space: () => false,
-      dismissPopup: () => {},
-      canSubmit: () => true,
-      submit: () => {},
-      intakeFiles: () => {},
-      pasteText: () => {},
-    })
+    registerComposerKeymap(editor, { ...handlers(), arbitrate })
     const consumed = fireEvent.keyDown(root, { key: 'Tab', keyCode: 9 })
     expect(arbitrate).toHaveBeenCalledWith('tab', false)
     expect(consumed).toBe(false) // consumed: preventDefault fired

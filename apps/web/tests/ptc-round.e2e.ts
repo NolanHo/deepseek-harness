@@ -57,7 +57,7 @@ describe('web e2e: PTC mode round renders nested sub-calls', () => {
     await input.waitFor({ timeout: 10_000 })
     const settled = scaffold.whenTurnSettled()
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const sessionId = await settled
     if (MODE === 'record') {
       await recordFixture(scaffold, sessionId, FIXTURE)

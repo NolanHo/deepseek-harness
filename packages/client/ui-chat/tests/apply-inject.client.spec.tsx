@@ -130,6 +130,31 @@ describe('Chat inject API', () => {
       error: { code: 'internal', message: 'xdg-open is not available', details: {} },
     })
     await expect(injected.openFile('src/b.ts')).rejects.toThrow('path open failed: xdg-open is not available')
+
+    // A Host without a native opener is the friendly localized refusal,
+    // not the wire message.
+    b.openWorkspacePath.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'internal', message: 'path open failed: desktop unavailable', details: {} },
+    })
+    await expect(injected.openFile('src/c.md')).rejects.toThrow('当前主机没有桌面环境，无法直接打开文件')
+    await b.runtime.dispose()
+  })
+
+  it('routes file opens through the better-sidebar editor when that service is installed', async () => {
+    const b = await bench()
+    const openTab = vi.fn()
+    b.runtime.ctx.provide('betterSidebar', { openTab } as never)
+    const { injected } = b.chatViewApi(ROOT)
+    await injected.openFile('notes.md')
+    expect(openTab).toHaveBeenCalledWith({
+      type: 'editor', title: 'notes.md', path: '/proj/notes.md', id: 'editor:/proj/notes.md',
+    })
+    expect(b.openWorkspacePath).not.toHaveBeenCalled()
+    // A folder reveal carries no editor file: the native opener keeps it.
+    await injected.openFile('.')
+    expect(openTab).toHaveBeenCalledTimes(1)
+    expect(b.openWorkspacePath).toHaveBeenCalledWith({ path: '/proj/.' })
     await b.runtime.dispose()
   })
 

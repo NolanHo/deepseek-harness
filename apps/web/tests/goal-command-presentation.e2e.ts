@@ -50,9 +50,9 @@ describe('web e2e: /goal human transcript presentation', () => {
     }).toBe(1)
     const input = page.locator('[data-composer-input]').first()
     await input.fill('/goal')
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await expect.poll(() => input.textContent()).toBe('/goal ')
-    await input.press('Enter')
+    await input.press('Control+Enter')
 
     const commandInput = page.locator('[data-command-input]')
     await commandInput.waitFor({ timeout: 10_000 })

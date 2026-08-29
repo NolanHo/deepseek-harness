@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-29-headless-path-open-refusal.md
+2026-08-29-headless-path-open-refusal.md: cef5b694b7ae0c555c16797fefcc9afae4243b33
+2026-08-29-headless-path-open-refusal.zh.md: 0f22a325a7b44e2574494401a25815c32795e22f

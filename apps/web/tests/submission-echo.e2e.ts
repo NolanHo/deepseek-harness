@@ -41,7 +41,7 @@ it('paints the submission echo on the send keystroke and swaps it for the durabl
     clipboardData: { items: [], getData: () => '回显这条消息' },
   })
   await waitFor(() => { expect(composer.textContent).toBe('回显这条消息') })
-  fireEvent.keyDown(composer, { key: 'Enter' })
+  fireEvent.keyDown(composer, { key: 'Enter', metaKey: true })
 
   // Synchronously after the keystroke: the echo bubble is in the flow with
   // the draft text and the object-URL preview, while the prompt has not even

@@ -92,6 +92,24 @@ describe('session/openWorkspacePath', () => {
     expect(openPath).not.toHaveBeenCalled()
   })
 
+  it('refuses fast without spawning the opener when the deployment has no native opener', async () => {
+    const ctx = await context()
+    const openPath = vi.fn((_path: string, _signal: AbortSignal) => Promise.resolve())
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/default',
+      openPath,
+      canOpenPath: () => false,
+    })
+
+    await expect(remote.openWorkspacePath({ path: 'result.md' }))
+      .resolves.toEqual({
+        ok: false,
+        error: { code: 'internal', message: 'path open failed: desktop unavailable', details: {} },
+      })
+    expect(openPath).not.toHaveBeenCalled()
+  })
+
   it('preserves native opener failure and cancellation results', async () => {
     const ctx = await context()
     const openPath = vi.fn((_path: string, _signal: AbortSignal) =>

@@ -48,7 +48,7 @@
   - button "Compact":
     - text: Compact
     - img
-  - text: Enter behavior while busy Busy only; Cmd/Ctrl+Enter uses the other behavior
+  - text: Send behavior while busy Busy only; steer enters the running turn, queue runs after it completes
   - button "Queue":
     - text: Queue
     - img

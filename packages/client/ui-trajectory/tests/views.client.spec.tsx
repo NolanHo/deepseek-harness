@@ -212,7 +212,6 @@ function standaloneProps(
     addImages: () => false,
     removeImage: () => {},
     pruneImages: () => {},
-    submit: () => {},
   }
   return {
     sessionId: SID,
@@ -333,7 +332,6 @@ function mount(fixture: Awaited<ReturnType<typeof bench>>) {
     addImages: vi.fn(() => false),
     removeImage: vi.fn(),
     pruneImages: vi.fn(),
-    submit: vi.fn(),
   }
   const standardProps = {
     sessionId: SID,

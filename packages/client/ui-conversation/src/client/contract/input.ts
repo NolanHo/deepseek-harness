@@ -214,9 +214,9 @@ export interface SessionInputResolver {
 
 /**
  * The public input action face provided to every session-scope slot
- * component: stable-identity void callbacks, mirroring the
- * useStore+actions convention. Command-style handles (arbitrate/space/
- * paste/…) stay InputBar-private and never ride this face.
+ * component: the draft and image mutation verbs only. Command-style handles
+ * (arbitrate/space/paste/…) and submission stay InputBar-private and never
+ * ride this face.
  */
 export interface InputActions {
   /** Replace the whole draft (persisted-draft seed and programmatic writes). */
@@ -227,8 +227,6 @@ export interface InputActions {
   removeImage(id: DraftAttachmentId): void
   /** Drop ids whose browser-owned objects no longer exist. */
   pruneImages(ids: readonly DraftAttachmentId[]): void
-  /** Enter submission (adjudication / claim transaction / default sink inside). */
-  submit(): void
 }
 
 /** One surfaced notice (command results, adjudication failures). seq keys re-render of repeats. */
@@ -252,14 +250,8 @@ export interface ComposerKeyboard {
   readonly snapshot: InputState
   /** The shell-owned Lexical editor the composer binds its contenteditable to. */
   readonly editor: LexicalEditor
-  /** Submit with an explicit delivery mode resolved by the keyboard policy. */
+  /** Submit with an explicit delivery mode resolved by the composer submission policy. */
   submit(mode: InputSubmitMode): void
-  /**
-   * Steer every still-pending queued message into the running turn (the
-   * empty-draft accelerated-Enter gesture; the queue dock's per-row steer
-   * button is the same operation applied to the whole queue).
-   */
-  steerQueue(): void
   /** Insert pasted plain text over the current editor selection (reference-placeholder-sanitized). */
   paste(text: string): void
   /**

@@ -119,10 +119,34 @@ export function apply(ctx: Context): void {
           fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner),
           openFile: async (path) => {
             const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
+            const absolute = resolveWorkspacePath(cwd, path)
+            // dsh-better-sidebar turns the produced-files chips into sidebar
+            // editor opens; route the core file surfaces — inline mentions,
+            // tool-row paths — through the same viewer when that plugin is
+            // installed, keeping the native Host opener for folder reveals
+            // (`.` carries no editor file) and plugin-less profiles.
+            if (path !== '.') {
+              const sidebar = ctx.get('betterSidebar') as {
+                openTab?: (spec: { type: string; title: string; path: string; id: string }) => void
+              } | undefined
+              if (sidebar?.openTab !== undefined) {
+                const cut = Math.max(absolute.lastIndexOf('/'), absolute.lastIndexOf('\\'))
+                const title = cut === -1 ? absolute : absolute.slice(cut + 1)
+                sidebar.openTab({ type: 'editor', title, path: absolute, id: `editor:${absolute}` })
+                return
+              }
+            }
             const result = await ctx.remote.session.openWorkspacePath({
-              path: resolveWorkspacePath(cwd, path),
+              path: absolute,
             })
-            if (!result.ok) throw new Error(`path open failed: ${result.error.message}`)
+            if (!result.ok) {
+              // A Host without a native opener refuses fast; relay the friendly
+              // localized reason instead of the wire message.
+              if (result.error.message.includes('desktop unavailable')) {
+                throw new Error(t('fileOpen.desktopUnavailable'))
+              }
+              throw new Error(`path open failed: ${result.error.message}`)
+            }
           },
           loadOlder: () => { void session.loadOlder() },
           loadImage: Object.assign(

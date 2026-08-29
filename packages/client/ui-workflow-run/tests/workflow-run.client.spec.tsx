@@ -322,7 +322,6 @@ function panelProps(data: WorkflowRunChatData, sessions = listState(), openSessi
       addImages: () => false,
       removeImage: () => {},
       pruneImages: () => {},
-      submit: () => {},
     },
     useWorkspaces: selector => selector(panelWorkspace),
     useTurnData: () => undefined,

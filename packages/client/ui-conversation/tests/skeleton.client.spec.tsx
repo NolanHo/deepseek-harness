@@ -368,7 +368,7 @@ describe('ConversationRoot resident composer', () => {
     expect(b.wiring.snapshot.draft).toBe('ordinary draft')
     act(() => { b.wiring.setDraft('ordinary revised') })
     expect(b.store.store.getSnapshot().draft).toBe('ordinary revised')
-    fireEvent.keyDown(box, { key: 'Enter' })
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true })
     expect(b.sink).toHaveBeenCalledWith('ordinary revised', [], 'queue', expect.any(AbortSignal))
     expect((b.view.getByRole('button', { name: 'Child' }) as HTMLButtonElement).disabled).toBe(true)
     expect(b.view.queryByText('Root')).toBeNull()

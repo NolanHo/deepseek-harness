@@ -16,9 +16,9 @@
 - text: Reply with the single word LIGHTHOUSE and stop. {{clock}}
 - button "Copy":
   - img
-- button "Thought for a while":
-  - text: Thought for a while
+- button "Thought for a while · {{duration}}":
   - img
+  - text: Thought for a while · {{duration}}
 - paragraph: LIGHTHOUSE
 - button "Copy":
   - img

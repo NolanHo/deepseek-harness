@@ -30,6 +30,7 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `session-persistence-sqlite` messageCut | C | ~24 行 | 具体存储的索引切点；上游抽象、coordinator、jsonl 桩已回归原状 |
 | `session-query-sqlite` 活动观察记忆化 | C | 30 行 | 单函数内的局部记忆化 |
 | `client/ui-layout` AppFrame 移动端 shell | C | ~62 行 + fork 自有 `mobile-shell.tsx` | 视口机制 hook、抽屉 chrome、详情面板在 fork 模块里；AppFrame 组合 |
+| `api/session-controller` `openWorkspacePath` 桌面门控 + `ui-chat` 文件打开路由 | C | ~30 行 | 打开 RPC 查询 `canOpenPath()` 并以 `desktop unavailable` 快速失败；Chat 打开接口在第三方 `betterSidebar` 插件安装时把核心文件表面路由到其侧栏编辑器（`ctx.get` duck 检查），拒绝映射为 `fileOpen.desktopUnavailable` 文案，原生打开器保留为回落 |
 | `client/modules` + `client/web` 延迟启动批次 | C | 3 个文件约 120 行 | `WebBootBatchPhase 'deferred'` + `Config.defer` 切分 + 两段式 boot；上游形态（增量线格式字段、空默认）；defer 名单是部署配置而非仓库状态 |
 | `ui-workspace` 提升头部稳定 | C | ~20 行 | `nextSessionOrderAccount` 共流式时保持头部相对顺序；每个活跃突发一次提升 |
 | `ui-chat` StatsLine 绘制后测量 | C | 1 行 + 注释 | 省略号测试从 `useLayoutEffect` 移到 `useEffect`（绘制后）；行为零变化 |

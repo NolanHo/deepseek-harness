@@ -116,7 +116,6 @@ const kit: Omit<QuestionComposerProps, 'matched'> = {
     addImages: () => { throw new Error('unused') },
     removeImage: () => { throw new Error('unused') },
     pruneImages: () => { throw new Error('unused') },
-    submit: () => { throw new Error('unused') },
   },
   useStore: selector => selector(questionDraftStore.getSnapshot()),
   actions: questionDraftStore.actions,

@@ -6,7 +6,6 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import { makeTranslate, SlotTestRuntime } from '@deepseek-ai/dsh-client-test-runtime'
-import type { QueuedMessage } from '@deepseek-ai/dsh-api-session-controller/client'
 import { ComposerBlockRegistry } from '../src/client/input/blocks.ts'
 import { InputHub } from '../src/client/input/hub.ts'
 import { ConversationController, UnsupportedImageMediaTypeError } from '../src/client/service.ts'
@@ -363,84 +362,6 @@ describe('draft image dimension probe', () => {
       vi.unstubAllGlobals()
       created.mockRestore()
     }
-    await b.runtime.dispose()
-  })
-})
-
-describe('InputHub queue steering (empty-draft accelerated Enter)', () => {
-  const row = (id: string): QueuedMessage => ({
-    id: id as never,
-    messageId: `message-${id}` as never,
-    placement: 'queued',
-    content: [{ type: 'text', text: id }],
-    preview: id,
-    text: id,
-  })
-
-  it('steers every queued row in FIFO order and leaves steering rows alone', async () => {
-    const b = await bench()
-    await b.runtime.sessions.updateSessionSnapshot('s1', (draft) => {
-      draft.queue = [row('q-1'), { ...row('q-2'), placement: 'steering' }, row('q-3')]
-    })
-    b.shell.steerQueue()
-    await vi.waitFor(() => {
-      expect(b.updateQueue).toHaveBeenCalledTimes(2)
-    })
-    expect(b.updateQueue).toHaveBeenNthCalledWith(1, 'q-1', { kind: 'steer' })
-    expect(b.updateQueue).toHaveBeenNthCalledWith(2, 'q-3', { kind: 'steer' })
-    expect(b.shell.notices.getSnapshot()).toBeNull()
-    await b.runtime.dispose()
-  })
-
-  it('converges silently when the turn closes or a row is claimed mid-steer', async () => {
-    const b = await bench()
-    await b.runtime.sessions.updateSessionSnapshot('s1', (draft) => {
-      draft.queue = [row('q-1'), row('q-2')]
-    })
-    // The turn closes before the second row: the flush stops, silently.
-    b.updateQueue.mockResolvedValueOnce({
-      ok: false, error: { code: 'steer-unavailable', message: 'closed', details: {} },
-    } as never)
-    b.shell.steerQueue()
-    await vi.waitFor(() => { expect(b.updateQueue).toHaveBeenCalledTimes(1) })
-    expect(b.shell.notices.getSnapshot()).toBeNull()
-
-    // A row the host already claimed (e.g. a repeated empty-draft chord):
-    // the duplicate strict steer is a silent no-op.
-    await b.runtime.sessions.updateSessionSnapshot('s1', (draft) => {
-      draft.queue = [row('q-3')]
-    })
-    b.updateQueue.mockResolvedValueOnce({
-      ok: false, error: { code: 'queue-item-not-found', message: 'claimed', details: {} },
-    } as never)
-    b.shell.steerQueue()
-    await vi.waitFor(() => { expect(b.updateQueue).toHaveBeenCalledTimes(2) })
-    expect(b.shell.notices.getSnapshot()).toBeNull()
-    await b.runtime.dispose()
-  })
-
-  it('surfaces one notice on a genuine steer failure and stops', async () => {
-    const b = await bench()
-    await b.runtime.sessions.updateSessionSnapshot('s1', (draft) => {
-      draft.queue = [row('q-1'), row('q-2')]
-    })
-    b.updateQueue.mockResolvedValueOnce({
-      ok: false, error: { code: 'internal', message: 'broken', details: {} },
-    } as never)
-    b.shell.steerQueue()
-    await vi.waitFor(() => {
-      expect(b.shell.notices.getSnapshot()).toEqual(
-        expect.objectContaining({ level: 'error', text: '插话发送失败，请重试。' }),
-      )
-    })
-    expect(b.updateQueue).toHaveBeenCalledTimes(1)
-    await b.runtime.dispose()
-  })
-
-  it('no-ops without queued rows', async () => {
-    const b = await bench()
-    b.shell.steerQueue()
-    expect(b.updateQueue).not.toHaveBeenCalled()
     await b.runtime.dispose()
   })
 })

@@ -314,7 +314,6 @@ describe('DetailsPanel Output section (read)', () => {
           addImages: () => true,
           removeImage: () => {},
           pruneImages: () => {},
-          submit: () => {},
         }}
         useProjection={(() => undefined)}
         useStore={bindSnapshotSelector(chat)}

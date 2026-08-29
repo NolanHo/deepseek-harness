@@ -235,7 +235,7 @@ it('renders a host dimension rejection with the projected 2000px limit', async (
   await waitFor(() => {
     expect(document.querySelector('[role="group"][aria-label="Pending images"]')).not.toBeNull()
   })
-  fireEvent.keyDown(textarea, { key: 'Enter' })
+  fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
 
   const message = 'Image sides must be at most 2000px; downscale it and try again'
   const toast = await screen.findByText(message)

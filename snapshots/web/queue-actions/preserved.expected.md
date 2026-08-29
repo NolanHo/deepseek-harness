@@ -16,9 +16,9 @@
 - text: Reply with a one-sentence description of event sourcing, then stop. {{clock}}
 - button "Copy":
   - img
-- button "Thought for a while":
-  - text: Thought for a while
+- button "Thought for a while · {{duration}}":
   - img
+  - text: Thought for a while · {{duration}}
 - paragraph: partial
 - text: Stopped
 - button "Copy":

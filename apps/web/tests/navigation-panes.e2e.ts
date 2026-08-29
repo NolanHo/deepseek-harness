@@ -173,7 +173,7 @@ describe('web e2e: navigation & panes over a rich seeded session', () => {
       // Turn 2 types into the same composer once turn 1 unlocks it.
       await expect.poll(() => input.isEnabled(), { timeout: 15_000 }).toBe(true)
       await input.fill(prompt)
-      await input.press('Enter')
+      await input.press('Control+Enter')
       sessionId = await settled
     }
     await recordFixture(scaffold, sessionId!, SEED)
@@ -348,7 +348,7 @@ describe('web e2e: navigation & panes over a rich seeded session', () => {
       const slashDownloadPromise = page.waitForEvent('download', { timeout: 30_000 })
       await input.fill('/export')
       await page.getByRole('option', { name: /export/u }).waitFor({ timeout: 10_000 })
-      await input.press('Enter')
+      await input.press('Control+Enter')
       const slashDownload = await slashDownloadPromise
       expect(slashDownload.suggestedFilename()).toBe(download.suggestedFilename())
       const slashFiles = unzipSync(await readFile(await slashDownload.path()))

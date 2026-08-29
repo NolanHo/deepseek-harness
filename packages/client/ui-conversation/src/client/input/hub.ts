@@ -89,7 +89,6 @@ export class InputHub implements SessionInputResolver {
       popup: () => this.popup(actx),
       queue: queueReadFaceOf(session),
       defaultSink: (text, imageIds, mode, signal) => this.sink(session, text, imageIds, mode, signal),
-      steerQueue: () => { void this.steerQueue(session, shell) },
       commandImages: {
         serialize: ids => this.conversation().serializeDraftImages(ids),
         // Asymmetric with serialize on purpose: release settles AFTER the
@@ -181,30 +180,6 @@ export class InputHub implements SessionInputResolver {
   ): Promise<SubmitOutcome> {
     if (text === '' && imageIds.length === 0) return Promise.resolve({ kind: 'success' })
     return this.conversation().sendSession(session, text, imageIds, mode, signal)
-  }
-
-  /**
-   * Steer every still-pending queued message into the running turn, in FIFO
-   * order — the same strict-steer operation as the queue dock's per-row
-   * button. A turn closing mid-way (`steer-unavailable`) or a row already
-   * claimed by the agent (`queue-item-not-found`) converges silently, while a
-   * genuine failure surfaces as one composer notice. Repeated triggers
-   * (e.g. two rapid empty-draft chords) rely on that `queue-item-not-found`
-   * convergence: the snapshot may still list a row the host already steered,
-   * and the duplicate strict steer is a silent no-op.
-   * @param session - the addressed host session.
-   * @param shell - the resident shell (notice outlet).
-   */
-  private async steerQueue(session: SessionFace, shell: SessionInputShell): Promise<void> {
-    const queued = session.getSnapshot().queue.filter(item => item.placement === 'queued')
-    if (queued.length === 0) return
-    for (const item of queued) {
-      const result = await session.updateQueue(item.id, { kind: 'steer' })
-      if (result.ok) continue
-      if (result.error.code === 'steer-unavailable' || result.error.code === 'queue-item-not-found') return
-      shell.notify('error', this.t('queue.steerFailed'))
-      return
-    }
   }
 
   private controller(actx: Context): InputTriggerController | undefined {

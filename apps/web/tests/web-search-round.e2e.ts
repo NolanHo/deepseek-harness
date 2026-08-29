@@ -189,7 +189,7 @@ describe('web e2e: shipped default web search', () => {
     await input.waitFor({ timeout: 10_000 })
     const settled = scaffold.whenTurnSettled()
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const sessionId = await settled
     if (MODE === 'record') await recordFixture(scaffold, sessionId, FIXTURE)
   }, 200_000)

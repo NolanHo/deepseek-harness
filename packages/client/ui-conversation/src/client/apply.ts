@@ -254,8 +254,8 @@ export function apply(ctx: Context): void {
           addImages: undefined,
           removeImage: undefined,
           draftImages: undefined,
-          resolveSubmitMode: (running, gesture, steeringAvailable) =>
-            submissionPolicy.resolve(running, gesture, steeringAvailable),
+          resolveSubmitMode: (running, steeringAvailable) =>
+            submissionPolicy.resolve(running, steeringAvailable),
           toggleCommandMenu: undefined,
           stop: undefined,
           command: undefined,
@@ -288,8 +288,8 @@ export function apply(ctx: Context): void {
           shell.removeImage(id)
         },
         draftImages: ids => conversation.draftImages(ids),
-        resolveSubmitMode: (running, gesture, steeringAvailable) =>
-          submissionPolicy.resolve(running, gesture, steeringAvailable),
+        resolveSubmitMode: (running, steeringAvailable) =>
+          submissionPolicy.resolve(running, steeringAvailable),
         toggleCommandMenu: inputTriggers === undefined
           ? undefined
           : (selection) => {

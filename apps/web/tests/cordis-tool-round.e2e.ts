@@ -110,7 +110,7 @@ describe('web e2e: Cordis tools use their owned cards', () => {
     await input.waitFor({ timeout: 10_000 })
     const runTurnSettled = scaffold.whenTurnSettled()
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
 
     // The approval is the TEST's action in every mode: the fixture pins what the
     // model said, and the gate is a real round trip through the real panel.
@@ -132,7 +132,7 @@ describe('web e2e: Cordis tools use their owned cards', () => {
     await expect.poll(() => input.isEnabled(), { timeout: 15_000 }).toBe(true)
     const stopTurnSettled = scaffold.whenTurnSettled()
     await input.fill(STOP_PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await stopTurnSettled
     await expect.poll(() => {
       const stop = sessionEvents.find(

@@ -80,7 +80,7 @@ describe('web e2e: plan chip click area at the narrow viewport', () => {
     const input = page.locator('[data-composer-input]').first()
     await input.waitFor({ timeout: 10_000 })
     await input.fill('/plan ')
-    await input.press('Enter')
+    await input.press('Control+Enter')
 
     // The command handler commits plan/mode active immediately (no model
     // round), so the chip renders and the composer control row — the surface

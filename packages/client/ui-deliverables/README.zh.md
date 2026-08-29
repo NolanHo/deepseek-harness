@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-与 `ui-conversation` 一起挂载本插件；已完成轮次随即以产出文件行收尾，位于收尾消息正文与其动作页脚之间。每个标签项经 Host 打开器打开文件，相对路径按会话 cwd 解析；该行首次显示时会查询 `session.canOpenWorkspacePath()`，只有页面为 loopback 且查询成功返回 `true` 时，**在文件夹中显示**动作才会打开会话工作区。
+与 `ui-conversation` 一起挂载本插件；已完成轮次随即以产出文件行收尾，位于收尾消息正文与其动作页脚之间。每个标签项经 Host 打开器打开文件，相对路径按会话 cwd 解析；Host 报告没有原生打开器时，点击以本地化提示快速拒绝，不再启动平台打开器。该行首次显示时会查询 `session.canOpenWorkspacePath()`，只有页面为 loopback 且查询成功返回 `true` 时，**在文件夹中显示**动作才会打开会话工作区。
 
 ### 该行
 

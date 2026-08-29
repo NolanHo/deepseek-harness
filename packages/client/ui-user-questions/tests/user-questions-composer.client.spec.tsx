@@ -115,7 +115,6 @@ const kitBase: Omit<QuestionComposerProps, 'matched' | 'useStore' | 'actions'> =
     addImages: () => { throw new Error('unused') },
     removeImage: () => { throw new Error('unused') },
     pruneImages: () => { throw new Error('unused') },
-    submit: () => { throw new Error('unused') },
   },
   // The seat's key domain is question ∪ common.
   t: seatOver(zh, commonZh),

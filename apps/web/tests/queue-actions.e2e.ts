@@ -90,14 +90,14 @@ describe('web e2e: queue row actions', () => {
     const input = page.locator('[data-composer-input]').first()
     const firstSettled = scaffold.whenTurnSettled()
     await input.fill(ACTIVE_PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await expect.poll(() => existsSync(readyFile), { timeout: 15_000 }).toBe(true)
 
     for (const text of [REMOVE, EDIT]) {
       // A just-submitted composer is read-only for the prompt round-trip.
       await page.locator('[data-composer-input][contenteditable="true"]').first().waitFor({ timeout: 10_000 })
       await input.fill(text)
-      await input.press('Enter')
+      await input.press('Control+Enter')
     }
     const queueHeader = page.getByRole('button', { name: '2 queued messages' })
     await expect.poll(() => queueHeader.getAttribute('aria-expanded'), { timeout: 10_000 })
@@ -154,7 +154,7 @@ describe('web e2e: queue row actions', () => {
     expect(tripwire.warnings).toEqual([])
 
     await input.fill(TAIL)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await expect.poll(
       () => page.getByRole('button', { name: 'Remove queued message' }).count(),
       { timeout: 10_000 },
@@ -178,7 +178,7 @@ describe('web e2e: queue row actions', () => {
 
     const settled = scaffold.whenTurnSettled()
     await input.fill(WAKE)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await settled
     await expect.poll(() => turnEndReasons(sessionEvents), { timeout: 15_000 })
       .toEqual(['aborted', 'completed', 'completed', 'completed'])
@@ -209,7 +209,7 @@ describe('web e2e: queue row actions', () => {
     const settled = scaffold.whenTurnSettled()
     await page.locator('[data-composer-input][contenteditable="true"]').first().waitFor({ timeout: 10_000 })
     await input.fill('/goal Keep the composer context panels aligned')
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await expect.poll(() => existsSync(readyFile), { timeout: 15_000 }).toBe(true)
     await page.locator('[data-goal-bar]').waitFor({ timeout: 10_000 })
 
@@ -227,7 +227,7 @@ describe('web e2e: queue row actions', () => {
       // A just-submitted composer is read-only for the prompt round-trip.
       await page.locator('[data-composer-input][contenteditable="true"]').first().waitFor({ timeout: 10_000 })
       await input.fill(text)
-      await input.press('Enter')
+      await input.press('Control+Enter')
     }
     const queueHeader = page.getByRole('button', { name: '2 queued messages' })
     await expect.poll(() => queueHeader.getAttribute('aria-expanded'), { timeout: 10_000 })

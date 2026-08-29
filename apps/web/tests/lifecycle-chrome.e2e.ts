@@ -114,7 +114,7 @@ describe('web e2e: lifecycle & chrome (workspace flow / reload / dark mode)', ()
       await menu.waitFor({ timeout: 10_000 })
       await menu.getByRole('option', { name: 'plan Enter or leave plan mode' }).click()
       await expect.poll(() => input.textContent()).toBe('/plan ')
-      await input.press('Enter')
+      await input.press('Control+Enter')
       const planButton = activePage.getByRole('button', { name: 'Plan mode on, press to turn off' })
       await planButton.waitFor({ timeout: 10_000 })
       // The golden encodes an empty composer, and the button arriving does not
@@ -182,7 +182,7 @@ describe('web e2e: lifecycle & chrome (workspace flow / reload / dark mode)', ()
       const originalViewport = page.viewportSize() ?? { width: 1680, height: 1000 }
       if (MODE !== 'record') await page.setViewportSize({ width: 480, height: 1000 })
       try {
-        await input.press('Enter')
+        await input.press('Control+Enter')
         if (MODE !== 'record') {
           const liveTail = page.locator('[data-variant="think"][data-state="running"] [data-follow-end]')
           await expect.poll(async () => await liveTail.evaluate(element => (

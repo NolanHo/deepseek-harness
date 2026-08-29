@@ -113,7 +113,7 @@ describe.skipIf(MODE === 'record')('web e2e: user-explicit skill invocation thro
 
     const settled = scaffold.whenTurnSettled()
     await composer.fill(`/${SKILL_NAME} ${ARGS_TEXT}`)
-    await composer.press('Enter')
+    await composer.press('Control+Enter')
 
     // The gesture stays an ordinary user bubble (decorated /name token plus
     // the trailing text), ahead of the injected context.

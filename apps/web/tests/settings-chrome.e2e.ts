@@ -3,7 +3,7 @@
 // real theme gesture — click 深色 and the whole cascade runs: ThemeRuntime preference -> Host settings
 // -> theme/change -> ui-layout's presenter -> body attribute -> alias token +
 // browser theme-color metadata)
-// the Language row and busy-state Enter preference (both Host-backed), plus
+// the Language row and busy-state send preference (both Host-backed), plus
 // Permission as the persisted default for subsequently created sessions.
 // Zero model calls: everything is pure client + persistence state on a blank
 // frame, so there is no fixture and a stray stream would fail loud on the
@@ -438,7 +438,7 @@ describe('web e2e: settings modal and General preferences', () => {
     expect(tripwire.pageErrors).toEqual([])
   }, 90_000)
 
-  it('persists the busy-state Enter behavior across reload and a distinct port', async () => {
+  it('persists the busy-state send behavior across reload and a distinct port', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-settings-enter-behavior'))
     await page.getByRole('button', { name: '设置', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: '设置' })
