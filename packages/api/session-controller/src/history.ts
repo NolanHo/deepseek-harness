@@ -311,11 +311,62 @@ function addressId(address: SessionAddress): SessionId {
 }
 
 /**
+ * Backwards message walk shared by BOTH paging paths, so the indexed fast
+ * path and the observation fallback can never disagree on a boundary. User
+ * messages anchor pages — every page starts at a turn's opening user message
+ * and its provenance group head — with a whole-window fallback to any
+ * message for synthetic logs that carry no user messages. Each chosen
+ * message widens its cut through `sourceEventSeqs`, so pages never split a
+ * replacement or provenance group.
+ *
+ * @param window - Events in seq order (a dense log or an already-filtered
+ * suffix read).
+ * @param maxMessages - Page size in user messages (fallback: any message).
+ * @param endIndex - Exclusive walk bound: the dense log passes the seq end
+ * (index === seq), the suffix read passes its own length.
+ * @returns The cut seq (0 when the window holds fewer than one full page)
+ * and the chosen message count.
+ */
+function nthMessageCut(
+  window: readonly SessionEvent[],
+  maxMessages: number,
+  endIndex = window.length,
+): { readonly cut: number; readonly messages: number } {
+  let userCount = 0
+  let userCut = 0
+  let anyCount = 0
+  let anyCut = 0
+  for (let index = Math.min(endIndex, window.length) - 1; index >= 0; index--) {
+    const event = window[index] as SessionEvent
+    if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
+    const sources = (event as { readonly sourceEventSeqs?: readonly number[] }).sourceEventSeqs
+    let groupStart = event.seq
+    if (sources !== undefined) {
+      for (const source of sources) groupStart = Math.min(groupStart, source)
+    }
+    if (event.type === 'user/message') {
+      userCount++
+      // The cut pins only at the max-th user message; a window short of a
+      // full page stays whole (cut 0) like the any-message fallback below.
+      if (userCount === maxMessages) {
+        userCut = groupStart
+        break
+      }
+    }
+    // The fallback candidate pins once at the max-th message from the end;
+    // earlier messages never move it, matching the zero-user window's cut.
+    anyCount++
+    if (anyCount === maxMessages) anyCut = groupStart
+  }
+  return userCount > 0
+    ? { cut: userCut, messages: userCount }
+    : { cut: anyCut, messages: anyCount }
+}
+
+/**
  * Message-aligned pagination over a seq-indexed SUFFIX (the fast-path read
  * starts at a positive seq, so array indexes are not seqs — the observation
- * pagination's dense-index assumption does not transfer). Counts user
- * messages backwards from the page end, falling back to assistant messages
- * on synthetic logs, and cuts at the chosen message's group head.
+ * pagination's dense-index assumption does not transfer).
  */
 function paginateSuffix(
   events: readonly SessionEvent[],
@@ -325,32 +376,12 @@ function paginateSuffix(
 ): { readonly events: SessionEvent[]; readonly hasMore: boolean; readonly cut: number; readonly messages: number } {
   const end = Math.min(throughSeq + 1, beforeSeq ?? throughSeq + 1)
   const window = events.filter(event => event.seq < end)
-  const boundaryOf = (types: ReadonlySet<string>): { count: number; cut: number } => {
-    let count = 0
-    let cut = 0
-    for (let index = window.length - 1; index >= 0; index--) {
-      const event = window[index] as SessionEvent
-      if (!types.has(event.type) || !isAppendSurfaceEvent(event)) continue
-      count++
-      const sources = (event as { readonly sourceEventSeqs?: readonly number[] }).sourceEventSeqs
-      let groupStart = event.seq
-      if (sources !== undefined) {
-        for (const source of sources) groupStart = Math.min(groupStart, source)
-      }
-      if (count >= maxMessages) {
-        cut = groupStart
-        break
-      }
-    }
-    return { count, cut }
-  }
-  const user = boundaryOf(new Set(['user/message']))
-  const chosen = user.count > 0 ? user : boundaryOf(MESSAGE_TYPES)
+  const chosen = nthMessageCut(window, maxMessages)
   return {
     events: window.filter(event => event.seq >= chosen.cut),
     hasMore: chosen.cut > 0,
     cut: chosen.cut,
-    messages: chosen.count,
+    messages: chosen.messages,
   }
 }
 
@@ -415,23 +446,12 @@ function paginate(
   throughSeq = events.at(-1)?.seq ?? -1,
 ): { readonly events: SessionEvent[]; readonly hasMore: boolean } {
   const end = Math.min(throughSeq + 1, beforeSeq ?? throughSeq + 1)
-  let count = 0
-  let cut = 0
-  for (let index = end - 1; index >= 0; index--) {
-    const event = events[index] as SessionEvent
-    if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
-    count++
-    const sources = (event as { readonly sourceEventSeqs?: readonly number[] }).sourceEventSeqs
-    let groupStart = event.seq
-    if (sources !== undefined) {
-      for (const source of sources) groupStart = Math.min(groupStart, source)
-    }
-    if (count >= maxMessages) {
-      cut = groupStart
-      break
-    }
-  }
-  return { events: events.slice(cut, end), hasMore: cut > 0 }
+  // The observation log is dense (index === seq), so walking array indexes
+  // below `end` scopes the same `seq < end` window the indexed suffix path
+  // filters; one boundary rule serves both paths and they can never disagree
+  // on a page cut.
+  const chosen = nthMessageCut(events, maxMessages, end)
+  return { events: events.slice(chosen.cut, end), hasMore: chosen.cut > 0 }
 }
 
 function entryFor(event: SessionEvent): SessionEventEntry {

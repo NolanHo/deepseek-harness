@@ -238,15 +238,18 @@ describe('Session history raw journal', () => {
     // Two append-origin messages fill the page even though a replacement copy of
     // the same event type sits in the window: the copy is model-only.
     const messages = page.filter(event => event.type === 'user/message' || event.type === 'assistant/message')
-    expect(messages.map(event => event.seq)).toEqual([third.seq, third.seq + 1, third.seq + 3])
-    expect(page.some(event => event.seq === first.seq)).toBe(false)
+    // User-aligned pages count append-origin user messages: two turns back
+    // from the checkpoint reach the first prompt's group head, so the page
+    // spans both prompts and the replacement keeps its summary adjacent.
+    expect(messages.map(event => event.seq)).toEqual([first.seq, first.seq + 1, third.seq, third.seq + 1, third.seq + 3])
+    expect(page.some(event => event.seq === first.seq)).toBe(true)
     expect(response.value.hasMore).toBe(true)
     // The range stays contiguous, so the checkpoint's summary record is readable on
     // the same page as the checkpoint itself.
     const summaryIndex = page.findIndex(event => event.seq === summary.seq)
     expect(summaryIndex).toBeGreaterThan(-1)
     expect(page[summaryIndex + 1]?.seq).toBe(summary.seq + 1)
-    expect(page.map(event => event.seq)).toEqual(page.map((_event, index) => third.seq + index))
+    expect(page.map(event => event.seq)).toEqual(page.map((_event, index) => first.seq + index))
   })
 
   it('paginates a message with many provenance sources without variadic argument expansion', async () => {
