@@ -387,7 +387,7 @@ describe('boot manifest wire', () => {
       .toThrow('client-modules: boot manifest batch is not an object')
     expect(() => parseBootManifest({
       rev: 'graph', entries: [entry], batches: [{ phase: 'idle', url: '/b.js', rev: 'b', entries: ['a'] }],
-    })).toThrow('boot manifest batch phase must be "bootstrap" or "application"')
+    })).toThrow('boot manifest batch phase must be "bootstrap", "application", or "deferred"')
   })
 
   it('rejects duplicate batch URLs', () => {

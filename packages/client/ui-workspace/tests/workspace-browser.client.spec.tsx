@@ -411,6 +411,43 @@ describe('WorkspaceBrowser', () => {
     expect(screen.getAllByRole('treeitem').slice(1)[0]?.textContent).toContain('two')
   })
 
+  it('keeps the leading promoted run stable while sessions co-stream', async () => {
+    const b = mount({
+      useSessions: hook(sessionState([summary('one', 3), summary('two', 2)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['two', 'one'])])),
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    fireEvent.click(screen.getByRole('button', { name: '视图选项' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '最近更新' }))
+    await waitFor(() => {
+      expect(b.store.getSnapshot().sessionOrderByAccount.alpha).toEqual(['one', 'two'])
+    })
+
+    // Alternating updates: both rows stay in the leading promoted run, so the
+    // order must not reshuffle per tick — the recency comparator would swap
+    // them on every bump (sidebar layout churn while sessions stream).
+    rerender(b, { useSessions: hook(sessionState([summary('one', 5), summary('two', 4)])) })
+    await waitFor(() => {
+      expect(b.store.getSnapshot().sessionUpdatedAtByAccount.alpha).toEqual({ one: 5, two: 4 })
+    })
+    expect(b.store.getSnapshot().sessionOrderByAccount.alpha).toEqual(['one', 'two'])
+    rerender(b, { useSessions: hook(sessionState([summary('one', 6), summary('two', 7)])) })
+    await waitFor(() => {
+      expect(b.store.getSnapshot().sessionUpdatedAtByAccount.alpha).toEqual({ one: 6, two: 7 })
+    })
+    expect(b.store.getSnapshot().sessionOrderByAccount.alpha).toEqual(['one', 'two'])
+
+    // A row outside the head activating once still jumps to the front.
+    rerender(b, {
+      useSessions: hook(sessionState([summary('one', 6), summary('two', 7), summary('three', 9)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['two', 'one', 'three'])])),
+    })
+    await waitFor(() => {
+      expect(b.store.getSnapshot().sessionOrderByAccount.alpha).toEqual(['three', 'one', 'two'])
+    })
+    expect(screen.getAllByRole('treeitem').slice(1)[0]?.textContent).toContain('three')
+  })
+
   it('archives a session from the row menu and hides archived rows in both modes', async () => {
     const archiveSession = vi.fn(async () => {})
     const b = mount({

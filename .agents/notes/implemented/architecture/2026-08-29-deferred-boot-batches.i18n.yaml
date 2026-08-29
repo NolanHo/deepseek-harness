@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-29-deferred-boot-batches.md
+2026-08-29-deferred-boot-batches.md: 15e4911c26333ab61f0bcda5a265df164716c8e2
+2026-08-29-deferred-boot-batches.zh.md: cd28ce7d033c060e5f5420ef9ab87d2c97fb3777

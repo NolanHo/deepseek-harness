@@ -217,4 +217,87 @@ describe('plugin activation', () => {
     expect(container.textContent).toBe('mounted')
     await entry.dispose()
   })
+
+  it('creates deferred-batch entries only after the application mounts', async () => {
+    const events: string[] = []
+    const container = document.createElement('div')
+    document.body.append(container)
+    const target = installFacade()
+    const entries: WebBootEntry[] = [
+      { id: 'consumer', url: '/consumer.js', rev: '1' },
+      { id: MODULES_ID, url: '/modules.js', rev: '1' },
+      { id: 'renderer', url: '/renderer.js', rev: '1' },
+      { id: 'late-plugin', url: '/late-plugin.js', rev: '1' },
+    ]
+    win.__DSH_BOOT__ = {
+      rev: 'graph',
+      entries,
+      batches: [
+        {
+          phase: 'application',
+          url: '/application.js',
+          rev: 'batch',
+          entries: entries.filter(row => row.id !== 'late-plugin').map(row => row.id),
+        },
+        { phase: 'deferred', url: '/deferred.js', rev: 'deferred', entries: ['late-plugin'] },
+      ],
+    }
+    const registrations = new Map<string, ClientBundleRegistration>([
+      ['/consumer.js', {
+        id: 'consumer',
+        factory: () => ({
+          apply: () => {
+            events.push('consumer')
+          },
+        }),
+      }],
+      ['/renderer.js', {
+        id: 'renderer',
+        factory: () => ({
+          apply: (ctx: Context) => {
+            ctx.reflect.provide('uiRenderer', {
+              mount: (element: HTMLElement) => {
+                events.push('mount')
+                element.textContent = 'mounted'
+                return () => {}
+              },
+            })
+          },
+        }),
+      }],
+      ['/late-plugin.js', {
+        id: 'late-plugin',
+        factory: () => ({
+          apply: () => {
+            events.push('late-plugin')
+          },
+        }),
+      }],
+    ])
+    const entry = new AppWebEntry(container, {
+      loadBundle: async (url) => {
+        events.push(`load:${url}`)
+        if (url !== '/application.js' && url !== '/deferred.js') {
+          throw new Error(`missing fixture batch ${url}`)
+        }
+        const batch = url === '/application.js'
+          ? entries.filter(row => row.id !== 'late-plugin').map(row => row.id)
+          : ['late-plugin']
+        for (const id of batch) {
+          const registration = registrations.get(`/${id}.js`)
+          if (registration !== undefined) target.load(registration)
+        }
+      },
+    })
+
+    await entry.run()
+
+    // The pre-mount batch settled and mounted before the deferred bundle loaded.
+    expect(events.indexOf('mount')).toBeLessThan(events.indexOf('load:/deferred.js'))
+    await vi.waitFor(() => {
+      expect(events).toContain('late-plugin')
+    })
+    expect(events).toEqual(['load:/application.js', 'consumer', 'mount', 'load:/deferred.js', 'late-plugin'])
+    await entry.dispose()
+  })
 })

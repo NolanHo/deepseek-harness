@@ -135,16 +135,27 @@ function nextSessionOrderAccount({
   if (sortByRecency) {
     order.sort((a, b) => compareSessionRecency(a, b, list.byId))
   } else if (orderBy === 'updated') {
-    const promoted = sessionIds
-      .filter((id) => {
-        const session = list.byId[id]
-        return session !== undefined
-          && (previousUpdatedAt[id] === undefined || session.updatedAt > previousUpdatedAt[id])
-      })
-      .sort((a, b) => compareSessionRecency(a, b, list.byId))
-    if (promoted.length > 0) {
-      const promotedIds = new Set(promoted)
-      order = [...promoted, ...order.filter(id => !promotedIds.has(id))]
+    const promoted = new Set(sessionIds.filter((id) => {
+      const session = list.byId[id]
+      return session !== undefined
+        && (previousUpdatedAt[id] === undefined || session.updatedAt > previousUpdatedAt[id])
+    }))
+    if (promoted.size > 0) {
+      // Rows already leading the order keep their relative positions while they
+      // stream together: re-sorting the promoted set on every update swap
+      // co-streaming rows continuously. Only rows outside the leading promoted
+      // run jump to the front, newest first — one promotion per activity burst.
+      const head: SessionId[] = []
+      for (const id of order) {
+        if (!promoted.has(id)) break
+        head.push(id)
+      }
+      const headSet = new Set(head)
+      const fresh = order
+        .filter(id => !headSet.has(id) && promoted.has(id))
+        .sort((a, b) => compareSessionRecency(a, b, list.byId))
+      const freshSet = new Set(fresh)
+      order = [...fresh, ...head, ...order.filter(id => !headSet.has(id) && !freshSet.has(id))]
     }
   }
   const updatedAt: Record<string, number> = {}

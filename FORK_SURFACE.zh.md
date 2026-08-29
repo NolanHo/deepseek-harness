@@ -26,18 +26,21 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `ui-chat` TurnProcessNodeView 标签+时长、ChatNodeSeat 门移除、locale、CSS | C | ~60 行 | 折叠增强；局部块 |
 | `ui-chat` ChatView 读者输入归因 | D | 32 行 | 上游滚动跟随 bug 的修复（钳位误判）；关注上游自行修复以缩小该 diff |
 | `ui-conversation`/`ui-chat` CSS overflow-anchor + 安全区 | C | ~40 行 | 滚动容器锚定；局部规则 |
-| `api/session-controller/src/history.ts` 快路径 + 边界 | D | 205 行 | messageCut 快路径；user 对齐回合完整边界（现为上游 `paginate` 共用） |
-| `session-persistence` + `-sqlite` messageCut | D | ~75 行 | 上游持久化接口上的抽象方法 + SQL |
+| `api/session-controller/src/history.ts` 快路径注入 | C | ~60 行 | 委托给 fork 自有 `src/page-boundary.ts`（边界游走、梯子、快路径计划）；`page()` 一次调用加 `paginate` 的委托 |
+| `session-persistence-sqlite` messageCut | C | ~24 行 | 具体存储的索引切点；上游抽象、coordinator、jsonl 桩已回归原状 |
 | `session-query-sqlite` 活动观察记忆化 | C | 30 行 | 单函数内的局部记忆化 |
-| `client/ui-layout` AppFrame 移动端 shell | D | 503 行 | 上游 AppFrame 内的 fork 移动端视口机制 |
+| `client/ui-layout` AppFrame 移动端 shell | C | ~62 行 + fork 自有 `mobile-shell.tsx` | 视口机制 hook、抽屉 chrome、详情面板在 fork 模块里；AppFrame 组合 |
+| `client/modules` + `client/web` 延迟启动批次 | C | 3 个文件约 120 行 | `WebBootBatchPhase 'deferred'` + `Config.defer` 切分 + 两段式 boot；上游形态（增量线格式字段、空默认）；defer 名单是部署配置而非仓库状态 |
+| `ui-workspace` 提升头部稳定 | C | ~20 行 | `nextSessionOrderAccount` 共流式时保持头部相对顺序；每个活跃突发一次提升 |
+| `ui-chat` StatsLine 绘制后测量 | C | 1 行 + 注释 | 省略号测试从 `useLayoutEffect` 移到 `useEffect`（绘制后）；行为零变化 |
 
 ## 优化方案（按优先级）
 
-1. **从 `history.ts` 抽出分页核心** — 把 `nthMessageCut`、`turnAlignedCut`、`paginateSuffix` 和 `tryIndexedPage` 的纯函数部分移入 fork 自有模块（如 `src/page-boundary.ts`，上游永远不会有的文件）。`history.ts` 只留约 10 行注入点：import、`page()` 里的 `tryIndexedPage` 调用、`paginate` 对共享游走的委托。上游重构 `page()` 时冲突面是十行而不是两百行。
-2. **把 `messageCut` 移出上游持久化接口** — fork 自有服务（独立包或 `session-query-sqlite` 内的扩展）暴露索引切点；`history.ts` 的快路径已经是可选能力发现（`SeekablePersistence` duck-typing）。上游的 `SessionPersistence` 抽象和 coordinator 回归原状；SQL 随 fork 服务走。
+1. **DONE — 从 `history.ts` 抽出分页核心** — 把 `nthMessageCut`、`turnAlignedCut`、`paginateSuffix` 和 `tryIndexedPage` 的纯函数部分移入 fork 自有模块（如 `src/page-boundary.ts`，上游永远不会有的文件）。`history.ts` 只留约 10 行注入点：import、`page()` 里的 `tryIndexedPage` 调用、`paginate` 对共享游走的委托。上游重构 `page()` 时冲突面是十行而不是两百行。
+2. **DONE — 把 `messageCut` 移出上游持久化接口** — fork 自有服务（独立包或 `session-query-sqlite` 内的扩展）暴露索引切点；`history.ts` 的快路径已经是可选能力发现（`SeekablePersistence` duck-typing）。上游的 `SessionPersistence` 抽象和 coordinator 回归原状；SQL 随 fork 服务走。
 3. **改动时即写合并 runbook，而非同步时补** — 每个 C/D 层改动在本清单记下注入点；同步重放从头到尾照单执行。
 4. **保持 D 层 diff 紧凑并带标记** — 滚动归因块带原理解释注释；上游若自行修复同一钳位 bug，该 diff 缩为零（在上游发布中关注）。
-5. **AppFrame 移动端 shell** — 最大面积。现实上保持 patch（布局是上游核心组件），但把 fork 的视口机制放进 `columns.ts` 式的叶子模块，让 AppFrame 的 diff 保持 import-and-delegate 形态。
+5. **DONE — AppFrame 移动端 shell** — 最大面积。现实上保持 patch（布局是上游核心组件），但把 fork 的视口机制放进 `columns.ts` 式的叶子模块，让 AppFrame 的 diff 保持 import-and-delegate 形态。
 6. **PAGE_MESSAGES** — 一行；若常变可改 build 时 env（`DSH_CLIENT_PAGE_MESSAGES`）。
 
 ## 同步流程（runbook）

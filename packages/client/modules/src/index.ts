@@ -32,6 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Entry } from '@deepseek-ai/cordis-plugin-loader'
+import z from '@deepseek-ai/schemastery'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
 import { optionalStringArray, stripClientSuffix } from './client/manifest.ts'
 import type { WebBootBatch, WebBootBatchPhase, WebBootEntry, WebBootGraph } from './client/manifest.ts'
@@ -523,8 +524,22 @@ window.__ModuleLoader__={
   return rows
 }
 
-/**
- * The web plugin table service: incremental `dsh.client` scan + wire composition
+/** Deferred-batch composition config for the web plugin table. */
+export interface Config {
+  /**
+   * Package names whose browser bundles ride `deferred` batches: the shell
+   * fetches and creates those entries only after the application mounts, so
+   * their bytes stay off the first-paint critical path. A name may go stale
+   * (an uninstalled plugin); it is ignored. A deferred package must not be
+   * stage-one (`immediately`) and must not be requested through a surviving
+   * row's `external` — both contradictions fail composition loudly. A
+   * pre-mount plugin whose Cordis service the deferred package provides stays
+   * pending and surfaces in the boot activation audit.
+   */
+  defer: string[]
+}
+
+/** The web plugin table service: incremental `dsh.client` scan + wire composition
  * + bundle route + index injection rows. Construction runs the activation scan
  * synchronously — a malformed declaration or missing bundle among the
  * already-loaded entries aggregates into one loud throw (FAILED fiber; the
@@ -532,6 +547,14 @@ window.__ModuleLoader__={
  */
 export class ClientModuleRegistry extends Service {
   static inject = ['webServer', 'loader']
+
+  static Config: z<Config> = z.object({
+    defer: z.array(String).default([]),
+  })
+
+  private readonly deferredPackages: ReadonlySet<string>
+  /** Stale defer names already warned about, so recomposition logs each once. */
+  private readonly warnedStaleDefer = new Set<string>()
 
   private readonly table = new Map<string, WebPluginRecord>()
   private readonly sources = new Map<string, ClientPackageSource>()
@@ -554,9 +577,11 @@ export class ClientModuleRegistry extends Service {
   /**
    * Build the service: subscribe, seed, and run the activation flush.
    * @param ctx - plugin context carrying webServer and loader.
+   * @param config - composition config (deferred-batch package names).
    */
-  constructor(ctx: Context) {
+  constructor(ctx: Context, config?: Config) {
     super(ctx, 'clientModules')
+    this.deferredPackages = new Set(config?.defer ?? [])
     // Subscribe before seeding so a fiber arriving mid-activation lands in the
     // same dirty set (Set idempotence makes the overlap harmless). An entry-less
     // fiber is a child plugin or a manual mount — never a loader row; O(1) drop.
@@ -699,16 +724,52 @@ export class ClientModuleRegistry extends Service {
       .map(id => this.table.get(id))
       .filter((record): record is WebPluginRecord => record !== undefined)
     const bootstrapIds = new Set(bootstrap.map(record => record.entry.id))
-    const application = entries
+    const candidates = entries
       .filter(entry => !bootstrapIds.has(entry.id))
       .map(entry => this.table.get(entry.id))
       .filter((record): record is WebPluginRecord => record !== undefined)
+    const critical: WebPluginRecord[] = []
+    const deferred: WebPluginRecord[] = []
+    const deferredIds = new Set<string>()
+    for (const record of candidates) {
+      if (this.deferredPackages.has(record.entry.id)) {
+        deferredIds.add(record.entry.id)
+        deferred.push(record)
+      } else {
+        critical.push(record)
+      }
+    }
+    for (const name of this.deferredPackages) {
+      if (!deferredIds.has(name) && !this.warnedStaleDefer.has(name)) {
+        this.warnedStaleDefer.add(name)
+        this.ctx.logger.warn(`client-modules: deferred row "${name}" is not an active client package; ignoring`)
+      }
+    }
+    for (const record of deferred) {
+      if (record.entry.immediately) {
+        throw new Error(`client-modules: deferred row "${record.entry.id}" is also stage-one (immediately); remove one of the two marks`)
+      }
+    }
+    for (const record of critical) {
+      for (const specifier of record.entry.external ?? []) {
+        const dependency = stripClientSuffix(specifier)
+        if (deferredIds.has(dependency)) {
+          throw new Error(
+            `client-modules: row "${record.entry.id}" requests module "${specifier}" from deferred row "${dependency}"; `
+            + 'a pre-mount package cannot depend on a deferred one',
+          )
+        }
+      }
+    }
     const artifacts: BatchArtifact[] = []
     for (const records of partitionComboRecords(bootstrap)) {
       artifacts.push(buildBatch('bootstrap', records))
     }
-    for (const records of partitionComboRecords(application)) {
+    for (const records of partitionComboRecords(critical)) {
       artifacts.push(buildBatch('application', records))
+    }
+    for (const records of partitionComboRecords(deferred)) {
+      artifacts.push(buildBatch('deferred', records))
     }
 
     const batchResponses = new Map<string, { body: Buffer; contentType: string }>()

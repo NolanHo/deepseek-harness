@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-29-user-aligned-turn-complete-paging.md
-2026-08-29-user-aligned-turn-complete-paging.md: 300d35da39bfd444241337fd9974ab7788ce2dc3
-2026-08-29-user-aligned-turn-complete-paging.zh.md: 00d718db40c1fdc352243998c38ec24025bc1dd5
+2026-08-29-user-aligned-turn-complete-paging.md: 3561c65bdcfb9d6c097edb2640dacac9ce3836a4
+2026-08-29-user-aligned-turn-complete-paging.zh.md: 0d3372af7b3a90eb91fa395a979c864918b5047c

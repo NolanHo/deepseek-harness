@@ -7,7 +7,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import type {
-  BootManifest, ClientModuleCreateOptions, ClientModuleSystem, DshWindow,
+  BootManifest, BootPluginRow, ClientModuleCreateOptions, ClientModuleSystem, DshWindow,
 } from '@deepseek-ai/dsh-client-modules/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { BootPage } from './boot-page.ts'
@@ -39,8 +39,9 @@ export class AppWebEntry {
   }
 
   /**
-   * Load and activate every client entry, then hand the mount point to the
-   * UI renderer. Plugin failures remain visible on the boot page.
+   * Load and activate every pre-mount client entry, hand the mount point to the
+   * UI renderer, then create deferred entries in the background. Plugin
+   * failures before the mount remain visible on the boot page.
    * @returns Resolves after application mount or failure rendering.
    */
   async run(): Promise<void> {
@@ -78,6 +79,11 @@ export class AppWebEntry {
       this.ctx = ctx
       await this.runPluginBoot(ctx, prefetching)
       await this.mountApp(ctx)
+      // The application is up: fetch and create the deferred batches whose
+      // bytes stayed off the first-paint critical path. Their UI arrives as
+      // the slots they fill register; a failure lands in the console (the
+      // boot page is gone).
+      void this.activateDeferred(ctx, this.manifest.plugins.filter(row => row.deferred))
     } catch (reason) {
       console.error(reason)
       this.page.fail(reason instanceof Error ? reason.message : String(reason))
@@ -109,7 +115,7 @@ export class AppWebEntry {
       })))
   }
 
-  /** Mount the Loader, create all graph entries, await quiescence, and audit activation. */
+  /** Mount the Loader, create pre-mount graph entries, await quiescence, and audit activation. */
   private async runPluginBoot(ctx: Context, prefetching: Promise<void>): Promise<void> {
     await ctx.plugin(Loader)
     const loader = ctx.loader
@@ -121,23 +127,41 @@ export class AppWebEntry {
       this.page.setState(entry.options.name, STATE_LABELS[entry.fiber.state])
     })
 
-    const rows = this.manifest.plugins.map(row => row.id)
-    this.page.setTotal(rows.length)
+    const preMount = this.manifest.plugins.filter(row => !row.deferred)
+    this.page.setTotal(preMount.length)
     await prefetching
-    await Promise.all(rows.map(async (name) => {
-      this.page.setState(name, 'loading')
-      const id = await loader.create({ name })
-      if (loader.resolve(id).fiber === undefined) this.page.setState(name, 'failed')
+    await Promise.all(preMount.map(async (row) => {
+      this.page.setState(row.id, 'loading')
+      const id = await loader.create({ name: row.id })
+      if (loader.resolve(id).fiber === undefined) this.page.setState(row.id, 'failed')
     }))
 
     await loader.await()
-    this.assertEntriesActive(ctx)
+    this.assertEntriesActive(ctx, new Set(preMount.map(row => row.id)))
+  }
+
+  /** Fetch and create deferred entries after mount, then audit them in the background. */
+  private async activateDeferred(ctx: Context, rows: BootPluginRow[]): Promise<void> {
+    try {
+      const loader = ctx.loader
+      await Promise.all(rows.map(async (row) => {
+        const id = await loader.create({ name: row.id })
+        if (loader.resolve(id).fiber === undefined) {
+          console.error(`web boot: deferred entry ${row.id} did not import (see console for the import error)`)
+        }
+      }))
+      await loader.await()
+      this.assertEntriesActive(ctx, new Set(rows.map(row => row.id)))
+    } catch (reason) {
+      console.error(reason instanceof Error ? reason.message : String(reason))
+    }
   }
 
   /** Reject entries that failed import/apply or still wait on missing services. */
-  private assertEntriesActive(ctx: Context): void {
+  private assertEntriesActive(ctx: Context, expected: ReadonlySet<string>): void {
     const failures: string[] = []
     for (const entry of ctx.loader.entries()) {
+      if (!expected.has(entry.options.name)) continue
       const name = entry.options.name
       if (entry.fiber === undefined) {
         failures.push(`${name}: import failed (see console for the import error)`)

@@ -30,6 +30,9 @@ The 0.1.2-alpha.1 sync (1079 upstream commits) resolved 123 conflicts. The pain 
 | `session-persistence-sqlite` messageCut | C | ~24 lines | The concrete store's indexed seek; upstream's abstract, coordinator, and jsonl stub are pristine again |
 | `session-query-sqlite` live-observation memo | C | 30 lines | Localized memo in one function |
 | `client/ui-layout` AppFrame mobile shell | C | ~62 lines + fork-owned `mobile-shell.tsx` | The regime hook, drawer chrome, and details sheet live in the fork's module; AppFrame composes |
+| `client/modules` + `client/web` deferred boot batches | C | ~120 lines across 3 files | `WebBootBatchPhase 'deferred'` + `Config.defer` partition + two-stage boot; upstream-shaped (additive wire field, empty default); the defer list is deployment config, not repo state |
+| `ui-workspace` stable promotion head | C | ~20 lines | `nextSessionOrderAccount` keeps the leading promoted run stable while sessions co-stream; one promotion per activity burst |
+| `ui-chat` StatsLine passive measurement | C | 1 line + comment | Ellipsis test in `useEffect` (post-paint) instead of `useLayoutEffect`; no behavior change |
 
 ## Optimization plan (priority order)
 

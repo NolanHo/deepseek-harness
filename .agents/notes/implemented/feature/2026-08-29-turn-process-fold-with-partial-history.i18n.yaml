@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-29-turn-process-fold-with-partial-history.md
-2026-08-29-turn-process-fold-with-partial-history.md: 73c79a5c43168360aa45d27f577e90c1bcc5b4c8
-2026-08-29-turn-process-fold-with-partial-history.zh.md: 68d79587dc579f5e1607d41c94c97f5c5d0b00da
+2026-08-29-turn-process-fold-with-partial-history.md: 182563b736a22240e2ffdd96fb5efd879d70c7c4
+2026-08-29-turn-process-fold-with-partial-history.zh.md: 0f8a788c71518df360d8007fcbd1a8956914265e

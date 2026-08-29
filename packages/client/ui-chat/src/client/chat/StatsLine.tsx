@@ -2,7 +2,7 @@
 // Mounted on 'conversation.composer.dock' so it sticks with the composer in the
 // active conversation scrollport (see ConversationRoot data-conversation-scroll).
 
-import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
@@ -167,10 +167,14 @@ export const StatsLine = memo(function StatsLine({ useChat, useProjection, t }: 
   }
   const line = groups.join(' | ')
   // The row elides with ellipsis when overlong; a delayed hover tooltip carries
-  // the full line, enabled only while content is actually clipped.
+  // the full line, enabled only while content is actually clipped. The
+  // ellipsis test forces a style+layout flush per row, so it runs as a passive
+  // effect: a session-open commit renders the whole visible window before any
+  // StatsLine reads layout, keeping the open-render long task free of the
+  // measurement pass (hover waits 500 ms; nothing visible changes).
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [truncated, setTruncated] = useState(false)
-  useLayoutEffect(() => {
+  useEffect(() => {
     const el = rootRef.current
     if (el === null) return
     const measure = () => { setTruncated(el.scrollWidth > el.clientWidth) }

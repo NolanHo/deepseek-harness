@@ -64,6 +64,7 @@ function constructWithRoute(
     contextBaseUrl?: string
     entryBaseUrl?: string
     internal?: NonNullable<Context['loader']['internal']>
+    defer?: string[]
   } = {},
 ): { context: Context; service: ClientModuleRegistry; route: WebRoute } {
   const ctx = new Context()
@@ -91,7 +92,7 @@ function constructWithRoute(
     tapIndex: () => () => {},
   }
   ctx.provide('webServer', webServer as WebServer)
-  const service = new ClientModuleRegistry(ctx)
+  const service = new ClientModuleRegistry(ctx, options.defer === undefined ? undefined : { defer: options.defer })
   if (route === undefined) throw new Error('client bundle route was not registered')
   return { context: ctx, service, route }
 }
@@ -592,6 +593,48 @@ describe('client bundle activation', () => {
       const entries = [...batches[index]!.entries, batches[index + 1]!.entries[0]!]
       expect(Buffer.byteLength(mapUrl(comboUrl(entries, '0'.repeat(12))))).toBeGreaterThan(3 * 1024)
     }
+  })
+
+  it('routes deferred packages into post-mount batches and keeps them off the preload table', async () => {
+    const critical = '@fixture/defer-critical'
+    const deferred = '@fixture/defer-plugin'
+    writeBuiltPackage(critical, {})
+    writeBuiltPackage(deferred, {})
+    const { service, route } = constructWithRoute([critical, deferred], { defer: [deferred] })
+    const graph = service.graph()
+    const application = graph.batches.filter(batch => batch.phase === 'application')
+    const deferredBatches = graph.batches.filter(batch => batch.phase === 'deferred')
+    expect(application.flatMap(batch => batch.entries)).toEqual([critical])
+    expect(deferredBatches.flatMap(batch => batch.entries)).toEqual([deferred])
+    expect(bootInjections(graph).filter(row => row.kind === 'script-preload'))
+      .toEqual(application.map(batch => ({ kind: 'script-preload', src: batch.url })))
+    expect((await routeRequest(route, deferredBatches[0]!.url)).status).toBe(200)
+  })
+
+  it('rejects deferring a stage-one package', () => {
+    const immediate = '@fixture/defer-immediate'
+    writeBuiltPackage(immediate, { immediately: true })
+    expect(() => constructWithRoute([immediate], { defer: [immediate] }))
+      .toThrow('client-modules: deferred row "@fixture/defer-immediate" is also stage-one (immediately)')
+  })
+
+  it('rejects a pre-mount external request aimed at a deferred package', () => {
+    const critical = '@fixture/defer-consumer'
+    const deferred = '@fixture/defer-target'
+    writeBuiltPackage(critical, { external: [deferred] })
+    writeBuiltPackage(deferred, {})
+    expect(() => constructWithRoute([critical, deferred], { defer: [deferred] }))
+      .toThrow('client-modules: row "@fixture/defer-consumer" requests module "@fixture/defer-target" from deferred row')
+  })
+
+  it('ignores stale defer names without touching the batch table', () => {
+    const critical = '@fixture/defer-alone'
+    writeBuiltPackage(critical, {})
+    const { service } = constructWithRoute([critical], { defer: ['@fixture/not-installed'] })
+    const graph = service.graph()
+    expect(graph.batches.filter(batch => batch.phase === 'application').flatMap(batch => batch.entries))
+      .toEqual([critical])
+    expect(graph.batches.filter(batch => batch.phase === 'deferred')).toEqual([])
   })
 
   it('serves the source map beside a registered client bundle', async () => {

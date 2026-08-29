@@ -62,12 +62,17 @@ export interface WebBootEntry {
   external?: string[]
 }
 
-/** Initial scheduling phase for one content-addressed combo script. */
-export type WebBootBatchPhase = 'bootstrap' | 'application'
+/**
+ * Initial scheduling phase for one content-addressed combo script. Bootstrap
+ * scripts block the parser; application scripts are preloaded before the shell
+ * runs; deferred scripts stay unfetched until the shell asks for their
+ * entries after first mount.
+ */
+export type WebBootBatchPhase = 'bootstrap' | 'application' | 'deferred'
 
 /** One initial combo script; a scheduling phase may span several descriptors. */
 export interface WebBootBatch {
-  /** Parser-blocking bootstrap or preloaded application scheduling. */
+  /** Parser-blocking bootstrap, preloaded application, or post-mount deferred scheduling. */
   phase: WebBootBatchPhase
   /** Content-addressed combo script endpoint. */
   url: string
@@ -121,6 +126,8 @@ export interface BootPluginRow {
   inject: string[]
   /** Stage-one prefetch tier (false when the wire omits it). */
   immediately: boolean
+  /** The row rides a deferred batch: the shell creates it after first mount (false for every pre-mount phase). */
+  deferred: boolean
 }
 
 /** The parsed boot manifest: one wire, two consumer views. */
@@ -222,20 +229,22 @@ export function parseBootManifest(wire: unknown): BootManifest {
       id: row.id,
       inject: inject === undefined ? [] : [...inject],
       immediately: row.immediately === true,
+      deferred: false,
     })
   }
 
   const entryIds = new Set(moduleFields.map(row => row.id))
   const initialUrls = new Map<string, string>()
   const batchUrls = new Set<string>()
+  const deferredEntryIds = new Set<string>()
   for (const value of graph.batches as unknown[]) {
     if (typeof value !== 'object' || value === null) {
       throw new Error('client-modules: boot manifest batch is not an object')
     }
     const batch = value as Record<string, unknown>
     const phase = batch.phase
-    if (phase !== 'bootstrap' && phase !== 'application') {
-      throw new Error(`client-modules: boot manifest batch phase must be "bootstrap" or "application", received ${JSON.stringify(phase)}`)
+    if (phase !== 'bootstrap' && phase !== 'application' && phase !== 'deferred') {
+      throw new Error(`client-modules: boot manifest batch phase must be "bootstrap", "application", or "deferred", received ${JSON.stringify(phase)}`)
     }
     if (typeof batch.url !== 'string' || typeof batch.rev !== 'string') {
       throw new Error(`client-modules: boot manifest ${phase} batch must carry string url/rev`)
@@ -256,7 +265,11 @@ export function parseBootManifest(wire: unknown): BootManifest {
         throw new Error(`client-modules: boot manifest entry "${id}" belongs to more than one batch`)
       }
       initialUrls.set(id, batch.url)
+      if (phase === 'deferred') deferredEntryIds.add(id)
     }
+  }
+  for (const row of plugins) {
+    if (deferredEntryIds.has(row.id)) row.deferred = true
   }
   const modules = moduleFields.map((row): BootModuleRow => {
     const initialUrl = initialUrls.get(row.id)
