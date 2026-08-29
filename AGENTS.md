@@ -10,6 +10,10 @@ This checkout is a **personal fork** of [deepseek-ai/deepseek-harness](https://g
 - **Never contribute back**: do not push to `upstream`, do not open PRs against `upstream`, do not merge fork work into upstream. All changes stay in the fork.
 - **Record every change**: append one entry to `FORK_CHANGES.md` (bilingual, append-only) per change: date, what changed, why. Keep personal changes small and reviewable.
 
+## Working tree: branches, never a dirty main checkout
+
+The main checkout serves the running dsh and hosts concurrent agent sessions. Develop on a git worktree under `.worktrees/<slug>` (git-ignored) on its own branch, and land through a PR against `origin/master` (or a clean fast-forward merge when the branch stays local). Never develop on, or leave uncommitted changes in, the main checkout: uncommitted fork docs or sources there block other sessions' merges. Commit or stash before ending a session; a branch keeps the work recoverable and mergeable.
+
 ## Pre-release stance: foundation over blast radius
 
 **Remove at the first tagged release.** Until then, prefer correct foundations to compatibility shims: rename or repackage freely and update every reference. Backends reject old on-disk formats. SQLite uses monotonic `SCHEMA_VERSION`; `dsh-session` keeps `SESSION_FORMAT_VERSION` at `0` with no compatibility promise.
