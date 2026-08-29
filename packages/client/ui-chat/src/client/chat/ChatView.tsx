@@ -290,6 +290,11 @@ export function ChatView({
   )
   /** Last position delivered or written on the main thread. */
   const observedTopRef = useRef(0)
+  /** Last trusted reader-input timestamp (wheel, touch, key, scrollbar
+   * pointer). Scroll geometry alone cannot flip follow ownership: a layout
+   * shrink clamps the scrollTop to a floor that predates the regrown
+   * layout, matching neither the write ledger nor the current floor. */
+  const readerInputAtRef = useRef(0)
   /** Paging anchor: semantic row/position at click, updated by reader scrolls
    * while the request is pending and restored after the prepend lands. */
   const anchorRef = useRef<PagingAnchor | null>(null)
@@ -302,6 +307,7 @@ export function ChatView({
    *  scroll-driven at-bottom chrome re-render (which would snap inertial
    *  scrolls the rest of the way to the floor). */
   const followSigRef = useRef<string | null>(null)
+
 
   const firstKey = order[0]
   const firstSeq = firstKey === undefined ? null : nodeStore.get(firstKey)?.anchorSeq ?? null
@@ -452,10 +458,12 @@ export function ChatView({
     // programmatic deliveries land on the ledger itself, so both preserve
     // the current ownership state.
     const floor = Math.max(0, el.scrollHeight - el.clientHeight)
-    const movedByReader = Math.abs(el.scrollTop - Math.min(observedTopRef.current, floor)) > 0.5
+    const inputRecent = performance.now() - readerInputAtRef.current < 250
+    const movedByReader = inputRecent
+      && Math.abs(el.scrollTop - Math.min(observedTopRef.current, floor)) > 0.5
     const isAtBottom = movedByReader
       ? floor - el.scrollTop <= FOLLOW_THRESHOLD + 1
-      : atBottomRef.current
+      : atBottomRef.current || floor - el.scrollTop <= FOLLOW_THRESHOLD + 1
     if (!movedByReader && isAtBottom) {
       toBottom(el)
       return
@@ -486,8 +494,27 @@ export function ChatView({
     const el = scrollerOf(local)
     const onScroll = (): void => { onScrollRef.current() }
     el.addEventListener('scroll', onScroll, { passive: true })
+    // Reader-intent markers: every device that scrolls the transcript on the
+    // user's behalf. Wheel, touch, and keys mark on the bubbling path (the
+    // focused element scrolls the transcript without targeting it); scrollbar
+    // drags land on the scroller's own chrome and mark only when the scroller
+    // itself is the target, so descendant clicks and composer typing do not.
+    // Inertial momentum after a wheel/touch keeps delivering geometry-only
+    // scroll events, which must not re-arm a released follow.
+    const markInput = (): void => { readerInputAtRef.current = performance.now() }
+    const markSelfInput = (event: Event): void => {
+      if (event.target === el) readerInputAtRef.current = performance.now()
+    }
+    el.addEventListener('wheel', markInput, { passive: true })
+    el.addEventListener('touchmove', markInput, { passive: true })
+    el.addEventListener('keydown', markInput)
+    el.addEventListener('pointerdown', markSelfInput)
     return () => {
       el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', markInput)
+      el.removeEventListener('touchmove', markInput)
+      el.removeEventListener('keydown', markInput)
+      el.removeEventListener('pointerdown', markSelfInput)
     }
   }, [])
 

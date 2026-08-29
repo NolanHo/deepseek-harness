@@ -403,9 +403,11 @@ function makeHarness(
   }
 }
 
-/** Simulate reader input (any device): a delivered position that deviates
- * from the observed-top ledger of programmatic writes. */
+/** Simulate reader input (any device): a trusted input marker followed by a
+ * delivered position that deviates from the observed-top ledger of
+ * programmatic writes. */
 function readerScroll(element: HTMLElement, top: number): void {
+  fireEvent.wheel(element)
   element.scrollTop = top
   fireEvent.scroll(element)
 }
@@ -2023,6 +2025,7 @@ describe('ChatView', () => {
     const view = render(<h.ChatView {...h.props} />)
     const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
     const metrics = installScrollMetrics(scroller, 1_000, 300)
+    fireEvent.wheel(scroller)
     scroller.scrollTop = 700
     fireEvent.scroll(scroller)
 
@@ -2045,6 +2048,7 @@ describe('ChatView', () => {
     const view = render(<h.ChatView {...h.props} />)
     const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
     installScrollMetrics(scroller, 1_000, 300)
+    fireEvent.wheel(scroller)
     scroller.scrollTop = 700
     fireEvent.scroll(scroller)
 
@@ -2073,6 +2077,7 @@ describe('ChatView', () => {
     const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
     Object.defineProperty(scroller, 'scrollHeight', { value: 1_000, writable: true })
     Object.defineProperty(scroller, 'clientHeight', { value: 300, writable: true })
+    fireEvent.wheel(scroller)
     scroller.scrollTop = 700
     fireEvent.scroll(scroller)
     Object.defineProperty(scroller, 'scrollHeight', { value: 1_200, writable: true })

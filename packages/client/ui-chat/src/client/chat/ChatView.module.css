@@ -10,6 +10,12 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* The ChatView owns every scrollTop adjustment: prepends re-anchor rows
+     explicitly and the tail-follow re-asserts on ResizeObserver growth.
+     The browser's native scroll anchoring would also adjust scrollTop when
+     content above grows, which the reader-input ledger misattributes as a
+     user scroll — killing the tail follow and double-shifting prepends. */
+  overflow-anchor: none;
   /* Sides = composer clearance + 16px: on narrow viewports the transcript
      stays exactly 32px narrower than the input card (the shared width rule). */
   padding: 16px calc(var(--dsh-composer-side-clearance) + 16px);

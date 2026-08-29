@@ -321,6 +321,12 @@
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
+  /* The conversation owns every scrollTop adjustment: prepends re-anchor rows
+     explicitly and the tail-follow re-asserts on ResizeObserver growth.
+     Native scroll anchoring would also adjust scrollTop when content above
+     grows, which the reader-input ledger misattributes as a user scroll —
+     killing the tail follow and double-shifting prepends. */
+  overflow-anchor: none;
   /* The column scrolls on ONE axis. Stating `hidden` rather than leaving the
      initial `visible` is what removes the horizontal bar: a box that scrolls in
      one axis computes `visible` to `auto` in the other, so any bleed becomes
