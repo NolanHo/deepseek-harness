@@ -34,6 +34,8 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `client/modules` + `client/web` 延迟启动批次 | C | 3 个文件约 120 行 | `WebBootBatchPhase 'deferred'` + `Config.defer` 切分 + 两段式 boot；上游形态（增量线格式字段、空默认）；defer 名单是部署配置而非仓库状态 |
 | `ui-workspace` 提升头部稳定 | C | ~20 行 | `nextSessionOrderAccount` 共流式时保持头部相对顺序；每个活跃突发一次提升 |
 | `ui-chat` StatsLine 绘制后测量 | C | 1 行 + 注释 | 省略号测试从 `useLayoutEffect` 移到 `useEffect`（绘制后）；行为零变化 |
+| `api/session-controller` 客户端选择通知 + 快照身份 | C | manager/service 约 60 行 | 选择走 `markDirty` 通知（列表投影渲染在交互之外）；`open`/`openSubagent` 经 `followCurrent` 读 manager 快照同步 stage；`buildListSnapshot` 内容未变返回上一个对象，`subagentsByParent`/`jobsBySession` 引用稳定 |
+| `ui-workspace` order store 引用稳定 | C | ~10 行 | `syncSessionOrderAccount` 在 order 未变时保留旧数组引用（时间戳照常推进） |
 
 ## 优化方案（按优先级）
 

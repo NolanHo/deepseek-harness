@@ -269,6 +269,12 @@ export class ClientSessions implements ISessions {
    */
   open(id: SessionId): void {
     this.manager.select(id)
+    // Stage synchronously: each open() must reach the session window from
+    // this call (scope staging is per-selection, so a microtask-batched
+    // projection would stage only the last of a burst). The list-store
+    // projection for React subscribers still lands in the manager's
+    // microtask batch — outside the interaction that opened the session.
+    this.followCurrent()
   }
 
   /**
@@ -277,6 +283,7 @@ export class ClientSessions implements ISessions {
    */
   openSubagent(address: SubagentAddress): void {
     this.manager.selectSubagent(address)
+    this.followCurrent()
   }
 
   /**
@@ -518,12 +525,17 @@ export class ClientSessions implements ISessions {
    * failed one retries the next time current is touched).
    */
   private followCurrent(): void {
-    const snapshot = this.list.getSnapshot()
+    // The manager snapshot is the source of truth the list-store projection
+    // copies; reading it here (not the projected store) lets open() stage
+    // synchronously while the projection still awaits its microtask batch.
+    const snapshot = this.manager.getListSnapshot()
     const current = snapshot.current
     // A masked gap (current blanked while the selection's session is
     // transiently absent) holds the stage: tearing down on the gap would
     // destroy exactly the frozen scope the mask exists to preserve.
-    if (current === undefined || snapshot.byId[current] === undefined || current === this.watched) return
+    if (current === undefined
+      || current === this.watched
+      || !snapshot.items.some(item => item.sessionId === current)) return
     this.watched = current
     this.sweepDeferred()
     const record = this.resolve(current)

@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-29-selection-staging-outside-interaction.md
+2026-08-29-selection-staging-outside-interaction.md: 1b773a4ce1c271788a4660ea8d110e05af2c3d8a
+2026-08-29-selection-staging-outside-interaction.zh.md: 6ea305cc9ffb603e8b407d38e27c99965b4441fd

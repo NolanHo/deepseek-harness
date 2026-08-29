@@ -141,6 +141,21 @@ describe('WorkspaceBrowser', () => {
     })
   })
 
+  it('keeps the order array reference across account syncs that advance only timestamps', () => {
+    const store = createWorkspaceViewStore().create()
+    store.actions.syncSessionOrderAccount('alpha', ['one', 'two'], { one: 1, two: 1 })
+    const first = store.getSnapshot().sessionOrderByAccount.alpha
+    // Every activity tick re-syncs; an identical order must not mint a fresh
+    // array reference (order-derived memos would re-run on each tick).
+    store.actions.syncSessionOrderAccount('alpha', ['one', 'two'], { one: 2, two: 2 })
+    const state = store.getSnapshot()
+    expect(state.sessionOrderByAccount.alpha).toBe(first)
+    expect(state.sessionUpdatedAtByAccount.alpha).toEqual({ one: 2, two: 2 })
+    store.actions.syncSessionOrderAccount('alpha', ['two', 'one'], { one: 2, two: 2 })
+    expect(store.getSnapshot().sessionOrderByAccount.alpha).toEqual(['two', 'one'])
+    expect(store.getSnapshot().sessionOrderByAccount.alpha).not.toBe(first)
+  })
+
   it('renders the grouped tree by default and switches to the flat list via Group by', () => {
     const sessions = sessionState([summary('alpha-s', 2), summary('beta-s', 1)])
     const b = mount({

@@ -34,6 +34,8 @@ The 0.1.2-alpha.1 sync (1079 upstream commits) resolved 123 conflicts. The pain 
 | `client/modules` + `client/web` deferred boot batches | C | ~120 lines across 3 files | `WebBootBatchPhase 'deferred'` + `Config.defer` partition + two-stage boot; upstream-shaped (additive wire field, empty default); the defer list is deployment config, not repo state |
 | `ui-workspace` stable promotion head | C | ~20 lines | `nextSessionOrderAccount` keeps the leading promoted run stable while sessions co-stream; one promotion per activity burst |
 | `ui-chat` StatsLine passive measurement | C | 1 line + comment | Ellipsis test in `useEffect` (post-paint) instead of `useLayoutEffect`; no behavior change |
+| `api/session-controller` client selection notification + snapshot identity | C | ~60 lines across manager/service | Selection notifies via `markDirty` (the list projection renders outside the interaction); `open`/`openSubagent` stage synchronously through `followCurrent` on the manager snapshot; `buildListSnapshot` returns the previous object on equal content with reference-stabilized `subagentsByParent`/`jobsBySession` |
+| `ui-workspace` order-store reference stability | C | ~10 lines | `syncSessionOrderAccount` keeps the previous array reference when the order did not change (timestamps still advance) |
 
 ## Optimization plan (priority order)
 

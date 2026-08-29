@@ -76,7 +76,14 @@ export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState
         )
       },
       syncSessionOrderAccount: (d, accountKey: string, order: string[], updatedAt: Record<string, number>) => {
-        d.sessionOrderByAccount[accountKey] = order
+        // Keep the previous array reference when the order did not change:
+        // the timestamps advance on every activity tick, and a fresh array for
+        // equal content would re-run every order-derived memo on each one.
+        const previousOrder = d.sessionOrderByAccount[accountKey]
+        const orderChanged = previousOrder === undefined
+          || previousOrder.length !== order.length
+          || previousOrder.some((id, index) => id !== order[index])
+        if (orderChanged) d.sessionOrderByAccount[accountKey] = order
         d.sessionUpdatedAtByAccount[accountKey] = updatedAt
       },
       setSessionOrder: (d, accountKey: string, order: string[]) => {

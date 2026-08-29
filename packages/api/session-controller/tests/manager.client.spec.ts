@@ -989,4 +989,35 @@ describe('background-job mirror', () => {
     await Promise.resolve()
     expect(seen).toHaveBeenCalled()
   })
+
+  it('reuses the list snapshot reference when a rebuild lands on equal content', async () => {
+    const manager = makeManager()
+    manager.handleSessionAdded(summary(S1))
+    await Promise.resolve()
+    const before = manager.getListSnapshot()
+    // A no-op status frame rebuilds through the same paths but every observable
+    // field is unchanged: subscribers must see the identical reference and skip.
+    manager.handleSessionStatus(S1, false)
+    await Promise.resolve()
+    expect(manager.getListSnapshot()).toBe(before)
+    // A real change mints a fresh snapshot.
+    manager.handleSessionStatus(S1, true)
+    await Promise.resolve()
+    expect(manager.getListSnapshot()).not.toBe(before)
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S1)?.running).toBe(true)
+  })
+
+  it('notifies selection in a microtask batch, not inside the calling interaction', async () => {
+    const manager = makeManager()
+    manager.handleSessionAdded(summary(S1))
+    const seen = vi.fn()
+    manager.subscribe(seen)
+    manager.select(S1)
+    // The click handler returns before any subscriber runs.
+    expect(seen).not.toHaveBeenCalled()
+    expect(manager.getListSnapshot().current).toBe(S1)
+    await Promise.resolve()
+    expect(seen).toHaveBeenCalled()
+    expect(manager.getListSnapshot().current).toBe(S1)
+  })
 })
