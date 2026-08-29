@@ -539,4 +539,41 @@ describe('connection node half over a real HTTP server', () => {
     expect(published).toEqual([['app.internal', '192.168.4.7:8080']])
     await fiber.dispose()
   })
+
+  it('disables browser authentication when configured off (fence-only)', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    provideBrowserCredentials(ctx)
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    const fiber = ctx.plugin({ inject: [...inject], apply }, {
+      trustedHosts: ['harness.example'],
+      browserAuth: false,
+    })
+    await fiber.await()
+    const connection = ctx.get('connection') as HostConnectionHandle
+    // No launch token in the printed URL, and the index serves without a cookie.
+    expect(connection.authenticatedUrl('http://127.0.0.1:3080')).toBe('http://127.0.0.1:3080')
+    const index = fakeResponse()
+    expect(connection.authorizeIndex(
+      fakeRequest({ host: '127.0.0.1:3080' }, '/'),
+      index.response,
+    )).toBe(true)
+    expect(index.state.headers?.['set-cookie']).toBeUndefined()
+    // A trusted request without a cookie dispatches (unclaimed 404, not 401),
+    // while an untrusted host still 403s at the fence.
+    const route = routes.find(candidate => candidate.path === API_PATH)!
+    const open = {
+      type: 'client-request',
+      rpcId: RpcId('rpc-open'),
+      method: 'goals/create',
+      payload: {},
+    }
+    const trusted = fakeResponse()
+    await route.handler(fakePost({ host: 'harness.example' }, '/api/goals/create', open), trusted.response)
+    expect(trusted.state.status).toBe(404)
+    const untrusted = fakeResponse()
+    await route.handler(fakePost({ host: 'other.example' }, '/api/goals/create', open), untrusted.response)
+    expect(untrusted.state).toMatchObject({ status: 403, body: 'forbidden' })
+    await fiber.dispose()
+  })
 })
