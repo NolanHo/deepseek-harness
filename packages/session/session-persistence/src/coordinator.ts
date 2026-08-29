@@ -179,21 +179,6 @@ export interface PersistenceBackend<TornMarker = unknown> {
   materializeHeader?(meta: SessionHeader): Promise<void>
 
   /**
-   * The seq of the `maxMessages`-th append-origin user message counting back
-   * from the log tail (or from `beforeSeq` when given) — the indexed seek
-   * that sizes one history page exactly, for backends that can query message
-   * rows (the SQLite store answers in one indexed scan). Returns undefined
-   * when the backend cannot answer (sequential media) or the log holds no
-   * matching message. Counts the same population the history pagination
-   * counts: `user/message` rows whose surface operation is append.
-   * @param id - persisted session to index.
-   * @param maxMessages - message rank to locate (1 = the last user message).
-   * @param beforeSeq - optional exclusive upper bound (loadOlder pages).
-   * @param signal - optional cancellation for backend read work.
-   */
-  userMessageCut?(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined>
-
-  /**
    * Durably append a CONTIGUOUS batch, lazily materializing the session first
    * when `!isMaterialized`. The materialize-write and the first event batch MUST
    * commit ATOMICALLY (a crash between them must not leave a materialized-but-
@@ -963,27 +948,6 @@ export class PersistenceCoordinator<TornMarker = unknown> {
     const whole = await this.readStoredPrefix(id, signal)
     // Sequential fallback: contiguous seqs from 0 make the suffix an index slice.
     return { meta: whole.meta, events: whole.events.slice(fromSeq) }
-  }
-
-  /**
-   * The seq of the `maxMessages`-th append-origin user message (see the
-   * backend hook), or undefined when the backend cannot answer or the log
-   * holds no matching message. A read-only indexed query: committed rows
-   * only, so it needs none of the per-id write-chain serialization.
-   * @param id - persisted session to index.
-   * @param maxMessages - message rank to locate (1 = the last user message).
-   * @param beforeSeq - optional exclusive upper bound (loadOlder pages).
-   * @param signal - optional cancellation for backend read work.
-   */
-  messageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined> {
-    if (!Number.isSafeInteger(maxMessages) || maxMessages < 1) {
-      return Promise.reject(new TypeError(`messageCut maxMessages must be a positive safe integer, got ${String(maxMessages)}`))
-    }
-    if (beforeSeq !== undefined && (!Number.isSafeInteger(beforeSeq) || beforeSeq < 0)) {
-      return Promise.reject(new TypeError(`messageCut beforeSeq must be a non-negative safe integer, got ${String(beforeSeq)}`))
-    }
-    if (this.backend.userMessageCut === undefined) return Promise.resolve(undefined)
-    return this.backend.userMessageCut(id, maxMessages, beforeSeq, signal)
   }
 
   /** Read one detached physical prefix without logical recovery or caching. */

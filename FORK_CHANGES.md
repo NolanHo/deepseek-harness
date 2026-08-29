@@ -128,3 +128,8 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: Added FORK_SURFACE.md (bilingual): the upstream-divergence inventory by isolation tier (fork-owned packages, config flags, small patches, semantic core changes) with the optimization plan (extract the paging core into a fork-owned module, move messageCut off the upstream persistence interface, compact marked diffs) and the sync runbook.
 - ZH: 新增 FORK_SURFACE.md（双语）：按隔离层级（fork 自有包、配置开关、小型补丁、语义级核心修改）的上游差异面清单，附优化方案（分页核心抽入 fork 自有模块、messageCut 移出上游持久化接口、保持紧凑带标记的 diff）与同步 runbook。
+
+### 2026-08-30 — Patch-surface reduction: fork modules for paging, mobile shell, messageCut / 差异面缩减：分页、移动 shell、messageCut 的 fork 模块化
+
+- EN: Extracted the fork's upstream divergence into fork-owned modules per FORK_SURFACE.md: the user-aligned paging core now lives in `session-controller/src/page-boundary.ts` (history.ts keeps a ~60-line injection, down from 205); `messageCut` lost its upstream abstract/coordinator/jsonl surface (the concrete SQLite store keeps the indexed seek; history duck-types it); the mobile regime moved to `ui-layout/src/client/mobile-shell.tsx` (AppFrame keeps ~62 composition lines, down from 119). Upstream-owned files coordinator.ts, session-persistence/index.ts, and jsonl are pristine again.
+- ZH: 按 FORK_SURFACE.md 把 fork 对上游的侵入抽入 fork 自有模块：user 对齐分页核心移入 `session-controller/src/page-boundary.ts`（history.ts 只留约 60 行注入，原 205 行）；`messageCut` 移除上游抽象/coordinator/jsonl 桩（具体 SQLite store 保留索引查询，history 以 duck-typing 发现）；移动端机制移入 `ui-layout/src/client/mobile-shell.tsx`（AppFrame 只留约 62 行组合，原 119 行）。coordinator.ts、session-persistence/index.ts、jsonl 回归上游原状。

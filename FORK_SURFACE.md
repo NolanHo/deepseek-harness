@@ -26,18 +26,18 @@ The 0.1.2-alpha.1 sync (1079 upstream commits) resolved 123 conflicts. The pain 
 | `ui-chat` TurnProcessNodeView label + duration, ChatNodeSeat gate removal, locale, CSS | C | ~60 lines | Fold enhancement; localized blocks |
 | `ui-chat` ChatView reader-input attribution | D | 32 lines | Upstream's scroll-follow bug fix (clamp misattribution); watch upstream for their own fix |
 | `ui-conversation`/`ui-chat` CSS overflow-anchor + safe-area | C | ~40 lines | Scrollport anchoring; localized rules |
-| `api/session-controller/src/history.ts` fast path + boundary | D | 205 lines | messageCut fast path; user-aligned turn-complete boundary now shared by upstream's `paginate` |
-| `session-persistence` + `-sqlite` messageCut | D | ~75 lines | Abstract method + SQL on upstream's persistence |
+| `api/session-controller/src/history.ts` fast-path injection | C | ~60 lines | Delegates to fork-owned `src/page-boundary.ts` (the boundary walk, the ladder, the fast-path plan); one call in `page()` plus `paginate`'s delegation |
+| `session-persistence-sqlite` messageCut | C | ~24 lines | The concrete store's indexed seek; upstream's abstract, coordinator, and jsonl stub are pristine again |
 | `session-query-sqlite` live-observation memo | C | 30 lines | Localized memo in one function |
-| `client/ui-layout` AppFrame mobile shell | D | 503 lines | Fork mobile regimes inside upstream's AppFrame |
+| `client/ui-layout` AppFrame mobile shell | C | ~62 lines + fork-owned `mobile-shell.tsx` | The regime hook, drawer chrome, and details sheet live in the fork's module; AppFrame composes |
 
 ## Optimization plan (priority order)
 
-1. **Extract the paging core from `history.ts`** — move `nthMessageCut`, `turnAlignedCut`, `paginateSuffix`, and the pure part of `tryIndexedPage` into a fork-owned module (e.g. `src/page-boundary.ts`, a file upstream will never have). `history.ts` keeps a ~10-line injection: the import, the `tryIndexedPage` call in `page()`, and `paginate` delegating to the shared walk. Upstream refactors of `page()` re-conflict against ten lines, not two hundred.
-2. **Move `messageCut` off the upstream persistence interface** — a fork-owned service (its own package or an extension in `session-query-sqlite`) exposing the indexed cut; `history.ts`'s fast path already discovers it optionally (`SeekablePersistence` duck-typing). The upstream `SessionPersistence` abstract and coordinator revert to pristine; the SQL moves with the fork service.
+1. **DONE — Extract the paging core from `history.ts`** — move `nthMessageCut`, `turnAlignedCut`, `paginateSuffix`, and the pure part of `tryIndexedPage` into a fork-owned module (e.g. `src/page-boundary.ts`, a file upstream will never have). `history.ts` keeps a ~10-line injection: the import, the `tryIndexedPage` call in `page()`, and `paginate` delegating to the shared walk. Upstream refactors of `page()` re-conflict against ten lines, not two hundred.
+2. **DONE — Move `messageCut` off the upstream persistence interface** — a fork-owned service (its own package or an extension in `session-query-sqlite`) exposing the indexed cut; `history.ts`'s fast path already discovers it optionally (`SeekablePersistence` duck-typing). The upstream `SessionPersistence` abstract and coordinator revert to pristine; the SQL moves with the fork service.
 3. **Write the merge runbook as you change, not at sync time** — every Tier C/D change notes its injection point here; the sync re-apply follows this file top to bottom.
 4. **Keep Tier D diffs compact and marked** — the scroll-attribution block carries its rationale comment; upstream fixing the same clamp bug upstream-side shrinks the fork diff to zero (watch for it in upstream releases).
-5. **AppFrame mobile shell** — the largest surface. Realistically stays a patch (layout is upstream's core component), but keep the fork's regimes in `columns.ts`-style leaf modules so the AppFrame diff stays import-and-delegate.
+5. **DONE — AppFrame mobile shell** — the largest surface. Realistically stays a patch (layout is upstream's core component), but keep the fork's regimes in `columns.ts`-style leaf modules so the AppFrame diff stays import-and-delegate.
 6. **PAGE_MESSAGES** — one line; optionally a build-time env (`DSH_CLIENT_PAGE_MESSAGES`) if it churns.
 
 ## Sync procedure (runbook)

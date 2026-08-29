@@ -16,14 +16,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { computeColumns, MOBILE_VIEWPORT, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
+import { computeColumns, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
 import { DocumentTitle } from './DocumentTitle.tsx'
 import type { createLayoutStore } from './stores.ts'
+import { DetailsColumn, DRAWER_WIDTH, MobileNavChrome, useMobileRegime } from './mobile-shell.tsx'
 import css from './AppFrame.module.css'
-
-/** Owner-prop width fed to the sidebar occupant inside the mobile drawer (inside the sidebar contract range). */
-const DRAWER_WIDTH = 300
 
 /** Full composed props: runtime share + child-slot render share + store share + locale share. */
 export type AppFrameProps =
@@ -35,24 +32,6 @@ export type AppFrameProps =
 /** Center column grid item (session-body building block). */
 function CenterColumn(props: { children?: ReactNode }) {
   return <div className={css.centerCol}>{props.children}</div>
-}
-
-/** Details column grid item; width 0 keeps the subtree mounted (never unmount on close). */
-function DetailsColumn(props: { children?: ReactNode; mobile?: boolean; open?: boolean; onClose?: () => void; closeLabel?: string }) {
-  return (
-    <div
-      className={css.detailsCol}
-      data-mobile={props.mobile || undefined}
-      data-open={props.open || undefined}
-    >
-      {props.mobile && (
-        /* Sheet chrome owned by the frame: occupants assume the desktop shell,
-           so the sheet's explicit close affordance lives here. */
-        <button type="button" className={css.sheetClose} aria-label={props.closeLabel} onClick={props.onClose} />
-      )}
-      {props.children}
-    </div>
-  )
 }
 
 /**
@@ -163,52 +142,26 @@ export function AppFrame({
   // (or the default when the wide preference is closed) and the center
   // absorbs the squeeze. Mobile mirrors separately (drawer semantics).
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
-  const mobile = viewport < MOBILE_VIEWPORT
+  // Narrow viewports auto-collapse the sidebar; the store mirror keeps
+  // toggleSidebar's semantics right (narrow toggles flip the manual
+  // re-expand override, stores.ts).
   useEffect(() => { actions.setNarrow(narrow) }, [actions, narrow])
-  useEffect(() => { actions.setMobile(mobile) }, [actions, mobile])
   const sidebarCollapsed = narrow ? !panels.narrowExpanded : panels.sidebar === 0
   const sidebarPreference = sidebarCollapsed
     ? 0
     : panels.sidebar === 0 ? SIDEBAR_DEFAULT : panels.sidebar
   // Mobile skips the solver: the grid collapses to the center track and both
   // panels render as fixed overlays (drawer wrapper / details sheet).
-  const cols = mobile
-    ? { sidebar: 0, center: viewport, details: 0 }
-    : computeColumns(viewport, sidebarPreference, detailsSession === undefined ? 0 : panels.details)
+  const cols = computeColumns(
+    viewport,
+    sidebarPreference,
+    detailsSession === undefined ? 0 : panels.details,
+  )
   const colsRef = useRef(cols)
   colsRef.current = cols
-
-  const closeDrawer = useCallback(() => { actions.setDrawerOpen(false) }, [actions])
-  // Live snapshots for the Escape handler (event-handler snapshot reads are
-  // sanctioned; render keeps subscribing through its hooks).
-  const panelsRef = useRef(panels)
-  panelsRef.current = panels
-  const detailsSessionRef = useRef(detailsSession)
-  detailsSessionRef.current = detailsSession
-  // Escape closes the highest open mobile layer first (sheet above drawer).
-  // The sheet gate matches its render visibility (detailsSession defined):
-  // a retained preference without a visible sheet must not swallow a press.
-  useEffect(() => {
-    if (!mobile) return
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      const now = panelsRef.current
-      if (now.details > 0 && detailsSessionRef.current !== undefined) actions.closeDetails()
-      else if (now.drawerOpen) closeDrawer()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => { window.removeEventListener('keydown', onKeyDown) }
-  }, [actions, closeDrawer, mobile])
-
-  // A session change closes an open mobile drawer (the drawer lists sessions;
-  // after selecting one the conversation must be unobstructed).
-  const drawerSession = useRef(currentSession)
-  useEffect(() => {
-    if (drawerSession.current !== currentSession) {
-      drawerSession.current = currentSession
-      if (panels.mobile && panels.drawerOpen) closeDrawer()
-    }
-  }, [closeDrawer, currentSession, panels.drawerOpen, panels.mobile])
+  const { mobile, detailsOpen, closeDrawer } = useMobileRegime(
+    viewport, panels, currentSession, detailsSession, actions, cols.details > 0,
+  )
 
   // The drag base is the rendered width captured at drag start (grabbing a
   // concession-clamped panel must not jump back to the stored preference);
@@ -229,7 +182,6 @@ export function AppFrame({
   }, [actions])
   const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')
 
-  const detailsOpen = mobile ? panels.details > 0 && detailsSession !== undefined : cols.details > 0
   return (
     <div
       ref={frameRef}
@@ -260,28 +212,14 @@ export function AppFrame({
         </div>
       )}
       {mobile && (
-        <>
-          {/* Drawer scrim sits below the drawer, above column content. */}
-          {panels.drawerOpen && <div className={css.scrim} onClick={closeDrawer} />}
-          {/* Always mounted so the sidebar subtree survives close (CSS slides). */}
-          <div className={css.mobileDrawer} data-open={panels.drawerOpen || undefined}>
-            {renderSlot('sidebar', { collapsed: false, width: DRAWER_WIDTH })}
-          </div>
-          {/* The drawer's own toggle lives inside the slid-out drawer, so a
-              closed drawer needs a frame-owned opener — the only navigation
-              entry in the mobile regime, present in every column phase
-              (including the blank hero, which hides the session header). */}
-          {!panels.drawerOpen && (
-            <button
-              type="button"
-              className={css.mobileMenu}
-              aria-label={t('sidebar.open')}
-              onClick={actions.toggleSidebar}
-            >
-              <IconPanelLeftOutline16 />
-            </button>
-          )}
-        </>
+        <MobileNavChrome
+          open={panels.drawerOpen}
+          onToggle={actions.toggleSidebar}
+          onClose={closeDrawer}
+          openLabel={t('sidebar.open')}
+        >
+          {renderSlot('sidebar', { collapsed: false, width: DRAWER_WIDTH })}
+        </MobileNavChrome>
       )}
       <>
         {/* Both column occupants stay at fixed tree positions from first

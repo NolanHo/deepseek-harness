@@ -263,21 +263,6 @@ export abstract class SessionPersistence extends Service {
   Promise<{ meta: SessionHeader; events: SessionEvent[] }>
 
   /**
-   * The seq of the `maxMessages`-th append-origin user message counting back
-   * from the log tail (or from `beforeSeq` when given), or undefined when
-   * the backend cannot answer (sequential media) or the log holds no
-   * matching message. The indexed seek that sizes one history page exactly;
-   * the same population {@link readFrom}-based pagination counts.
-   * @param id - the persisted session to index.
-   * @param maxMessages - message rank to locate (1 = the last user message).
-   * @param beforeSeq - optional exclusive upper bound (loadOlder pages).
-   * @param signal - optional cancellation for backend read work.
-   * @returns the located seq, or undefined when the backend cannot answer or no message matches.
-   */
-  abstract messageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal):
-  Promise<number | undefined>
-
-  /**
    * Lightweight listing from metadata, without a full-log parse.
    * @param signal - optional cancellation for backend listing work.
    * @returns one header per materialized session.

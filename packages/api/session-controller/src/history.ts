@@ -1,8 +1,10 @@
 /** Cold Session history pagination and live-event source. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { isAppendSurfaceEvent } from '@deepseek-ai/dsh-session'
 import { isChunkRow, packChunkRuns, type ChunkRow } from '@deepseek-ai/dsh-session/chunk-rows'
+// Fork patch (FORK_SURFACE.md): user-aligned turn-complete paging lives in the
+// fork-owned page-boundary module; this file keeps only the injection.
+import { nthMessageCut, readIndexedPage, type SeekablePersistence } from './page-boundary.ts'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-subagent'
@@ -22,26 +24,6 @@ import type {
 } from './types.ts'
 
 const DEFAULT_MAX_MESSAGES = 50
-const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
-
-/**
- * Headroom read before a message-indexed cut: the cut seqs an append-origin
- * user message while the page cut lands at its group head (turn boundary and
- * any source events a few seqs earlier). The margin covers the ordinary lead
- * without re-reading a whole window; a compaction replacement widens its
- * group head across the whole shadowed range, so an incomplete window
- * retries once at the deep margin before falling back to the observation
- * path.
- */
-const PAGE_CUT_LEAD_MARGIN = 128
-const PAGE_CUT_DEEP_MARGIN = 4096
-
-/** The optional indexed-seek persistence surface behind the page fast path. */
-interface SeekablePersistence {
-  messageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined>
-  readFrom(id: SessionId, fromSeq: number, signal?: AbortSignal): Promise<{ meta: SessionHeader; events: SessionEvent[] }>
-}
-
 /** Implements cold-safe history operations delegated by the Session Controller. */
 export class SessionHistoryController {
   private readonly closeFollowers = new Set<() => void>()
@@ -205,46 +187,28 @@ export class SessionHistoryController {
     if (request.address.kind !== 'session') return undefined
     const persistence = this.ctx.get('sessionPersistence') as SeekablePersistence | undefined
     if (persistence?.messageCut === undefined || persistence.readFrom === undefined) return undefined
-    const id = addressId(request.address)
-    const maxMessages = request.maxMessages ?? DEFAULT_MAX_MESSAGES
-    const end = request.throughSeq >= 0
-      ? Math.min(request.throughSeq + 1, request.beforeSeq ?? request.throughSeq + 1)
-      : request.beforeSeq
     try {
-      const cut = await persistence.messageCut(id, maxMessages, end, signal)
-      signal.throwIfAborted()
-      if (cut === undefined) return undefined
-      let fromSeq = Math.max(0, cut - PAGE_CUT_LEAD_MARGIN)
-      let page: ReturnType<typeof paginateSuffix> | undefined
-      for (let attempt = 0; ; attempt++) {
-        const suffix = await persistence.readFrom(id, fromSeq, signal)
-        signal.throwIfAborted()
-        if (suffix.meta.id !== id) return undefined
-        if (suffix.meta.cwd === undefined) rejectNotFound(request.address)
-        validateAddress(request.address, suffix.meta, undefined)
-        if (request.throughSeq > (suffix.events.at(-1)?.seq ?? -1)) {
+      const page = await readIndexedPage(persistence, {
+        id: addressId(request.address),
+        maxMessages: request.maxMessages ?? DEFAULT_MAX_MESSAGES,
+        beforeSeq: request.beforeSeq,
+        throughSeq: request.throughSeq,
+      }, (meta, events) => {
+        if (meta.cwd === undefined) rejectNotFound(request.address)
+        validateAddress(request.address, meta, undefined)
+        if (request.throughSeq > (events.at(-1)?.seq ?? -1)) {
           reject(
             'bad-request',
-            `session page through seq ${String(request.throughSeq)} is past cursor ${String(suffix.events.at(-1)?.seq ?? -1)}`,
+            `session page through seq ${String(request.throughSeq)} is past cursor ${String(events.at(-1)?.seq ?? -1)}`,
             {},
           )
         }
-        if (request.throughSeq >= 0 && !suffix.events.some(event => event.seq === request.throughSeq)) {
+        if (request.throughSeq >= 0 && !events.some(event => event.seq === request.throughSeq)) {
           reject('internal', `session log does not contain through seq ${String(request.throughSeq)}`, {})
         }
-        page = paginateSuffix(suffix.events, request.beforeSeq, maxMessages, request.throughSeq)
-        // The window provably holds the page only when the cut lands inside
-        // the read suffix; a compaction replacement widens its group head
-        // across the whole shadowed range, so one deep retry covers it before
-        // the caller re-reads the whole observation.
-        if (page.cut >= fromSeq && page.messages >= maxMessages) break
-        if (attempt > 0 || fromSeq === 0) return undefined
-        fromSeq = Math.max(0, cut - PAGE_CUT_DEEP_MARGIN)
-      }
-      return {
-        records: pageRecords(page.events),
-        hasMore: page.hasMore,
-      }
+      }, signal)
+      if (page === undefined) return undefined
+      return { records: pageRecords(page.events), hasMore: page.hasMore }
     } catch (error: unknown) {
       // The fast path is an optimization: any failure — including a generic
       // not-found from readFrom — re-runs through the observation path, which
@@ -320,101 +284,8 @@ function addressId(address: SessionAddress): SessionId {
   return address.kind === 'session' ? address.sessionId : address.childSessionId
 }
 
-/**
- * Backwards message walk shared by BOTH paging paths, so the indexed fast
- * path and the observation fallback can never disagree on a boundary. User
- * messages anchor pages — every page starts at a turn's opening user message
- * and its provenance group head — with a whole-window fallback to any
- * message for synthetic logs that carry no user messages. Each chosen
- * message widens its cut through `sourceEventSeqs`, so pages never split a
- * replacement or provenance group.
- *
- * @param window - Events in seq order (a dense log or an already-filtered
- * suffix read).
- * @param maxMessages - Page size in user messages (fallback: any message).
- * @param endIndex - Exclusive walk bound: the dense log passes the seq end
- * (index === seq), the suffix read passes its own length.
- * @returns The cut seq (0 when the window holds fewer than one full page)
- * and the chosen message count.
- */
-function nthMessageCut(
-  window: readonly SessionEvent[],
-  maxMessages: number,
-  endIndex = window.length,
-): { readonly cut: number; readonly messages: number } {
-  let userCount = 0
-  let userCut = 0
-  let anyCount = 0
-  let anyCut = 0
-  for (let index = Math.min(endIndex, window.length) - 1; index >= 0; index--) {
-    const event = window[index] as SessionEvent
-    if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
-    const sources = (event as { readonly sourceEventSeqs?: readonly number[] }).sourceEventSeqs
-    let groupStart = event.seq
-    if (sources !== undefined) {
-      for (const source of sources) groupStart = Math.min(groupStart, source)
-    }
-    if (event.type === 'user/message') {
-      userCount++
-      // The cut pins only at the max-th user message; a window short of a
-      // full page stays whole (cut 0) like the any-message fallback below.
-      if (userCount === maxMessages) {
-        userCut = groupStart
-        break
-      }
-    }
-    // The fallback candidate pins once at the max-th message from the end;
-    // earlier messages never move it, matching the zero-user window's cut.
-    anyCount++
-    if (anyCount === maxMessages) anyCut = groupStart
-  }
-  const chosen = userCount > 0
-    ? { cut: userCut, messages: userCount }
-    : { cut: anyCut, messages: anyCount }
-  return { cut: turnAlignedCut(window, chosen.cut), messages: chosen.messages }
-}
 
-/**
- * Widen a message cut back to its owning turn's opening events: a page must
- * not start mid-turn, or the head turn reaches the client without its
- * turn/start and renders unfolded until the next page completes it — a
- * visible layout flip on every Load earlier. The walk stops at the previous
- * turn/end (or the window head), so only the turn's own opening events
- * (turn/start, seeds, context injection) join the page.
- */
-function turnAlignedCut(window: readonly SessionEvent[], cut: number): number {
-  if (cut <= 0) return 0
-  let index = window.findIndex(event => event.seq >= cut)
-  if (index < 0) return cut
-  while (index > 0) {
-    const previous = window[index - 1] as SessionEvent
-    if (previous.type === 'turn/end') return (window[index] as SessionEvent).seq
-    index--
-  }
-  return (window[0] as SessionEvent).seq
-}
 
-/**
- * Message-aligned pagination over a seq-indexed SUFFIX (the fast-path read
- * starts at a positive seq, so array indexes are not seqs — the observation
- * pagination's dense-index assumption does not transfer).
- */
-function paginateSuffix(
-  events: readonly SessionEvent[],
-  beforeSeq: number | undefined,
-  maxMessages: number,
-  throughSeq: number,
-): { readonly events: SessionEvent[]; readonly hasMore: boolean; readonly cut: number; readonly messages: number } {
-  const end = Math.min(throughSeq + 1, beforeSeq ?? throughSeq + 1)
-  const window = events.filter(event => event.seq < end)
-  const chosen = nthMessageCut(window, maxMessages)
-  return {
-    events: window.filter(event => event.seq >= chosen.cut),
-    hasMore: chosen.cut > 0,
-    cut: chosen.cut,
-    messages: chosen.messages,
-  }
-}
 
 function validateAddress(
   address: SessionAddress,
