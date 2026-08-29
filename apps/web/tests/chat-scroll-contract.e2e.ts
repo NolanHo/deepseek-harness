@@ -581,7 +581,10 @@ describe('web e2e: long Chat scroll contract', () => {
       await world.page.unroute('**/api/session/page')
 
       let additionalPages = 0
-      while (additionalPages < 8) {
+      // The cap covers the session's full depth at the current 8-message
+      // page size (89 fixture turns need 12 pages); the Load-earlier
+      // disappearance still breaks the loop early when history completes.
+      while (additionalPages < 24) {
         await wheelToHistoryStart(world.page)
         if (await world.page.getByRole('button', { name: 'Load earlier', exact: true }).count() === 0) break
         await loadEarlierWithAnchor(world.page)

@@ -13,7 +13,6 @@ import css from './ChatView.module.css'
 
 interface ChatNodeSeatProps extends ChatNodeOwnerProps {
   readonly nodeKey: string
-  readonly historyIncomplete: boolean
   readonly compactTranscript: boolean
   readonly useChat: ChatViewSlotProps['useChat']
   readonly useStore: ChatViewSlotProps['useStore']
@@ -78,7 +77,7 @@ function turnProcessLayout(
 
 /** Subscribe, apply Turn-process visibility, and dispatch one stable Context key. */
 export const ChatNodeSeat = memo(function ChatNodeSeat({
-  nodeKey, historyIncomplete, compactTranscript,
+  nodeKey, compactTranscript,
   selectedCallId, cwd, openFile, inspectCall, forkAt,
   renderMessageImages, fileMentions, useChat, useStore, actions, renderSlot, t,
 }: ChatNodeSeatProps) {
@@ -91,12 +90,14 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
       : undefined
   })
   const processSpec = useMemo(
-    () => processSignature === undefined ? undefined : decodeTurnProcess(processSignature),
+    () => {
+      return processSignature === undefined ? undefined : decodeTurnProcess(processSignature)
+    },
     [processSignature],
   )
   const nodeStore = useChat(snapshot => snapshot.nodes)
   const processLayoutKeys = useChat((snapshot) => {
-    if (!compactTranscript || historyIncomplete || processSpec === undefined) return EMPTY_PROCESS_KEYS
+    if (!compactTranscript || processSpec === undefined) return EMPTY_PROCESS_KEYS
     const current = snapshot.nodes.get(nodeKey) as ChatNode | undefined
     const location = current?.location
     if (current === undefined
@@ -138,7 +139,6 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
     && compactTranscript
     && processSpec.answerAnchorSeq !== null
     && turnClosed
-    && !historyIncomplete
   const processMember = sameTurn
     && processWindowReady
     && !TURN_PROCESS_INDEPENDENT_KINDS.has(routedNode.kind)

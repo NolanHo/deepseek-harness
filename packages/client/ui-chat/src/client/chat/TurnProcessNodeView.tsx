@@ -1,7 +1,18 @@
 import { memo } from 'react'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeViewProps } from '../contract/slots.ts'
+import { formatRunDuration } from './message-chrome.ts'
 import css from './TurnProcessNodeView.module.css'
+
+/** Turn wall-clock duration from the resolved turn boundary, when both edges exist. */
+function turnRunMs(node: ChatNodeViewProps<'turn-process'>['node']): number | undefined {
+  const location = node.location
+  if (location.kind !== 'turn') return undefined
+  const start = location.turn.start?.time
+  const end = location.turn.end?.time
+  if (start === undefined || end === undefined || end <= start) return undefined
+  return end - start
+}
 
 /** Turn-level process disclosure controller. */
 export const TurnProcessNodeView = memo(function TurnProcessNodeView({
@@ -35,9 +46,16 @@ export const TurnProcessNodeView = memo(function TurnProcessNodeView({
       { count: node.data.subagentCount },
     ))
   }
+  const separator = t('message.turnProcess.separator')
+  const runMs = turnRunMs(node)
+  const duration = runMs === undefined ? undefined : formatRunDuration(runMs, t)
+  const suffix = duration === undefined ? '' : separator + duration
+  // Counted categories carry the collapsed prefix; a turn with nothing
+  // countable keeps the plain "thought for a while" label, with the
+  // duration appended when the turn boundary provides one.
   const label = labels.length === 0
-    ? t('message.turnProcess.thoughtForAWhile')
-    : labels.join(t('message.turnProcess.separator'))
+    ? t('message.turnProcess.thoughtForAWhile') + suffix
+    : t('message.turnProcess.collapsed', { parts: labels.join(separator) + suffix })
   return (
     <button
       type="button"
@@ -53,8 +71,8 @@ export const TurnProcessNodeView = memo(function TurnProcessNodeView({
         turnProcess.setOpen(!open)
       }}
     >
-      <span className={css.label}>{label}</span>
       <IconChevronDownOutline14 className={css.chevron} />
+      <span className={css.label}>{label}</span>
     </button>
   )
 })

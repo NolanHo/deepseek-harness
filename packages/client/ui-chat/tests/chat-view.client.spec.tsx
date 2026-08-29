@@ -1057,7 +1057,7 @@ describe('ChatView', () => {
       turnEnds: new Map([[1, 6]]),
     })
     const view = render(<h.ChatView {...h.props} />)
-    const toggle = view.getByRole('button', { name: '1 次工具调用 · 1 条消息 · 1 个 subagent' })
+    const toggle = view.getByRole('button', { name: '已折叠 1 次工具调用 · 1 条消息 · 1 个 subagent · 4秒' })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(toggle.getAttribute('data-turn-process-tool-calls')).toBe('1')
     expect(toggle.getAttribute('data-turn-process-messages')).toBe('1')
@@ -1083,12 +1083,12 @@ describe('ChatView', () => {
     expect(members.map(member => member.getAttribute('hidden'))).toEqual([null, null, null])
 
     act(() => { h.set({ nodes: [user(1, 'question'), first] }) })
-    expect(view.getByRole('button', { name: '已思考' }).getAttribute('aria-expanded')).toBe('false')
+    expect(view.getByRole('button', { name: '已思考 · 4秒' }).getAttribute('aria-expanded')).toBe('false')
     expect(members[0]?.getAttribute('hidden')).toBeNull()
     act(() => { h.set({
       nodes: [user(1, 'question'), first, toolResult(3, 'a'), toolResult(4, 'b', 'subagent'), second],
     }) })
-    const renewedToggle = view.getByRole('button', { name: '1 次工具调用 · 1 条消息 · 1 个 subagent' })
+    const renewedToggle = view.getByRole('button', { name: '已折叠 1 次工具调用 · 1 条消息 · 1 个 subagent · 4秒' })
     expect(renewedToggle.getAttribute('aria-expanded')).toBe('true')
     expect(members[0]?.getAttribute('hidden')).toBeNull()
   })
@@ -1365,7 +1365,7 @@ describe('ChatView', () => {
     expect(contextRow?.getAttribute('hidden')).toBe('until-found')
   })
 
-  it('keeps a foldable closed Turn fully visible while history is partial', () => {
+  it('folds a closed Turn even while history is partial', () => {
     const h = makeHarness({
       nodes: [
         user(1, 'question'),
@@ -1379,17 +1379,19 @@ describe('ChatView', () => {
     const view = render(<h.ChatView {...h.props} />)
     const contextRow = view.container.querySelector<HTMLElement>('[data-chat-flow-kind="context"]')
 
-    expect(turnProcessControl(view.container)).toBeNull()
-    expect(contextRow?.getAttribute('hidden')).toBeNull()
-    expect(contextRow?.hasAttribute('data-turn-process-member')).toBe(false)
-
-    act(() => { h.set({ hasMore: false }) })
+    // Partial history no longer withholds the fold: the closed turn folds by
+    // default, hiding its intermediate members behind the disclosure control.
     const toggle = turnProcessControl(view.container)!
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(contextRow?.getAttribute('hidden')).toBe('until-found')
+    expect(contextRow?.hasAttribute('data-turn-process-member')).toBe(true)
+
+    act(() => { h.set({ hasMore: false }) })
+    expect(turnProcessControl(view.container)?.getAttribute('aria-expanded')).toBe('false')
+    expect(contextRow?.getAttribute('hidden')).toBe('until-found')
   })
 
-  it('withholds process controls for partial history and folds final-page groups', () => {
+  it('folds final-page groups while history is partial', () => {
     const h = makeHarness({
       nodes: [user(9, 'visible question'), assistant(10, 'visible answer', 2)],
       hasMore: true,
@@ -1418,6 +1420,12 @@ describe('ChatView', () => {
 
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(member?.getAttribute('hidden')).toBeNull()
+
+    // Loading an older page (hasMore flips) keeps the fold: the disclosure
+    // survives with the members' expanded state intact.
+    act(() => { h.set({ hasMore: true }) })
+    expect(turnProcessControl(view.container)).not.toBeNull()
     expect(member?.getAttribute('hidden')).toBeNull()
   })
 

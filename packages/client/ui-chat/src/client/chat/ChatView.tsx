@@ -596,7 +596,6 @@ export function ChatView({
             <ChatNodeSeat
               key={nodeKey}
               nodeKey={nodeKey}
-              historyIncomplete={hasMore}
               compactTranscript={compactTranscript}
               useChat={useChat}
               useStore={useStore}

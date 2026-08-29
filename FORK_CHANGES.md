@@ -113,3 +113,8 @@ This file records every change the personal fork `NolanHo/deepseek-harness` make
 
 - EN: `client-connection` gains `browserAuth: false` (default true) — disables the persistent browser-session layer (launch token, cookie, 401) and keeps the Host/Origin fence as the only gate. This deployment uses it: loopback bind behind the Caddy rewrite proxy and the WireGuard-only traefik perimeter.
 - ZH: `client-connection` 新增 `browserAuth: false`（默认 true）——关闭持久浏览器会话层（启动 token、cookie、401），仅保留 Host/Origin 围栏。本部署已启用：回环绑定 + Caddy 改写代理 + 仅 WireGuard 可达的 traefik 边界。
+
+### 2026-08-29 — Turn Process 折叠恢复（部分历史也折叠）+ 更丰富摘要 / Turn Process fold with partial history and richer summary
+
+- EN: The upstream Turn Process fold withheld controls and hid no members while older history was available (`historyIncomplete` gate), so real sessions never folded. Removed the gate (a closed Turn folds by default regardless of `hasMore`) and enriched the control: added the Turn wall-clock duration (from the `turn/start`/`turn/end` boundary) and a collapsed-prefix label (`Collapsed {counts} · {duration}` / `已折叠 …`), restyled from a full-width divider into a rounded pill. Updated the fold tests, refreshed seeded-history goldens, and raised the chat-scroll page cap for the 8-message page size.
+- ZH: 上游 Turn Process 折叠在仍有更早历史时（`historyIncomplete` 门）不显示控件也不隐藏成员，导致真实会话几乎从不折叠。移除该门（已关闭回合无论 `hasMore` 一律默认折叠），并增强控件：增加回合墙钟时长（取自 `turn/start`/`turn/end` 边界）与折叠前缀标签（`已折叠 …`/`Collapsed {counts} · {duration}`），视觉由通栏分隔线改为圆角胶囊。更新折叠测试、刷新 seeded-history 金样，并提高 chat-scroll 页数上限以适配 8 消息分页。

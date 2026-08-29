@@ -17,9 +17,9 @@
 - text: "Use the read tool twice in one assistant message: read a.txt and b.txt. Then reply with the single word DONE and stop. 7/25 {{clock}}"
 - button "Copy":
   - img
-- button "2 tool calls":
-  - text: 2 tool calls
+- button "Collapsed 2 tool calls · {{duration}}":
   - img
+  - text: Collapsed 2 tool calls · {{duration}}
 - paragraph: DONE
 - button "Copy":
   - img

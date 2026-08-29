@@ -17,9 +17,9 @@
 - text: "Use the read tool twice in one assistant message: read a.txt and b.txt. Then reply with the single word DONE and stop. 7/25 {{clock}}"
 - button "Copy":
   - img
-- button "2 tool calls" [expanded]:
-  - text: 2 tool calls
+- button "Collapsed 2 tool calls · {{duration}}" [expanded]:
   - img
+  - text: Collapsed 2 tool calls · {{duration}}
 - button "Think The user wants me to read a.txt and b.txt, then reply with \"DONE\". Let me do both reads in parallel.":
   - img
   - img

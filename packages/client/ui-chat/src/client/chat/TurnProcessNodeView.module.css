@@ -2,13 +2,14 @@
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  width: 100%;
+  width: fit-content;
+  max-width: 100%;
   min-width: 0;
-  height: 33px;
-  padding: 0 0 8px;
-  border: none;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
-  background: none;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
   text-align: left;
@@ -18,11 +19,16 @@
   margin-bottom: 8px;
 }
 
+.root:hover {
+  border-color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-bg-layer-3);
+}
+
 .chevron {
   flex: none;
   width: 16px;
   height: 16px;
-  margin-left: 6px;
+  margin-right: 6px;
   color: var(--dsw-alias-label-tertiary);
   transform: rotate(-90deg);
   transition: transform 100ms ease;
