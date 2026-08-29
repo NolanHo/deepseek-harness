@@ -34,6 +34,8 @@ The 0.1.2-alpha.1 sync (1079 upstream commits) resolved 123 conflicts. The pain 
 | `client/modules` + `client/web` deferred boot batches | C | ~120 lines across 3 files | `WebBootBatchPhase 'deferred'` + `Config.defer` partition + two-stage boot; upstream-shaped (additive wire field, empty default); the defer list is deployment config, not repo state |
 | `ui-workspace` stable promotion head | C | ~20 lines | `nextSessionOrderAccount` keeps the leading promoted run stable while sessions co-stream; one promotion per activity burst |
 | `ui-chat` StatsLine passive measurement | C | 1 line + comment | Ellipsis test in `useEffect` (post-paint) instead of `useLayoutEffect`; no behavior change |
+| `skill` registry catalog restrictions | C | ~92 lines in one file | `SkillRegistry.restrict` + scope-layer filtering (two injection blocks: the restrict/SkillLayer wiring, the `collectFresh` filter hook); allow/deny are mutually exclusive, a deliberate divergence from `tools.restrict` documented in its JSDoc |
+| `subagent` per-child cwd + skillFilter | C | 5 files, ~170 lines | Request fields threaded through `childSessionMeta`/`applyChildComposition`/in-process driver/continuation; descriptor v3→4 (upstream bump at sync: union the version fields); cwd authority stays the session header on cold resume |
 
 ## Optimization plan (priority order)
 

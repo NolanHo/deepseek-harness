@@ -34,6 +34,8 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `client/modules` + `client/web` 延迟启动批次 | C | 3 个文件约 120 行 | `WebBootBatchPhase 'deferred'` + `Config.defer` 切分 + 两段式 boot；上游形态（增量线格式字段、空默认）；defer 名单是部署配置而非仓库状态 |
 | `ui-workspace` 提升头部稳定 | C | ~20 行 | `nextSessionOrderAccount` 共流式时保持头部相对顺序；每个活跃突发一次提升 |
 | `ui-chat` StatsLine 绘制后测量 | C | 1 行 + 注释 | 省略号测试从 `useLayoutEffect` 移到 `useEffect`（绘制后）；行为零变化 |
+| `skill` 注册表目录限制 | C | 单文件约 92 行 | `SkillRegistry.restrict` + scope 层过滤（两个注入块：restrict/SkillLayer 接线、`collectFresh` 过滤钩子）；allow/deny 互斥，是相对 `tools.restrict` 的刻意分歧（JSDoc 已写明） |
+| `subagent` 子代理 cwd + skillFilter | C | 5 文件约 170 行 | 请求字段贯穿 `childSessionMeta`/`applyChildComposition`/in-process 驱动/continuation；descriptor v3→4（同步遇上游 bump：字段取并集）；冷恢复的 cwd 权威仍在会话 header |
 
 ## 优化方案（按优先级）
 
