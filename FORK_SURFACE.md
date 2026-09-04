@@ -24,10 +24,10 @@ The 0.1.2-alpha.1 sync (1079 upstream commits) resolved 123 conflicts. The pain 
 | `session.ts` PAGE_MESSAGES 8 (upstream 50) | B | 8 lines | Client page size |
 | `client/connection` browserAuth flag | B | ~50 lines | Optional auth disable behind a config field |
 | `ui-chat` TurnProcessNodeView label + duration, ChatNodeSeat gate removal, locale, CSS | C | ~60 lines | Fold enhancement; localized blocks |
-| `ui-chat` ChatView reader-input attribution | D | 32 lines | Upstream's scroll-follow bug fix (clamp misattribution); watch upstream for their own fix |
+| `ui-chat` ChatView reader-input attribution | retired | — | Upstream's own fix landed (geometric observed-top ledger covers all input devices without listeners); the fork's device-marker patch was dropped at the 0.1.2-rc.1 sync |
 | `ui-conversation`/`ui-chat` CSS overflow-anchor + safe-area | C | ~40 lines | Scrollport anchoring; localized rules |
 | `api/session-controller/src/history.ts` fast-path injection | C | ~60 lines | Delegates to fork-owned `src/page-boundary.ts` (the boundary walk, the ladder, the fast-path plan); one call in `page()` plus `paginate`'s delegation |
-| `session-persistence-sqlite` messageCut | C | ~24 lines | The concrete store's indexed seek; upstream's abstract, coordinator, and jsonl stub are pristine again |
+| `session-persistence-sqlite` whole package + messageCut | A (fork-owned since 0.1.2-rc.1) | 8 files | Upstream removed the package (JSONL-only decision) but kept the seam for out-of-tree providers; the fork keeps it ported to the handle-based `PersistenceBackend`/coordinator with SCHEMA_VERSION 19 unchanged (`isSeeded` maps onto the nullable `seed_length` column; the ignorable envelope rides the `data` column as a reserved JSON tag) |
 | `session-query-sqlite` live-observation memo | C | 30 lines | Localized memo in one function |
 | `client/ui-layout` AppFrame mobile shell | C | ~62 lines + fork-owned `mobile-shell.tsx` | The regime hook, drawer chrome, and details sheet live in the fork's module; AppFrame composes |
 | Conversation header mobile trim (session-log capsule + breadcrumb) | C | ~10 lines | `max-width: 560px` media blocks hide the Session log download capsule (`session-log-export`) and the session-title breadcrumb (`ui-conversation`) at phone widths |

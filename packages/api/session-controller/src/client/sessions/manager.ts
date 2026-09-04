@@ -135,7 +135,7 @@ export class SessionManager {
 
   private selected: SessionId | undefined
 
-  private listSnapshotCache: SessionListSnapshot
+  private listSnapshotCache: SessionListSnapshot | undefined
   /** Entry-identity cache (reference stability): list rebuilds reuse the previous entry
    *  object when every field matches — wire refreshes mint all-new summary objects, so identity
    *  must be recovered by value or every SessionListItem memo misses on every refresh. */
@@ -660,7 +660,9 @@ export class SessionManager {
    */
   getListSnapshot(): SessionListSnapshot {
     this.notifier.ensureFresh()
-    return this.listSnapshotCache
+    const cached = this.listSnapshotCache
+    if (cached !== undefined) return cached
+    return this.listSnapshotCache = this.buildListSnapshot()
   }
 
   // ---- Live control and Host-event sinks ----
@@ -962,7 +964,8 @@ export class SessionManager {
     // list row), and a fresh object for equal content would re-render and re-derive
     // every subscriber. Equal content returns the previous snapshot instead.
     const previous = this.listSnapshotCache
-    if (previous.items === this.itemsCache
+    if (previous !== undefined
+      && previous.items === this.itemsCache
       && previous.current === current
       && previous.state === this.listState
       && previous.phase === this.listPhase
