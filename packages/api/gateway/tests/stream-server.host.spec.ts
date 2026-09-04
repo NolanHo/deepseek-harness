@@ -63,7 +63,7 @@ describe('Remote stream mux server carrier lifecycle', () => {
 
     client.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'x', payload: null }))
     const [message] = await once(client, 'message') as [RawData, boolean]
-    const decoded = JSON.parse(message.toString()) as { type: string; streamId: string }
+    const decoded = JSON.parse(rawJson(message)) as { type: string; streamId: string }
     expect(decoded.type).toBe('item')
     expect(decoded.streamId).toBe('s1')
 
@@ -86,7 +86,7 @@ describe('Remote stream mux server carrier lifecycle', () => {
 
     client.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'x', payload: null }))
     const [message] = await once(client, 'message') as [RawData, boolean]
-    expect(JSON.parse(message.toString()).type).toBe('item')
+    expect(JSON.parse(rawJson(message)).type).toBe('item')
 
     const closed = once(client, 'close')
     await entry.mux.close()
@@ -277,6 +277,15 @@ const mapFailure: RemoteStreamFailureMapper = error => ({
   message: error instanceof Error ? error.message : String(error),
   details: {},
 })
+
+
+/** Decode one ws text frame to its JSON string, across every RawData shape. */
+function rawJson(data: RawData): string {
+  const raw = Array.isArray(data) ? Buffer.concat(data)
+    : data instanceof ArrayBuffer ? Buffer.from(data)
+      : Buffer.from(data as Buffer)
+  return raw.toString('utf8')
+}
 
 async function startMux(
   open: RemoteStreamOpener,

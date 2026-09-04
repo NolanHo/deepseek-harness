@@ -148,7 +148,7 @@
   box-sizing: border-box;
   overflow: hidden;
   background: var(--dsw-specific-sidebar-fill);
-  border-right: 1px solid var(--dsw-alias-border-l1);
+  border-right: 0.5px solid var(--dsw-alias-border-l1);
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
   transform: translateX(-100%);
@@ -171,7 +171,7 @@
   width: min(92vw, 420px);
   box-sizing: border-box;
   background: var(--dsw-alias-bg-base);
-  border-left: 1px solid var(--dsw-alias-border-l2);
+  border-left: 0.5px solid var(--dsw-alias-border-l2);
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
   transform: translateX(100%);
@@ -194,6 +194,7 @@
   box-sizing: border-box;
   border: none;
   border-radius: 50%;
+  corner-shape: round;
   background: var(--dsw-alias-button-floating-fill);
   cursor: pointer;
 }
@@ -236,6 +237,7 @@
   box-sizing: border-box;
   border: none;
   border-radius: 50%;
+  corner-shape: round;
   background: var(--dsw-alias-button-floating-fill);
   color: var(--dsw-alias-label-primary-inverted);
   cursor: pointer;

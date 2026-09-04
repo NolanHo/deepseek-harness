@@ -962,8 +962,7 @@ export class SessionManager {
     // list row), and a fresh object for equal content would re-render and re-derive
     // every subscriber. Equal content returns the previous snapshot instead.
     const previous = this.listSnapshotCache
-    if (previous !== undefined
-      && previous.items === this.itemsCache
+    if (previous.items === this.itemsCache
       && previous.current === current
       && previous.state === this.listState
       && previous.phase === this.listPhase

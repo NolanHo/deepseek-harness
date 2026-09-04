@@ -139,7 +139,7 @@ describe('Chat inject API', () => {
     // not the wire message.
     b.openWorkspacePath.mockResolvedValueOnce({
       ok: false,
-      error: { code: 'internal', message: 'path open failed: desktop unavailable', details: {} },
+      error: new RemoteError('gateway/internal', 'path open failed: desktop unavailable', {}),
     })
     await expect(injected.openFile('src/c.md')).rejects.toThrow('当前主机没有桌面环境，无法直接打开文件')
     await b.runtime.dispose()

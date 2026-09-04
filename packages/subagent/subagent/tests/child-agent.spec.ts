@@ -21,7 +21,7 @@ function parentAgent(): Agent {
 
 /** A parent carrying a live context, so `childSessionMeta` can consult services. */
 function contextfulParent(): Agent {
-  return { ...parentAgent(), ctx: new Context() } as Agent
+  return { ...parentAgent(), ctx: new Context() }
 }
 
 describe('child Agent options', () => {

@@ -206,8 +206,11 @@ export class SessionHistoryController {
     signal: AbortSignal,
   ): Promise<SessionPage | undefined> {
     if (request.address.kind !== 'session') return undefined
-    const persistence = this.ctx.get('sessionPersistence') as SeekablePersistence | undefined
-    if (persistence?.messageCut === undefined || persistence.readFrom === undefined) return undefined
+    const candidate = this.ctx.get('sessionPersistence') as Partial<SeekablePersistence> | undefined
+    const messageCut = candidate?.messageCut
+    const readFrom = candidate?.readFrom
+    if (messageCut === undefined || readFrom === undefined) return undefined
+    const persistence: SeekablePersistence = { messageCut, readFrom }
     try {
       const page = await readIndexedPage(persistence, {
         id: addressId(request.address),
