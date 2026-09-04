@@ -48,13 +48,10 @@
       "path": "../../llm/llm"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
+      "path": "../../util/brand"
     },
     {
       "path": "../modules"
-    },
-    {
-      "path": "../../util/brand"
     }
   ]
 }

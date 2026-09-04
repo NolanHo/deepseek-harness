@@ -12,7 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { PERSONA_ORDER } from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
 import { isAbsolute } from 'node:path'
 // Type-only: make `ctx.get('sandboxPolicy')` / `ctx.get('approval')` resolve
@@ -138,7 +138,7 @@ export function resolveChildAgentOptions(
  * persisted header rather than re-reading this value.
  * @param parent - the delegating parent agent.
  * @param childDepth - the resolved delegation depth to persist.
- * @param lineageSeedLength - how many leading events came from the parent's log.
+ * @param isSeeded - whether this child inherits a parent-log prefix, including an explicitly empty one.
  * @param cwd - optional absolute workspace stamped over the parent's.
  * @returns the `meta` for `ctx.agents.create()`.
  * @throws when a requested `cwd` is not an absolute path.
@@ -146,7 +146,7 @@ export function resolveChildAgentOptions(
 export function childSessionMeta(
   parent: Agent,
   childDepth: number,
-  lineageSeedLength: number,
+  isSeeded: boolean,
   cwd?: string,
 ): NonNullable<CreateAgentOptions['meta']> {
   if (cwd !== undefined && !isAbsolute(cwd)) {
@@ -159,12 +159,12 @@ export function childSessionMeta(
     ...resolvedCwd !== undefined ? { cwd: resolvedCwd } : {},
     ...agentPreset === undefined ? {} : { agentPreset },
     parentSession: parentHeader.id,
+    isSeeded,
     // Navigation classification only; the descriptor remains the authority
     // for mode and continuation capability.
     origin: 'subagent',
     // Durable: the recursion budget must survive persistence and resume.
     delegationDepth: childDepth,
-    ...lineageSeedLength > 0 ? { seedLength: lineageSeedLength } : {},
   }
 }
 
@@ -227,10 +227,17 @@ export function applyChildComposition(
   composition: ChildComposition,
 ): void {
   childCtx.get('agentPresets')?.composeFrom(childCtx, parent.ctx)
-  // Order 120: after the sandbox:policy (110) and approval:policy (115) sentences.
-  childCtx.systemPrompt.context({ name: 'subagent:delegation', order: 120, text: SUBAGENT_DELEGATION_CONTEXT })
+  childCtx.systemPrompt.context({
+    name: 'subagent:delegation',
+    order: childCtx.systemPrompt.getContextOrder('SUBAGENT_DELEGATION'),
+    text: SUBAGENT_DELEGATION_CONTEXT,
+  })
   if (composition.persona !== undefined) {
-    childCtx.systemPrompt.section({ name: 'deployment:persona', order: PERSONA_ORDER, text: composition.persona })
+    childCtx.systemPrompt.section({
+      name: 'deployment:persona',
+      order: childCtx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA'),
+      text: composition.persona,
+    })
   }
   if (composition.toolFilter !== undefined) childCtx.tools.restrict(composition.toolFilter)
   if (composition.skillFilter !== undefined) {

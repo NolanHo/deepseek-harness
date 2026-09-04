@@ -20,10 +20,6 @@
   - img
   - text: Collapsed 1 tool call · 1 message · {{duration}}
 - paragraph: DONE
-- button "Turn usage 15.8K tok · Cache hit 49.7%":
-  - img
-  - img
-  - text: Turn usage 15.8K tok · Cache hit 49.7%
 - button "Copy":
   - img
 - button "Good response":
@@ -32,7 +28,13 @@
   - img
 - button "Branch into a new conversation":
   - img
-- text: {{clock}} Ran for {{duration}} TTFT {{duration}} {{throughput}} tok/s
+- button "Usage 15.8K tok":
+  - img
+  - text: Usage 15.8K tok
+- button "Ran for {{duration}}":
+  - img
+  - text: Ran for {{duration}}
+- text: {{clock}}
 - textbox "Message or run a task... / commands, @ files or sessions"
 - button "Commands":
   - img
