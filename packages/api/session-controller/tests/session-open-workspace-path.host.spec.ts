@@ -2,6 +2,7 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SessionStore from '@deepseek-ai/dsh-session'
 import { describe, expect, it, vi } from 'vitest'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import {
   createSessionTestController,
   createSessionTestRemote,
@@ -105,7 +106,7 @@ describe('session/openWorkspacePath', () => {
     await expect(remote.openWorkspacePath({ path: 'result.md' }))
       .resolves.toEqual({
         ok: false,
-        error: { code: 'internal', message: 'path open failed: desktop unavailable', details: {} },
+        error: new RemoteError('gateway/internal', 'path open failed: desktop unavailable', {}),
       })
     expect(openPath).not.toHaveBeenCalled()
   })
