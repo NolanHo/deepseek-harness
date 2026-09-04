@@ -24,10 +24,10 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `session.ts` PAGE_MESSAGES 8（上游 50） | B | 8 行 | 客户端页大小 |
 | `client/connection` browserAuth 开关 | B | ~50 行 | 配置字段后的可选认证关闭 |
 | `ui-chat` TurnProcessNodeView 标签+时长、ChatNodeSeat 门移除、locale、CSS | C | ~60 行 | 折叠增强；局部块 |
-| `ui-chat` ChatView 读者输入归因 | D | 32 行 | 上游滚动跟随 bug 的修复（钳位误判）；关注上游自行修复以缩小该 diff |
+| `ui-chat` ChatView 读者输入归因 | 已退役 | — | 上游自己的修复已落地（observed-top 几何台账覆盖全部输入设备，无需监听器）；fork 的设备标记补丁在 0.1.2-rc.1 同步时移除 |
 | `ui-conversation`/`ui-chat` CSS overflow-anchor + 安全区 | C | ~40 行 | 滚动容器锚定；局部规则 |
 | `api/session-controller/src/history.ts` 快路径注入 | C | ~60 行 | 委托给 fork 自有 `src/page-boundary.ts`（边界游走、梯子、快路径计划）；`page()` 一次调用加 `paginate` 的委托 |
-| `session-persistence-sqlite` messageCut | C | ~24 行 | 具体存储的索引切点；上游抽象、coordinator、jsonl 桩已回归原状 |
+| `session-persistence-sqlite` 整包 + messageCut | A（0.1.2-rc.1 起 fork 拥有） | 8 个文件 | 上游按 JSONL-only 决策删除该包但为 out-of-tree 提供者保留接缝；fork 保留并移植到 handle-based `PersistenceBackend`/coordinator，SCHEMA_VERSION 19 不变（`isSeeded` 映射到可空 `seed_length` 列；ignorable 信封以保留 JSON 标签存于 `data` 列） |
 | `session-query-sqlite` 活动观察记忆化 | C | 30 行 | 单函数内的局部记忆化 |
 | `client/ui-layout` AppFrame 移动端 shell | C | ~62 行 + fork 自有 `mobile-shell.tsx` | 视口机制 hook、抽屉 chrome、详情面板在 fork 模块里；AppFrame 组合 |
 | 对话头部移动端精简（session-log 胶囊 + 面包屑） | C | ~10 行 | `max-width: 560px` 媒体块在手机宽度隐藏 Session log 下载胶囊（`session-log-export`）与会话标题面包屑（`ui-conversation`） |
