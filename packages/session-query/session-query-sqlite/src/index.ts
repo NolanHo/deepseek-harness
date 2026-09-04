@@ -571,8 +571,9 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   }
 
   private _observeLiveCached(session: Session): ObservedSession {
-    const tail = session.events.at(-1)
-    const key = `${session.events.length}:${tail?.seq ?? 'none'}:${tail?.time ?? 'none'}`
+    const events = session.snapshotEvents()
+    const tail = events.at(-1)
+    const key = `${events.length}:${tail?.seq ?? 'none'}:${tail?.time ?? 'none'}`
     const cached = this._liveObservationMemo.get(session.id)
     if (cached !== undefined && cached.key === key) return cached.observation
     const observation = observeLive(session)

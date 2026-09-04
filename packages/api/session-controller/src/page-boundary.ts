@@ -63,7 +63,7 @@ export function nthMessageCut(
     const event = window[index] as SessionEvent
     if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
     const sources = (event as { readonly sourceEventSeqs?: readonly number[] }).sourceEventSeqs
-    let groupStart = event.seq
+    let groupStart: number = event.seq
     if (sources !== undefined) {
       for (const source of sources) groupStart = Math.min(groupStart, source)
     }

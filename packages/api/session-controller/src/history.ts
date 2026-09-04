@@ -216,16 +216,16 @@ export class SessionHistoryController {
         throughSeq: request.throughSeq,
       }, (meta, events) => {
         if (meta.cwd === undefined) rejectNotFound(request.address)
-        validateAddress(request.address, meta, undefined)
+        validateAddress(request.address, meta, SessionLogOffset(0), undefined)
         if (request.throughSeq > (events.at(-1)?.seq ?? -1)) {
-          reject(
-            'bad-request',
+          throw new RemoteError(
+            'gateway/bad-request',
             `session page through seq ${String(request.throughSeq)} is past cursor ${String(events.at(-1)?.seq ?? -1)}`,
             {},
           )
         }
         if (request.throughSeq >= 0 && !events.some(event => event.seq === request.throughSeq)) {
-          reject('internal', `session log does not contain through seq ${String(request.throughSeq)}`, {})
+          throw new RemoteError('gateway/internal', `session log does not contain through seq ${String(request.throughSeq)}`, {})
         }
       }, signal)
       if (page === undefined) return undefined
@@ -234,7 +234,7 @@ export class SessionHistoryController {
       // The fast path is an optimization: any failure — including a generic
       // not-found from readFrom — re-runs through the observation path, which
       // owns the request's error mapping and subagent validation.
-      if (error instanceof TypertRemoteFailure) throw error
+      if (error instanceof RemoteError) throw error
       return undefined
     }
   }

@@ -11,6 +11,7 @@ import type {
   SessionEvent,
   SessionHeader,
   SessionId,
+  SessionLogOffset,
   SessionPreparation,
 } from '@deepseek-ai/dsh-session'
 import {
@@ -20,6 +21,7 @@ import {
   type BorrowedSessionSource,
   PersistenceCoordinator,
   SessionPersistence,
+  type SessionEventSuffix,
   type SessionInspection,
   type SessionLocation,
   type SessionPersistenceSnapshot,
@@ -96,8 +98,8 @@ export class SqliteSessionPersistence extends SessionPersistence {
     return undefined
   }
 
-  create(meta: SessionHeader): Promise<void> {
-    return this.coordinator.create(meta)
+  create(meta: SessionHeader, inheritedEventCount?: SessionLogOffset): Promise<void> {
+    return this.coordinator.create(meta, inheritedEventCount)
   }
 
   override ensureMaterialized(session: Session): Promise<void> {
@@ -126,9 +128,9 @@ export class SqliteSessionPersistence extends SessionPersistence {
 
   readFrom(
     id: SessionId,
-    fromSeq: number,
+    fromSeq: SessionLogOffset,
     signal?: AbortSignal,
-  ): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
+  ): Promise<SessionEventSuffix> {
     return this.coordinator.readFrom(id, fromSeq, signal)
   }
 

@@ -83,7 +83,7 @@ describe('child Agent options', () => {
 
 describe('child session metadata cwd', () => {
   it('stamps a requested cwd into the child creation metadata', () => {
-    expect(childSessionMeta(contextfulParent(), 1, 0, '/child-workspace')).toMatchObject({
+    expect(childSessionMeta(contextfulParent(), 1, false, '/child-workspace')).toMatchObject({
       cwd: '/child-workspace',
       parentSession: SessionId('parent'),
       origin: 'subagent',
@@ -92,15 +92,15 @@ describe('child session metadata cwd', () => {
   })
 
   it('omits cwd when neither the request nor the parent header carries one', () => {
-    const meta = childSessionMeta(contextfulParent(), 1, 0)
+    const meta = childSessionMeta(contextfulParent(), 1, false)
     expect(meta.cwd).toBeUndefined()
     expect(meta.parentSession).toBe(SessionId('parent'))
   })
 
   it('rejects a requested cwd that is not absolute', () => {
-    expect(() => childSessionMeta(contextfulParent(), 1, 0, 'relative/path'))
+    expect(() => childSessionMeta(contextfulParent(), 1, false, 'relative/path'))
       .toThrow('child session cwd must be an absolute path')
-    expect(() => childSessionMeta(contextfulParent(), 1, 0, 'relative/path'))
+    expect(() => childSessionMeta(contextfulParent(), 1, false, 'relative/path'))
       .toThrow('got "relative/path"')
   })
 })

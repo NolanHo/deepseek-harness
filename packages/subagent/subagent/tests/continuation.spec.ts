@@ -483,7 +483,7 @@ describe('SubagentRuntime.startContinuable', () => {
     })
     expect(child.session.header.cwd).toBe('/isolated-workspace')
 
-    expect(child.session.events.find(event => event.type === 'subagent/descriptor')?.data)
+    expect(child.session.snapshotEvents().find(event => event.type === 'subagent/descriptor')?.data)
       .toEqual({
         version: SUBAGENT_DESCRIPTOR_VERSION,
         mode: 'continuable',
@@ -510,7 +510,7 @@ describe('SubagentRuntime.startContinuable', () => {
     })
     // The test parent carries no workspace, so the child inherits none.
     expect(child.session.header.cwd).toBeUndefined()
-    expect(child.session.events.find(event => event.type === 'subagent/descriptor')?.data)
+    expect(child.session.snapshotEvents().find(event => event.type === 'subagent/descriptor')?.data)
       .toEqual({
         version: SUBAGENT_DESCRIPTOR_VERSION,
         mode: 'continuable',
@@ -543,7 +543,7 @@ describe('SubagentRuntime.startContinuable', () => {
       .toEqual(['alpha'])
 
     await waitNoActivation(ctx, started.childId)
-    await followup(ctx, parent, started.childId, message('resume it'))
+    await queuePrompt(ctx, parent, started.childId, message('resume it'))
     const resumed = await vi.waitFor(() => {
       const found = ctx.agents.get(started.childId)
       expect(found).toBeDefined()

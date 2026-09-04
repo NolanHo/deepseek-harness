@@ -285,11 +285,7 @@ export class SessionController extends TypertRemoteService {
     }
     signal.throwIfAborted()
     if (!this.canOpenPath()) {
-      throw new TypertRemoteFailure({
-        code: 'internal',
-        message: 'path open failed: desktop unavailable',
-        details: {},
-      })
+      throw new RemoteError('gateway/internal', 'path open failed: desktop unavailable', {})
     }
     try {
       await this.openPath(request.path, signal)

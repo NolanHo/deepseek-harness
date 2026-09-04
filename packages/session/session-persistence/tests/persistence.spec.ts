@@ -1671,12 +1671,16 @@ describe('PersistenceCoordinator observation cancellation', () => {
     await ctx.plugin(SessionStore)
     const backend = new MemoryPersistence(ctx)
     const cutMeta = meta(SessionId('cut-session'))
-    await backend.appendBatch(cutMeta, [
-      { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
-      { type: 'user/message', seq: 1, time: 1, surfaceOp: 'append', data: { role: 'user', id: 'u1' as never, content: [], source: { kind: 'user' } } },
-      { type: 'assistant/message', seq: 2, time: 2, surfaceOp: 'append', data: { turn: 1, step: 1, message: { role: 'assistant', id: 'a1' as never, content: [], source: { kind: 'model', provider: 'p', model: 'm' } } } },
-      { type: 'user/message', seq: 3, time: 3, surfaceOp: 'append', data: { role: 'user', id: 'u2' as never, content: [], source: { kind: 'user' } } },
-    ], false)
+    await backend.appendBatch(
+      { meta: cutMeta, inheritedEventCount: SessionLogOffset(0) },
+      [
+        { type: 'turn/start', seq: SessionSeq(0), time: 0, data: { turn: 1 } },
+        { type: 'user/message', seq: SessionSeq(1), time: 1, surfaceOp: 'append', data: { role: 'user', id: 'u1' as never, content: [], source: { kind: 'user' } } },
+        { type: 'assistant/message', seq: SessionSeq(2), time: 2, surfaceOp: 'append', data: { turn: 1, step: 1, message: { role: 'assistant', id: 'a1' as never, content: [], source: { kind: 'model', provider: 'p', model: 'm' } } } },
+        { type: 'user/message', seq: SessionSeq(3), time: 3, surfaceOp: 'append', data: { role: 'user', id: 'u2' as never, content: [], source: { kind: 'user' } } },
+      ],
+      false,
+    )
 
     expect(await backend.messageCut(cutMeta.id, 1)).toBe(3)
     expect(await backend.messageCut(cutMeta.id, 2)).toBe(1)
