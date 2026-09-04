@@ -26,23 +26,19 @@ export interface BoundRecord {
   readonly data: string | Uint8Array
   readonly sourceEventSeqs: Uint8Array | null
   readonly surfaceOp: string | null
-  readonly isPacked: 0 | 1
+  readonly ignorable: number | null
 }
 
 const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true })
 const ZSTD_COMPRESSION_LEVEL = 3
 const DELTA_TAG = 0
 const RUN_TAG = 1
-/**
- * Schema-19 has no envelope column for the optional ignorable marker, so an
- * ignorable scalar event is stored as one tagged JSON object under the data
- * column. Rows written before this tag ever existed decode unchanged.
- */
-const IGNORABLE_DATA_KEY = '@dsh/session-persistence-sqlite/ignorable'
 const MAX_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER)
 const MAX_ZIGZAG_INTEGER = MAX_SAFE_INTEGER * 2n
+/** `ignorable` value marking one packed chunk row; scalars carry 0/1 or NULL. */
+const PACKED_ROW_SENTINEL = 0
 /**
- * Schema-19 raw-content zstd dictionary for independently decodable data rows.
+ * Schema-20 raw-content zstd dictionary for independently decodable data rows.
  * Its exact bytes are part of the physical format; changing the resource
  * requires a schema-version bump.
  */
@@ -66,7 +62,7 @@ function isChunkTag(value: string): value is ChunkTag {
  * @returns every logical event represented by the row.
  */
 export function decodeRow(row: EventRow): SessionEvent[] {
-  if (row.is_packed === 0) return [decodeScalarRow(row)]
+  if (row.ignorable !== PACKED_ROW_SENTINEL) return [decodeScalarRow(row)]
   if (!isChunkTag(row.type)) {
     throw new Error(`malformed ${row.type} storage row: packed discriminator requires a chunk tag`)
   }
@@ -95,7 +91,7 @@ export function bindRecord(record: StorageRecord): BoundRecord {
       data: encodeData(JSON.stringify(record.data)),
       sourceEventSeqs: null,
       surfaceOp: null,
-      isPacked: 1,
+      ignorable: PACKED_ROW_SENTINEL,
     }
   }
   const event = record
@@ -104,20 +100,13 @@ export function bindRecord(record: StorageRecord): BoundRecord {
     seq: event.seq,
     type: event.type,
     time: event.time,
-    data: encodeData(encodeScalarData(event)),
+    data: encodeData(JSON.stringify(event.data)),
     sourceEventSeqs: surface.sourceEventSeqs === undefined
       ? null
       : encodeSourceEventSeqs(surface.sourceEventSeqs),
     surfaceOp: surface.surfaceOp === undefined ? null : JSON.stringify(surface.surfaceOp),
-    isPacked: 0,
+    ignorable: event.ignorable === true ? 1 : null,
   }
-}
-
-/** Serialize scalar event data, tagging the ignored event envelope marker. */
-function encodeScalarData(event: SessionEvent): string {
-  return event.ignorable === true
-    ? JSON.stringify({ [IGNORABLE_DATA_KEY]: event.data })
-    : JSON.stringify(event.data)
 }
 
 function encodeData(serialized: string): string | Uint8Array {
@@ -276,20 +265,6 @@ function isChunkRow(record: StorageRecord): record is ChunkRow {
   return isChunkTag(record.type) && 'seq0' in record && !('seq' in record)
 }
 
-/** Whether one scalar data value is the ignorable-envelope tag. */
-function isIgnorableEnvelope(value: unknown): value is { [IGNORABLE_DATA_KEY]: unknown } {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    && Object.keys(value).length === 1 && Object.hasOwn(value, IGNORABLE_DATA_KEY)
-}
-
-/** Decode scalar data, unwrapping the ignorable-envelope tag when present. */
-function decodeScalarData(serialized: string): { readonly data: unknown; readonly ignorable: boolean } {
-  const parsed: unknown = JSON.parse(serialized)
-  return isIgnorableEnvelope(parsed)
-    ? { data: parsed[IGNORABLE_DATA_KEY], ignorable: true }
-    : { data: parsed, ignorable: false }
-}
-
 function decodeScalarRow(row: EventRow): SessionEvent {
   const surfaceFields = {
     ...row.source_event_seqs === null
@@ -302,14 +277,13 @@ function decodeScalarRow(row: EventRow): SessionEvent {
       ? {}
       : { surfaceOp: JSON.parse(row.surface_op) as SessionEvent<SurfaceEventType>['surfaceOp'] },
   }
-  const { data, ignorable } = decodeScalarData(decodeData(row.data))
   return {
     type: row.type as SessionEvent['type'],
     seq: SessionSeq(row.seq),
     time: row.time,
-    data: data as SessionEvent['data'],
+    data: JSON.parse(decodeData(row.data)) as SessionEvent['data'],
     ...surfaceFields,
-    ...ignorable ? { ignorable: true as const } : {},
+    ...row.ignorable === 1 ? { ignorable: true as const } : {},
   } as SessionEvent
 }
 

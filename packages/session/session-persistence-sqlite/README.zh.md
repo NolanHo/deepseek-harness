@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-session-persistence-sqlite` 是 `SessionPersistence` 服务的可选存储后端：它不按会话各留一个文件，而是把所有会话的持久事件日志统一保存在同一个 SQLite 数据库中。它与 JSONL 后端提供完全相同的逻辑 `SessionEvent` 流，因此选择它不会改变 agent loop、模型或回放的任何行为——打包、压缩与恢复都是存储内部细节。仅当单一可查询数据库适合你的部署时才选择它；任何已发布的组合都不会默认启用它。这是预发布提供方：它拒绝而非迁移不属于自己的数据库文件，而且其同步 Node SQLite 驱动会在读写时阻塞 JavaScript 线程。设置、容量评估与迁移指引在前；实现内部细节放在下方可折叠的开发者章节中。
+`dsh-session-persistence-sqlite` 是 `SessionPersistence` 服务的可选存储后端：它不按会话各留一个文件，而是把所有会话的持久事件日志统一保存在同一个 SQLite 数据库中。它与 JSONL 后端提供完全相同的逻辑 `SessionEvent` 流，因此选择它不会改变 agent loop、模型或回放的任何行为——打包、压缩与恢复都是存储内部细节。仅当单一可查询数据库适合你的部署时才选择它；任何已发布的组合都不会默认启用它。这是预发布提供方：它会在原地升级唯一的 schema-19 前身，并拒绝其他一切不属于自己的数据库文件；其同步 Node SQLite 驱动会在读写时阻塞 JavaScript 线程。设置、容量评估与迁移指引在前；实现内部细节放在下方可折叠的开发者章节中。
 
 ## 目录
 
@@ -75,7 +75,7 @@ await ctx.sessionPersistence.append(id, events)
 
 ### 启动与安全运行
 
-全新数据库直接初始化为 schema 版本 19，并使用 64 KiB page。已有文件不会被重新调参：任何其他版本、外来应用标识、无版本的非全新 schema 或意外 schema 对象，都会在任何数据暴露或变更之前被拒绝。本预发布提供方不提供迁移。每条语句和固定 pragma 都来自 `resources/sql/` 下打包的 `.sql` 资源，运行时的值以 SQLite 参数绑定，包代码从不拼装查询文本。
+全新数据库直接初始化为 schema 版本 20，并使用 64 KiB page。既有 schema-19 数据库会在打开事务内一次性原地升级：events 表增加 `ignorable` envelope 列，原打包行写入 schema-20 的打包行哨兵值，并删除旧的 `is_packed` 列。任何其他版本、外来应用标识、无版本的非全新 schema 或意外 schema 对象，都会在任何数据暴露或变更之前被拒绝。每条语句和固定 pragma 都来自 `resources/sql/` 下打包的 `.sql` 资源，运行时的值以 SQLite 参数绑定，包代码从不拼装查询文本。
 
 每个连接都会禁用 SQLite trusted schema 与内存映射 I/O、验证所请求的 journal mode，并固定 `synchronous=FULL`，保证成功返回的追加在操作系统崩溃或断电后依然持久。在 POSIX 上，数据库父目录和文件必须属于当前用户，父目录不得允许组或其他用户写入，文件也不得授予任何组或其他用户权限；Windows 还会拒绝符号链接和非普通文件，ACL 限制则由部署方负责。路径与所有权失败会拒绝插件初始化；Node 的 SQLite 驱动在首次持久化操作时才延迟加载。普通 `create` 会保持惰性直到首次 append，而 `ensureMaterialized` 会写入一条没有事件行的会话元数据记录。
 
@@ -94,7 +94,7 @@ await ctx.sessionPersistence.append(id, events)
 本提供方建立在一个分离与三项承诺之上：
 
 - **逻辑约定，物理格式。** 调用方始终读写普通的 `SessionEvent[]`；行如何打包、存储与压缩是本包私有的存储行为。
-- **schema 拥有格式。** Schema 19 是冻结的物理约定：任何其他版本、外来标识或意外 schema 对象的数据库都会被拒绝，绝不迁移。改变 schema、行 codec、page size 或字典字节都需要新的 schema 版本。
+- **schema 拥有格式。** Schema 20 是冻结的物理约定：任何其他版本、外来标识或意外 schema 对象的数据库都会被拒绝，绝不迁移。schema-19 数据库是唯一被接受的前身，会在打开时原地升级一次。改变 schema、行 codec、page size 或字典字节都需要新的 schema 版本。
 - **持久性是默认值。** 追加在立即事务中以 `synchronous=FULL` 提交，成功返回的 `append()` 意味着该批次已持久。普通追加仅插入：更早的事件行永远不会被重写。
 - **在严格边界内追求效率。** 打包与压缩让数据库保持小巧，但每个上限都是硬性格式边界——每个打包行至多表示 1,024 个事件、1 MiB 载荷。
 
@@ -122,7 +122,7 @@ await ctx.sessionPersistence.append(id, events)
 | `sessions` | 每个会话一行：头部字段加单调递增的 revision |
 | `events` | 物理事件行：一个逻辑事件，或一个打包连续段 |
 
-确切的列定义见 [`resources/sql/schema.sql`](resources/sql/schema.sql)。`sessions.id` 是内部整数键，`sessions.session_key` 保留公开会话 id。`events.data` 存放文本或可独立解码的 Zstandard blob；仅在结果更小时才使用 schema 自有的共享字典压缩。`events.source_event_seqs` 使用带 tag 的 delta 或 run 编码。标量逻辑事件的 `events.is_packed` 为 `0`，打包分片连续段的该值为 `1`，因此类型与物理分片标签同名的标量事件仍然明确。打包行沿用其首个逻辑事件的 `seq`，因此在复合主键 `(session_id, seq)` 下，物理顺序就是逻辑顺序。
+确切的列定义见 [`resources/sql/schema.sql`](resources/sql/schema.sql)。`sessions.id` 是内部整数键，`sessions.session_key` 保留公开会话 id。`events.data` 存放文本或可独立解码的 Zstandard blob；仅在结果更小时才使用 schema 自有的共享字典压缩。`events.source_event_seqs` 使用带 tag 的 delta 或 run 编码。`events.ignorable` 对普通标量事件为 `NULL`，标量事件 envelope 带 ignorable 标记时为 `1`，打包分片连续段为 `0`（打包行哨兵值），因此类型与物理分片标签同名的标量事件仍然明确。打包行沿用其首个逻辑事件的 `seq`，因此在复合主键 `(session_id, seq)` 下，物理顺序就是逻辑顺序。
 
 ### 写入路径
 
@@ -173,7 +173,7 @@ await ctx.sessionPersistence.append(id, events)
 
 这些限制说明本提供方何时不合适，或何时需要特别的运维注意。它们是当前包约束，不是通用 SQLite 对比或任务积压。
 
-- **预发布设计，无迁移**——schema 19 是临时的 SQLite 专用设计；不保证 schema 稳定性或迁移支持。
+- **预发布 schema 策略**——只有当前 schema 20 与其 schema-19 前身可以打开；任何其他磁盘版本都会被拒绝，不做转换。
 - **打包依赖批次边界**——被写后窗口或显式 flush 拆开的兼容连续段仍分属不同物理行；这避免了重写先前行，代价是打包比例依赖时序。
 - **同步 SQLite 与压缩**——Node 的 SQLite 驱动与 Zstandard 调用会阻塞 JavaScript 线程。
 - **忙等待阻塞事件循环**——SQLite 在同步调用内部等待；竞争写入方最长可让线程停顿配置的 `busyTimeoutMs`。
@@ -186,6 +186,6 @@ await ctx.sessionPersistence.append(id, events)
 <details>
 <summary>维护者的工作上下文——点击展开</summary>
 
-501 会话语料包含私有会话数据，因此不提交到仓库。汇总方法、完整结果与未采用候选记录在[持久化延迟与 page size 决策](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.zh.md)中；schema 19 以打包资源及测试固定的字典摘要为准。
+501 会话语料包含私有会话数据，因此不提交到仓库。汇总方法、完整结果与未采用候选记录在[持久化延迟与 page size 决策](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.zh.md)中；schema 20 以打包资源及测试固定的字典摘要为准。
 
 </details>

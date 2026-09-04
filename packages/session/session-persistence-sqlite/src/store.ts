@@ -418,7 +418,7 @@ export class SqliteStore implements PersistenceBackend<number> {
       record.data,
       record.sourceEventSeqs,
       record.surfaceOp,
-      record.isPacked,
+      record.ignorable,
     )
   }
 
@@ -431,7 +431,7 @@ export class SqliteStore implements PersistenceBackend<number> {
       meta.cwd ?? null,
       meta.parentSession ?? null,
       // The durable seed cut stays a nullable column: unseeded rows keep NULL
-      // so schema-19 databases written by this fork round-trip unchanged.
+      // and seeded rows store the inherited event count.
       meta.isSeeded ? Number(inheritedEventCount) : null,
       meta.origin ?? null,
       meta.delegationDepth ?? null,

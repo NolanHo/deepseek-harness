@@ -15,7 +15,9 @@ import {
 import { sql } from './sql.ts'
 
 /** Current physical-record schema with packed and compressed event rows. */
-export const SCHEMA_VERSION = 19
+export const SCHEMA_VERSION = 20
+/** The only on-disk schema version upgraded in place by {@link configureDatabase}. */
+const MIGRATED_SCHEMA_VERSION = 19
 /** Application id reserved for DeepSeek Harness SQLite session databases. */
 export const SESSION_PERSISTENCE_SQLITE_APPLICATION_ID = 0x44534850
 
@@ -42,7 +44,7 @@ export interface EventRow {
   readonly data: string | Uint8Array
   readonly source_event_seqs: Uint8Array | null
   readonly surface_op: string | null
-  readonly is_packed: 0 | 1
+  readonly ignorable: number | null
 }
 
 /** Durable journal modes accepted by the backend. */
@@ -121,7 +123,7 @@ function configureDatabase(
     if (onDisk === 0 && (applicationId !== 0 || userObjectCount > 0)) {
       throw new Error(`session database at "${path}" has an unversioned schema or application identity`)
     }
-    if (onDisk !== 0 && onDisk !== SCHEMA_VERSION) {
+    if (onDisk !== 0 && onDisk !== MIGRATED_SCHEMA_VERSION && onDisk !== SCHEMA_VERSION) {
       throw new Error(
         `session database at "${path}" has schema version ${onDisk}, incompatible with this build (${SCHEMA_VERSION})`,
       )
@@ -132,6 +134,7 @@ function configureDatabase(
       )
     }
     if (onDisk === 0) initializeDatabase(db)
+    else if (onDisk === MIGRATED_SCHEMA_VERSION) migrateSchema19To20(db)
     validateRequiredSchema(Database, db, path)
     db.exec(sql('commit'))
     began = false
@@ -207,7 +210,19 @@ function initializeDatabase(db: DatabaseSync): void {
   db.exec(sql('schema'))
   db.prepare(sql('insert-persistence-state')).run(randomUUID())
   db.exec(sql('set-application-id'))
-  db.exec(sql('set-user-version-19'))
+  db.exec(sql('set-user-version-20'))
+}
+
+/**
+ * Upgrade one schema-19 database to schema 20 inside the caller's open
+ * transaction. The events table gains the nullable `ignorable` envelope
+ * column, rows that were packed under the `is_packed` discriminator carry
+ * the packed-row sentinel (0), and the dropped `is_packed` column is
+ * removed. Scalar rows stay NULL (not ignorable).
+ */
+function migrateSchema19To20(db: DatabaseSync): void {
+  db.exec(sql('migrate-schema-20'))
+  db.exec(sql('set-user-version-20'))
 }
 
 let canonicalSchema: readonly SchemaObjectRow[] | undefined
@@ -314,9 +329,9 @@ export function decodeSessionRow(value: unknown): SessionRow {
  */
 export function decodeEventRow(value: unknown): EventRow {
   const row = record(value, 'stored event')
-  const isPacked = safeIntegerField(row, 'is_packed')
-  if (isPacked !== 0 && isPacked !== 1) {
-    throw new Error('stored event is_packed must be 0 or 1')
+  const ignorable = nullableSafeIntegerField(row, 'ignorable')
+  if (ignorable !== null && ignorable !== 0 && ignorable !== 1) {
+    throw new Error('stored event ignorable must be 0, 1, or null')
   }
   return {
     seq: nonnegativeSafeIntegerField(row, 'seq'),
@@ -325,7 +340,7 @@ export function decodeEventRow(value: unknown): EventRow {
     data: stringOrBlobField(row, 'data'),
     source_event_seqs: nullableBlobField(row, 'source_event_seqs'),
     surface_op: nullableStringField(row, 'surface_op'),
-    is_packed: isPacked,
+    ignorable,
   }
 }
 

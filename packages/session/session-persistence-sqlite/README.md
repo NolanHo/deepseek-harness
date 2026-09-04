@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-session-persistence-sqlite` keeps every session's durable history in a single SQLite database: sessions survive restarts, and the deployment's whole history becomes one queryable file you can back up, inspect with SQL, and analyze — instead of one artifact per session. Choosing it changes nothing for the agent loop, the model, or replay, because it serves the same logical `SessionEvent` stream as the JSONL backend; packing, compression, and recovery are storage-internal details. Choose it when a single queryable database fits the deployment; no shipped composition enables it by default. It is a pre-release provider: it rejects database files it does not own instead of migrating them, and its synchronous Node SQLite driver blocks the JavaScript thread during reads and writes. Setup, sizing, and migration guidance come first; the implementation internals live in a collapsible developer section below.
+`dsh-session-persistence-sqlite` keeps every session's durable history in a single SQLite database: sessions survive restarts, and the deployment's whole history becomes one queryable file you can back up, inspect with SQL, and analyze — instead of one artifact per session. Choosing it changes nothing for the agent loop, the model, or replay, because it serves the same logical `SessionEvent` stream as the JSONL backend; packing, compression, and recovery are storage-internal details. Choose it when a single queryable database fits the deployment; no shipped composition enables it by default. It is a pre-release provider: it upgrades the one schema-19 predecessor in place and rejects any other file it does not own, and its synchronous Node SQLite driver blocks the JavaScript thread during reads and writes. Setup, sizing, and migration guidance come first; the implementation internals live in a collapsible developer section below.
 
 ## Table of Contents
 
@@ -75,7 +75,7 @@ await ctx.sessionPersistence.append(id, events)
 
 ### Startup and safe operation
 
-A fresh database initializes directly at schema version 19 with 64 KiB pages. Existing files are never retuned: databases with any other version, a foreign application identity, an unversioned non-pristine schema, or unexpected schema objects are rejected before any data is exposed or changed. This pre-release provider ships no migration. Every statement and fixed pragma comes from packaged `.sql` resources in `resources/sql/`, and runtime values are bound as SQLite parameters, so package code never assembles query text.
+A fresh database initializes directly at schema version 20 with 64 KiB pages. An existing schema-19 database is upgraded once, in place, inside the open transaction: the events table gains the `ignorable` envelope column, packed rows carry the schema-20 packed-row sentinel, and the old `is_packed` column is dropped. Databases with any other version, a foreign application identity, an unversioned non-pristine schema, or unexpected schema objects are rejected before any data is exposed or changed. Every statement and fixed pragma comes from packaged `.sql` resources in `resources/sql/`, and runtime values are bound as SQLite parameters, so package code never assembles query text.
 
 Each connection disables SQLite trusted schemas and memory-mapped I/O, verifies the requested journal mode, and pins `synchronous=FULL` so a resolved append remains durable across an OS crash or power loss. On POSIX, the database parent directory and file must belong to the current user, the parent must not be group/world-writable, and the file must grant no group or world permissions; Windows additionally rejects symbolic links and non-regular files, while ACL restriction stays the deployment's job. Path and ownership failures reject plugin initialization; Node's SQLite driver loads lazily on the first persistence operation. Ordinary `create` stays lazy until the first append, while `ensureMaterialized` writes a session metadata row with no event rows.
 
@@ -94,7 +94,7 @@ This section explains the design decisions behind the provider and points at the
 The provider is built on one separation and three commitments:
 
 - **Logical contract, physical format.** Callers always read and write ordinary `SessionEvent[]`; how rows are packed, stored, and compressed is private to this package.
-- **The schema owns the format.** Schema 19 is a frozen physical contract: a database at another version, with a foreign identity, or with unexpected schema objects is rejected, never migrated. Changing the schema, row codec, page size, or dictionary bytes requires a new schema version.
+- **The schema owns the format.** Schema 20 is a frozen physical contract: a database at another version, with a foreign identity, or with unexpected schema objects is rejected, never migrated. Schema-19 databases are the one accepted predecessor and are upgraded in place once at open. Changing the schema, row codec, page size, or dictionary bytes requires a new schema version.
 - **Durability is the default.** Appends run in immediate transactions with `synchronous=FULL`, and a resolved `append()` means the batch is durable. Normal appends are insert-only: earlier event rows are never rewritten.
 - **Efficiency within strict bounds.** Packing and compression keep the database small, but every limit is a hard format bound — at most 1,024 events and 1 MiB of payload per packed row.
 
@@ -122,7 +122,7 @@ A fresh database contains three strict tables, defined in [`resources/sql/schema
 | `sessions` | One row per session: header fields plus a monotonic revision |
 | `events` | Physical event rows: one logical event, or one packed run |
 
-The exact columns live in [`resources/sql/schema.sql`](resources/sql/schema.sql). `sessions.id` is an internal integer key while `sessions.session_key` retains the public session id. `events.data` holds text or an independently decodable Zstandard blob; compression uses the schema-owned shared dictionary only when the result is smaller. `events.source_event_seqs` uses tagged delta or run encoding. `events.is_packed` is `0` for a scalar logical event and `1` for a packed chunk run, so a scalar event whose type matches a physical chunk tag remains unambiguous. Packed rows reuse the `seq` of their first logical event, so under the composite `(session_id, seq)` primary key physical order is logical order.
+The exact columns live in [`resources/sql/schema.sql`](resources/sql/schema.sql). `sessions.id` is an internal integer key while `sessions.session_key` retains the public session id. `events.data` holds text or an independently decodable Zstandard blob; compression uses the schema-owned shared dictionary only when the result is smaller. `events.source_event_seqs` uses tagged delta or run encoding. `events.ignorable` is `NULL` for an ordinary scalar event, `1` when the scalar event's envelope carries the ignorable marker, and `0` (the packed-row sentinel) for a packed chunk run, so a scalar event whose type matches a physical chunk tag remains unambiguous. Packed rows reuse the `seq` of their first logical event, so under the composite `(session_id, seq)` primary key physical order is logical order.
 
 ### Write path
 
@@ -173,7 +173,7 @@ Physical packing does not mutate request prefixes. Provider cache reuse depends 
 
 These limits define when the provider is a poor fit or needs special operational care. They are current package constraints, not a general SQLite comparison or a task backlog.
 
-- **Pre-release design with no migration** — schema 19 is an interim SQLite-only design; neither schema stability nor migration support is guaranteed.
+- **Pre-release schema policy** — only the current schema 20 and its schema-19 predecessor open; any other on-disk version is rejected without conversion.
 - **Packing depends on batch boundaries** — a compatible run split by the write-behind window or an explicit flush stays split across physical rows; this avoids rewriting prior rows at the cost of a timing-dependent packing ratio.
 - **Synchronous SQLite and compression** — Node's SQLite driver and Zstandard calls block the JavaScript thread.
 - **Busy waits block the event loop** — SQLite waits inside synchronous calls; a competing writer can stall the thread for up to the configured `busyTimeoutMs`.
@@ -186,6 +186,6 @@ These limits define when the provider is a poor fit or needs special operational
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-The 501-session corpus contains private session data and is not committed. Its aggregate method, complete results, and rejected candidates are recorded in the [persistence latency and page-size decision](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.md); the packaged dictionary's hash-pinned resource is the schema-19 source of truth.
+The 501-session corpus contains private session data and is not committed. Its aggregate method, complete results, and rejected candidates are recorded in the [persistence latency and page-size decision](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.md); the packaged dictionary's hash-pinned resource is the schema-20 source of truth.
 
 </details>

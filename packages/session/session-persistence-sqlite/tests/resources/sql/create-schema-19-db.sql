@@ -1,3 +1,4 @@
+-- Frozen schema-19 database fixture for the in-place 19-to-20 migration test.
 CREATE TABLE persistence_state (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   store_id  TEXT NOT NULL
@@ -26,6 +27,11 @@ CREATE TABLE events (
   data              ANY NOT NULL,
   source_event_seqs ANY,
   surface_op        TEXT,
-  ignorable         INTEGER CHECK (ignorable IS NULL OR ignorable IN (0, 1)),
+  is_packed         INTEGER NOT NULL CHECK (is_packed IN (0, 1)),
   PRIMARY KEY (session_id, seq)
 ) STRICT;
+
+INSERT INTO persistence_state (singleton, store_id)
+VALUES (1, '00000000-0000-4000-8000-000000000000');
+PRAGMA application_id = 1146308688;
+PRAGMA user_version = 19;
