@@ -641,7 +641,11 @@ export class SessionManager {
   /** Apply immediately and retain for replay when a list response is in flight. */
   private recordMutation(mutation: SessionListMutation): void {
     this.listMutations?.push(mutation)
-    this.summaries = applyMutation(this.summaries, mutation)
+    const next = applyMutation(this.summaries, mutation)
+    // Fork patch (FORK_SURFACE.md): a frame that flips nothing keeps the input
+    // array identity, so the dirty flush has no rebuild to run.
+    if (next === this.summaries) return
+    this.summaries = next
     // Eager edge reconciliation — a snapshot-build-time pass would miss consecutive status frames.
     this.syncCompletedNotifications()
     this.notifier.markDirty()
@@ -973,8 +977,13 @@ export class SessionManager {
   }
 }
 
-/** Apply one list mutation without deriving display order. */
-function applyMutation(summaries: readonly SessionSummary[], mutation: SessionListMutation): SessionSummary[] {
+/**
+ * Apply one list mutation without deriving display order; returns the input
+ * array reference when the mutation flips nothing.
+ * Fork patch (FORK_SURFACE.md): the no-op identity contract lets recordMutation
+ * skip the dirty flush, so unchanged frames never rebuild the list.
+ */
+function applyMutation(summaries: SessionSummary[], mutation: SessionListMutation): SessionSummary[] {
   switch (mutation.kind) {
     case 'upsert': {
       const existing = summaries.find(summary => summary.sessionId === mutation.summary.sessionId)
@@ -992,27 +1001,37 @@ function applyMutation(summaries: readonly SessionSummary[], mutation: SessionLi
       }
       if (filled.cwd === existing.cwd && filled.parentSessionId === existing.parentSessionId
         && filled.origin === existing.origin && filled.blank === existing.blank
-      ) return [...summaries]
+      ) return summaries
       return summaries.map(summary => summary.sessionId === mutation.summary.sessionId ? filled : summary)
     }
-    case 'remove':
+    case 'remove': {
+      if (!summaries.some(summary => summary.sessionId === mutation.sessionId)) return summaries
       return summaries.filter(summary => summary.sessionId !== mutation.sessionId)
-    case 'status':
+    }
+    case 'status': {
       // running:true doubles as the cross-client blank flip (a blank session
       // never runs, so the first running frame proves a message landed).
+      const target = summaries.find(summary => summary.sessionId === mutation.sessionId)
+      if (target === undefined
+        || (target.running === mutation.running && !(mutation.running && target.blank))) return summaries
       return summaries.map(summary => summary.sessionId === mutation.sessionId
-        && (summary.running !== mutation.running || (mutation.running && summary.blank))
         ? { ...summary, running: mutation.running, blank: summary.blank && !mutation.running }
         : summary)
-    case 'activity':
+    }
+    case 'activity': {
+      const target = summaries.find(summary => summary.sessionId === mutation.sessionId)
+      if (target === undefined || !(mutation.updatedAt > target.updatedAt)) return summaries
       return summaries.map(summary => summary.sessionId === mutation.sessionId
-        && mutation.updatedAt > summary.updatedAt
         ? { ...summary, updatedAt: mutation.updatedAt }
         : summary)
-    case 'engaged':
-      return summaries.map(summary => summary.sessionId === mutation.sessionId && summary.blank
+    }
+    case 'engaged': {
+      const target = summaries.find(summary => summary.sessionId === mutation.sessionId)
+      if (target === undefined || !target.blank) return summaries
+      return summaries.map(summary => summary.sessionId === mutation.sessionId
         ? { ...summary, blank: false }
         : summary)
+    }
   }
 }
 
