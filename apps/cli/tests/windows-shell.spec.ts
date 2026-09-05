@@ -63,10 +63,20 @@ describe('the shipped shell composition (real bundle layers)', () => {
     // their own rows instead.
     expect(byId.get('tool-bash')?.disabled).toBe(true)
     expect(byId.get('tool-pwsh')?.disabled).toBe(true)
-    // The permission surface never moves: the sandbox/policy rows, the
-    // permission switcher, fs-sandbox, and the approval service stay enabled
-    // exactly as on POSIX — the confined pwsh executor is what changes.
-    for (const id of ['permission', 'ui-permission', 'sandbox', 'sandbox-policy', 'fs-sandbox', 'approval']) {
+    // Fork decision (FORK_CHANGES.md 2026-09-05): the sandbox rows and the
+    // permission switcher are `disabled: true` in the fork composition (the
+    // base bundle deploys danger-full-access only; dsh-permission-presets
+    // cannot load over the local executor), so the upstream "permission
+    // surface never moves" expectation holds only for the rows that stay
+    // mounted — ui-permission renders nothing without the host service,
+    // fs-sandbox now mounts dsh-fs-local, and approval is untouched. Restore
+    // path: clear the `disabled: true` flags on sandbox/sandbox-policy/
+    // permission and revert the executor rows' `name`s in
+    // packages/bundle/base/cordis.patch.yml, then restore the upstream loop.
+    for (const id of ['sandbox', 'sandbox-policy', 'permission']) {
+      expect(byId.get(id)?.disabled, `row ${id}`).toBe(true)
+    }
+    for (const id of ['ui-permission', 'fs-sandbox', 'approval']) {
       expect(byId.get(id)?.disabled, `row ${id}`).not.toBe(true)
     }
     // The launcher's cold-start module fallback BFS-links the apps/cli

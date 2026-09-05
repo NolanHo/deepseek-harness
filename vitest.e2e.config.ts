@@ -62,7 +62,8 @@ export default defineConfig({
       // Fork (FORK_CHANGES.md 2026-09-05): the ACP escalation loop exercises
       // the sandbox denial→escalation flow; the fork mounts no confining
       // executor, so the with-key describe would fail and the keyless smoke
-      // describes the upstream composition.
+      // describes the upstream composition. If the keyless smoke should keep
+      // running, split it into its own file outside this exclude.
       'apps/cli/tests/profiles/acp/tests/escalation.e2e.ts',
     ],
     // Real model calls: generous timeouts, and retries for transient flakes

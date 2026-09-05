@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-05-disable-sandbox.md
-2026-09-05-disable-sandbox.md: 22df12d81db73234980bf793e5594134786d4c91
-2026-09-05-disable-sandbox.zh.md: 4eaed28ee460913f5565dcb122860a8a374a291b
+2026-09-05-disable-sandbox.md: 0783352fe58bd3bd0d9f8bd2845e2d085b9e73f8
+2026-09-05-disable-sandbox.zh.md: 8df5222460acdcd828e3588bd3613af37e73c4fe

@@ -51,6 +51,28 @@ export default defineConfig({
       ...(process.env.DSH_EXAMPLE_MODE === 'lib' ? ['apps/web/tests/**/*.snapshot.ts'] : []),
       'snapshots/**/*.snapshot.ts',
     ],
+    // Fork decision (FORK_CHANGES.md 2026-09-05): the sandbox capability is
+    // disabled in the fork composition, so snapshots/acp/acp.snapshot.ts is
+    // not collected — the escalation-approved, escalation-rejected, and
+    // fs-escalation-approved scenarios replay recorded sandbox
+    // denial→escalation→approval flows, and cancel, cancel-tool-calls, and
+    // image-compaction fail with them (their sessions pin sandbox/approval
+    // events and the class tool-schema headers escalate from the same
+    // escalation-approved sidecar). The suite's fixtures make a scenario-list
+    // exclusion impossible: every directory must stay registered and
+    // escalation-approved doubles as the tokenized header-pin and schema
+    // owner for every ACP class, so only handshake and reject-extra-dirs
+    // could replay green and they cannot be registered without the pin owner.
+    // Re-enabling the sandbox needs an explicit `disabled: false` and the
+    // original provider `name`s (an overlay patch cannot clear the base's
+    // sticky `disabled: true` or re-match the swapped names), so the old
+    // fixture patches cannot revive the corpus. Restore path: clear the
+    // `disabled: true` flags on sandbox/sandbox-policy/permission and revert
+    // the executor rows' `name`s in packages/bundle/base/cordis.patch.yml
+    // (or replay from an upstream-synced corpus), then delete this list.
+    exclude: [
+      'snapshots/acp/acp.snapshot.ts',
+    ],
     // Replay never writes committed outputs and every scenario owns its
     // mutable runtime state (the subprocess suites use a unique temp dir and
     // fixture set per scenario), so replay runs the snapshot files in

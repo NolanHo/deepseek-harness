@@ -31,16 +31,21 @@ export default defineConfig({
     // Fork decision (FORK_CHANGES.md 2026-09-05): the sandbox capability is
     // disabled in the fork composition, so these browser suites are excluded —
     // settings-chrome asserts the Permission settings row against goldens in
-    // apps/web/tests/expected/settings-chrome/, and permission-policy-context
+    // apps/web/tests/expected/settings-chrome/, permission-policy-context
     // replays the sandbox-policy scenario recorded under
-    // snapshots/web/permission-policy-context/. Both surfaces hard-assert
-    // composition the fork no longer mounts. Restore path: clear the
-    // `disabled: true` flags on sandbox/sandbox-policy/permission and revert
-    // the executor rows' `name`s in packages/bundle/base/cordis.patch.yml,
-    // then delete this list.
+    // snapshots/web/permission-policy-context/, access-confirmation drives the
+    // Access-mode picker into Full access through the permission preset table,
+    // and seeded-history lands a `/permission read-only` command row through
+    // the Access chip. All four hard-assert composition the fork no longer
+    // mounts (the permission switcher renders nothing without the host
+    // permission service). Restore path: clear the `disabled: true` flags on
+    // sandbox/sandbox-policy/permission and revert the executor rows' `name`s
+    // in packages/bundle/base/cordis.patch.yml, then delete this list.
     exclude: [
       'apps/web/tests/settings-chrome.e2e.ts',
       'apps/web/tests/permission-policy-context.e2e.ts',
+      'apps/web/tests/access-confirmation.e2e.ts',
+      'apps/web/tests/seeded-history.e2e.ts',
     ],
     // Local and record runs stay serial. CI runs workspace-mutating HMR and
     // dynamic Cordis lifecycle coverage before parallelizing the remaining files.
