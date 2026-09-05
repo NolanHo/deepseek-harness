@@ -491,6 +491,10 @@ export function ChatView({
         const normalized = isAtBottom ? null : scrollPosition(local, el)
         if (isAtBottom) chatScroll.save(null)
         else if (normalized !== null) chatScroll.save(normalized)
+        // Fork patch (FORK_SURFACE.md): a restored off-bottom position must arm
+        // the paging anchor, or later non-prepend reflows (folds, image loads)
+        // above the reading line have no row to compensate after this remount.
+        if (!isAtBottom && row !== null) anchorRef.current = { key: saved.anchorKey, top: flowTop(row, el) }
       }
       firstSeqRef.current = firstSeq
       lastKeyRef.current = lastKey
@@ -508,9 +512,15 @@ export function ChatView({
       const row = anchorElement(local, anchor.key)
       if (row !== null) el.scrollTop += flowTop(row, el) - anchor.top
       observedTopRef.current = el.scrollTop
-      // A jump chunk lands here: scroll to the target once its rows exist;
-      // until then keep holding the reader's row for the next chunk.
-      if (!realizePendingJump(local, el, false) && row !== null) {
+      // A jump chunk lands here: scroll to the target once its rows exist
+      // (the landed target row becomes the paging anchor itself); otherwise
+      // re-hold the reader's row at its compensated position.
+      realizePendingJump(local, el, false)
+      // Fork patch (FORK_SURFACE.md): upstream re-holds only while a jump chunk
+      // still waits, so a plain prepend drops the anchor; keep holding the
+      // reader's row when the jump did not take ownership.
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the jump landing sets the anchor inside the call.
+      if (row !== null && anchorRef.current === null) {
         anchorRef.current = { key: anchor.key, top: flowTop(row, el) }
       }
       firstSeqRef.current = firstSeq
@@ -570,7 +580,10 @@ export function ChatView({
     const position = isAtBottom ? null : scrollPosition(local, el)
     if (isAtBottom) {
       anchorRef.current = null
-    } else if (anchorRef.current !== null && position !== null) {
+    } else if (position !== null) {
+      // Fork patch (FORK_SURFACE.md): upstream only refreshes an anchor a jump
+      // or prepend already held, so a session that merely scrolled away has no
+      // anchor for the reflow compensator; capture one on every off-floor scroll.
       anchorRef.current = { key: position.anchorKey, top: position.anchorTop }
     }
     // Continuous save (unmount happens after ref detach, so saving there is
@@ -654,11 +667,11 @@ export function ChatView({
     return () => { observer.disconnect() }
   }, [])
 
-  // A failed/empty page leaves the head unchanged. Once the request leaves
-  // its busy state there is no future prepend for the saved anchor to own.
-  useEffect(() => {
-    if (!loadingOlder) anchorRef.current = null
-  }, [loadingOlder])
+  // Fork patch (FORK_SURFACE.md): the upstream effect that clears the paging
+  // anchor when loadingOlder leaves its busy state is intentionally absent —
+  // the anchor here also owns non-prepend reflows (ResizeObserver arm above),
+  // which still need it after settlement. A failed/empty page leaves the head
+  // row intact, and the next compensation refreshes a stale top anyway.
 
   // Jump settlement: every loadThrough completion bumps the tick after its
   // last page's commit, and a plain pull's loadingOlder flip re-settles a

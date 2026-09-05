@@ -41,6 +41,9 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `ui-chat` StatsLine 绘制后测量 | C | 1 行 + 注释 | 省略号测试从 `useLayoutEffect` 移到 `useEffect`（绘制后）；行为零变化 |
 | `skill` 注册表目录限制 | C | `index.ts` 内 17 行 | 全部逻辑在 `src/fork/skill-restrict.ts`（编译、按作用域存储、链式过滤）；`index.ts` 只留 import、一个字段、两个标记的委托调用；allow/deny 互斥记录在模块 JSDoc |
 | `subagent` 子代理 cwd + skillFilter | C | 接缝 + `child-agent.ts` 内 2 个注入点 | 逻辑在 `src/fork/child-scoping.ts`（`stampChildCwd`、`applyChildSkillFilter`）；贯穿 `childSessionMeta`/continuation/驱动的请求字段是保留的接缝；descriptor v3→4（同步遇上游 bump：字段取并集）；冷恢复的 cwd 权威仍在会话 header |
+| `ui-chat` ChatView 重排稳定滚动锚点 | C | import + 1 个回调分支 + 3 处捕获/重持编辑、移除 1 个上游 effect | `chat/fork/scroll-anchor.ts` 在每次流列尺寸变化时（折叠塌陷、图片加载、展开）重新断言持有的读者行，并在滚动写入之后测量锚点使连续回调保持幂等，配 observed-top 台账保证读者输入归因正确；锚点行被隐藏时回退到其上方最近的存活可见行。ChatView 在每次离开底部的滚动采样上武装锚点，在每次前插补偿后重新持有读者行，在保存位置恢复时捕获恢复的行，并在 load-earlier 结算后保留锚点（上游清空 effect 已移除） |
+| `api/session-controller` 失败会话窗口的重置恢复 | C | `manager.handleConnected` 内 9 行 | 载体重置会中止所有逻辑流；error 态会话经 `resync()` 重开，而不是冻结在最后一帧直到整页刷新 |
+| `api/session-controller` 环境活动合并 | C | import + 字段 + `manager.ts` 内 1 处调用 | 其他运行中会话的连续 `api-session/activity` 流按会话缓冲（最新时间戳胜出），由 `sessions/fork/coalesced-refresh.ts` 至多每 200 ms 冲刷一次；单独活动立即应用，保留同步 staging 契约 |
 | `api/session-controller` 客户端选择通知 + 快照身份 | C | `manager.ts` 内约 9 行 | 身份/稳定性逻辑（entry/items/subagents/jobs 缓存、内容相等复用前快照）在 `src/client/sessions/fork/snapshot-identity.ts`；选择仍走 `markDirty`，`open`/`openSubagent` 经 `followCurrent` 同步 stage |
 | `api/gateway` Remote stream mux permessage-deflate | C | ~35 行 | `RemoteStreamMuxServer` 接受 `Config.websocketPerMessageDeflate`（默认关）的 `perMessageDeflate` 参数；RFC 7692 协商配 `threshold: 1024`，journal `opened` 整窗帧压缩、实时帧原样；mux 帧处理本身未动
 | `ui-workspace` order store 引用稳定 | C | 标记+import+3 行守卫 | `sessionOrderChanged` 在 `src/client/fork/order-stability.ts`；store action 在 order 未变时保留旧数组引用（时间戳照常推进） |

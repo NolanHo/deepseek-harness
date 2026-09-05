@@ -2682,4 +2682,259 @@ describe('ChatView', () => {
     expect(failedView.getByText('Compaction cancelled.')).toBeTruthy()
     expect(failedView.container.querySelector('[data-state="error"]')).not.toBeNull()
   })
+
+  it('captures the paging anchor on a plain reader scroll so a later fold above the reading line is compensated', () => {
+    let notify: (() => void) | undefined
+    class ResizeObserverStub {
+      constructor(callback: ResizeObserverCallback) {
+        notify = () => { callback([], this as unknown as ResizeObserver) }
+      }
+
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const h = makeHarness({
+      nodes: [
+        userInTurn(1, 'question', 1),
+        context(2, 'policy', 1),
+        assistant(3, 'first answer', 1),
+        userInTurn(5, 'later question', 2),
+        assistant(6, 'later answer', 2),
+      ],
+    })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
+    installScrollMetrics(scroller, 1_000, 300)
+    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 300 } as DOMRect)
+    const flow = new Map<string, number>([
+      ['fixture:user:1', 0],
+      ['fixture:context:2', 40],
+      ['fixture:assistant:3', 80],
+      ['fixture:user:5', 120],
+      ['fixture:assistant:6', 160],
+    ])
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const top = this.dataset.chatFlowKey === undefined
+          ? undefined
+          : flow.get(this.dataset.chatFlowKey)
+        if (top === undefined) return { top: 0, bottom: 0 } as DOMRect
+        return { top: top - scroller.scrollTop, bottom: top - scroller.scrollTop + 40 } as DOMRect
+      })
+    try {
+      // The reader scrolls away from the pinned tail with no jump and no
+      // load-earlier arm: only this scroll can hold a paging anchor, and it
+      // lands on turn 2's first row (user 5), just below turn 1's process.
+      readerScroll(scroller, 120)
+      // Turn 1 completes and folds its process row above the reading line,
+      // shrinking the flow above the anchored row by the mocked 60px.
+      flow.set('fixture:assistant:3', 20)
+      flow.set('fixture:user:5', 60)
+      flow.set('fixture:assistant:6', 100)
+      act(() => { h.set({ turnEnds: new Map([[1, 4]]) }) })
+      act(() => { notify?.() })
+      expect(scroller.scrollTop).toBe(60)
+    } finally {
+      rect.mockRestore()
+    }
+  })
+
+  it('keeps the anchor held after a load-earlier prepend compensation so a later fold is compensated', () => {
+    let notify: (() => void) | undefined
+    class ResizeObserverStub {
+      constructor(callback: ResizeObserverCallback) {
+        notify = () => { callback([], this as unknown as ResizeObserver) }
+      }
+
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const turns = [
+      userInTurn(1, 'question', 1),
+      context(2, 'policy', 1),
+      assistant(3, 'first answer', 1),
+      userInTurn(5, 'later question', 2),
+      assistant(6, 'later answer', 2),
+    ]
+    const h = makeHarness({ nodes: turns }, { hasMore: true })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
+    const metrics = installScrollMetrics(scroller, 800, 200)
+    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 200 } as DOMRect)
+    const flow = new Map<string, number>([
+      ['fixture:user:1', 0],
+      ['fixture:context:2', 40],
+      ['fixture:assistant:3', 80],
+      ['fixture:user:5', 120],
+      ['fixture:assistant:6', 160],
+    ])
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const top = this.dataset.chatFlowKey === undefined
+          ? undefined
+          : flow.get(this.dataset.chatFlowKey)
+        if (top === undefined) return { top: 0, bottom: 0 } as DOMRect
+        return { top: top - scroller.scrollTop, bottom: top - scroller.scrollTop + 40 } as DOMRect
+      })
+    try {
+      readerScroll(scroller, 50)
+      fireEvent.click(view.getByText('加载更早'))
+      readerScroll(scroller, 90)
+      // An older page arrives: the head row drops below seq 1 and the mocked
+      // rows shift down by 500px, exactly like the prepend test above.
+      metrics.setHeight(1_300)
+      flow.set('fixture:user:0', 0)
+      for (const [key, top] of [...flow]) {
+        if (key !== 'fixture:user:0') flow.set(key, top + 500)
+      }
+      act(() => {
+        h.setChat({ nodes: [user(0, 'older page question'), ...turns] })
+      })
+      expect(scroller.scrollTop).toBe(590) // reader offset 90 + the anchored row's 500px prepend shift
+      // A turn above the reader completes and folds after the prepend settled:
+      // the anchor that owned the prepend must still own this reflow.
+      flow.set('fixture:assistant:3', 430)
+      flow.set('fixture:user:5', 470)
+      flow.set('fixture:assistant:6', 510)
+      act(() => { h.set({ turnEnds: new Map([[1, 4]]) }) })
+      act(() => { notify?.() })
+      expect(scroller.scrollTop).toBe(440) // the fold above the anchored row shifts it by another 150px
+    } finally {
+      rect.mockRestore()
+    }
+  })
+
+  it('captures the anchor when a saved reader position is restored so a fold after remount is compensated', () => {
+    let notify: (() => void) | undefined
+    class ResizeObserverStub {
+      constructor(callback: ResizeObserverCallback) {
+        notify = () => { callback([], this as unknown as ResizeObserver) }
+      }
+
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const host = document.createElement('div')
+    host.setAttribute('data-conversation-scroll', '')
+    Object.defineProperty(host, 'scrollHeight', { value: 2_000, writable: true, configurable: true })
+    Object.defineProperty(host, 'clientHeight', { value: 300, writable: true, configurable: true })
+    Object.defineProperty(host, 'scrollTop', { value: 0, writable: true, configurable: true })
+    document.body.appendChild(host)
+    vi.spyOn(host, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 300 } as DOMRect)
+    // The mocked layout places turn 2's opening row at flow offset 1700, so
+    // at scrollTop 1200 it sits 500px down the restored viewport.
+    const flow = new Map<string, number>([
+      ['fixture:user:1', 0],
+      ['fixture:context:2', 40],
+      ['fixture:assistant:3', 80],
+      ['fixture:user:5', 1_700],
+      ['fixture:assistant:6', 1_740],
+    ])
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const top = this.dataset.chatFlowKey === undefined
+          ? undefined
+          : flow.get(this.dataset.chatFlowKey)
+        if (top === undefined) return { top: 0, bottom: 0 } as DOMRect
+        return { top: top - host.scrollTop, bottom: top - host.scrollTop + 40 } as DOMRect
+      })
+    try {
+      const h = makeHarness({
+        nodes: [
+          userInTurn(1, 'question', 1),
+          context(2, 'policy', 1),
+          assistant(3, 'first answer', 1),
+          userInTurn(5, 'later question', 2),
+          assistant(6, 'later answer', 2),
+        ],
+      })
+      // The previous mount saved the reader's place at user 5's row, away
+      // from the tail; the restore path re-establishes that scroll position.
+      h.chatScroll.save({ anchorKey: 'fixture:user:5', anchorTop: 500, scrollTop: 1_200 })
+      render(<h.ChatView {...h.props} />, { container: host })
+      expect(host.scrollTop).toBe(1_200)
+      // Turn 1 completes and folds above the restored row after the open.
+      flow.set('fixture:user:5', 1_550)
+      flow.set('fixture:assistant:6', 1_590)
+      act(() => { h.set({ turnEnds: new Map([[1, 4]]) }) })
+      act(() => { notify?.() })
+      expect(host.scrollTop).toBe(1_050) // the 150px fold above the restored row is compensated
+    } finally {
+      rect.mockRestore()
+      host.remove()
+    }
+  })
+
+  it('keeps the anchor through load-earlier settlement so a fold after the busy state clears is compensated', () => {
+    let notify: (() => void) | undefined
+    class ResizeObserverStub {
+      constructor(callback: ResizeObserverCallback) {
+        notify = () => { callback([], this as unknown as ResizeObserver) }
+      }
+
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const turns = [
+      userInTurn(1, 'question', 1),
+      context(2, 'policy', 1),
+      assistant(3, 'first answer', 1),
+      userInTurn(5, 'later question', 2),
+      assistant(6, 'later answer', 2),
+    ]
+    const h = makeHarness({ nodes: turns }, { hasMore: true })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
+    const metrics = installScrollMetrics(scroller, 800, 200)
+    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 200 } as DOMRect)
+    const flow = new Map<string, number>([
+      ['fixture:user:1', 0],
+      ['fixture:context:2', 40],
+      ['fixture:assistant:3', 80],
+      ['fixture:user:5', 120],
+      ['fixture:assistant:6', 160],
+    ])
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const top = this.dataset.chatFlowKey === undefined
+          ? undefined
+          : flow.get(this.dataset.chatFlowKey)
+        if (top === undefined) return { top: 0, bottom: 0 } as DOMRect
+        return { top: top - scroller.scrollTop, bottom: top - scroller.scrollTop + 40 } as DOMRect
+      })
+    try {
+      readerScroll(scroller, 50)
+      fireEvent.click(view.getByText('加载更早'))
+      readerScroll(scroller, 90)
+      // An older page arrives: the head row drops below seq 1 and the mocked
+      // rows shift down by 500px, exactly like the prepend test above.
+      metrics.setHeight(1_300)
+      flow.set('fixture:user:0', 0)
+      for (const [key, top] of [...flow]) {
+        if (key !== 'fixture:user:0') flow.set(key, top + 500)
+      }
+      act(() => {
+        h.setChat({ nodes: [user(0, 'older page question'), ...turns] })
+      })
+      expect(scroller.scrollTop).toBe(590) // reader offset 90 + the anchored row's 500px prepend shift
+      // The pull settles: the busy flip runs the settlement effect that, on
+      // the unfixed src, clears the anchor that owns the prepend.
+      act(() => { h.setSession({ loadingOlder: true }) })
+      act(() => { h.setSession({ loadingOlder: false }) })
+      // A turn above the reader completes and folds after settlement: the
+      // anchor that owned the prepend must still own this reflow.
+      flow.set('fixture:assistant:3', 430)
+      flow.set('fixture:user:5', 470)
+      flow.set('fixture:assistant:6', 510)
+      act(() => { h.set({ turnEnds: new Map([[1, 4]]) }) })
+      act(() => { notify?.() })
+      expect(scroller.scrollTop).toBe(440) // the fold above the anchored row shifts it by another 150px
+    } finally {
+      rect.mockRestore()
+    }
+  })
 })
