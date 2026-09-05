@@ -4,11 +4,9 @@
 // No browser and no model call — these are composition facts, and the browser
 // scenarios in this lane cover the surface itself.
 import { readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it } from 'vitest'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
-import { canonicalPath, writableRoots } from '@deepseek-ai/dsh-sandbox'
 import { SessionId } from '@deepseek-ai/dsh-session'
 // These imports carry the tools/sandboxPolicy/approval Context merges.
 import { RUN_CODE_NAME } from '@deepseek-ai/dsh-tools'
@@ -163,17 +161,18 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
   } finally {
     await handle.dispose()
   }
-  // `workspace-write` is not "the workspace and nothing else": the shared roots
-  // helper always admits the temp directories too. Pinning it against an
-  // explicit mode keeps the claim independent of this surface's default, and
-  // keeps a future sandbox-confinement test from being run inside /tmp — where an
-  // "escape" write succeeds by design and reads as a sandbox failure.
-  expect(writableRoots(scaffold.ctx.sandboxPolicy.resolve({ mode: 'workspace-write' }))).toEqual(
-    expect.arrayContaining([canonicalPath('/tmp'), canonicalPath(tmpdir())]),
-  )
-  expect(scaffold.ctx.sandboxPolicy.defaultMode).toBe('workspace-write')
+  // Fork patch (FORK_SURFACE.md 2026-09-05): upstream pinned the sandbox
+  // policy default and the permission preset here, but this fork disables the
+  // sandbox-policy and permission rows (packages/bundle/base/cordis.patch.yml
+  // sets both to `disabled: true`), so the shipped composition mounts neither
+  // service. These absence assertions replace the upstream mode pins;
+  // approval stays mounted and nothing requests it once the escalation fields
+  // are unadvertised. Restore path: clear the two rows' `disabled: true`
+  // flags and restore the upstream assertions (defaultMode and
+  // defaultPreset === 'workspace-write', writableRoots over /tmp).
+  expect(scaffold.ctx.get('sandboxPolicy')).toBeUndefined()
   expect(scaffold.ctx.approval.config.policy).toBe('ask')
-  expect(scaffold.ctx.permissionPresets.defaultPreset).toBe('workspace-write')
+  expect(scaffold.ctx.get('permissionPresets')).toBeUndefined()
 
   const commandHandle = await scaffold.ctx.agents.create({
     sessionId: SessionId('shipped-command-catalog'),

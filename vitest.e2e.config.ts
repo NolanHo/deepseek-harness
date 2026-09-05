@@ -43,9 +43,22 @@ export default defineConfig({
     // apps/cli only, not apps/*: apps/web/tests/*.e2e.ts needs the built
     // frontend dist and runs under vitest.web.config.ts (the test:web job).
     include: ['packages/*/*/tests/**/*.e2e.ts', 'apps/cli/tests/**/*.e2e.ts'],
+    // Fork decision (FORK_CHANGES.md 2026-09-05): the sandbox capability is
+    // disabled in the fork composition, so the sandbox-family e2e suites are
+    // excluded exactly like the unit lane's forkDisabledSandboxTests — the
+    // sandbox backend and the sandboxed bash/pwsh/fs executor suites probe
+    // confinement machinery the fork no longer mounts. The local counterparts
+    // (bash-local, pwsh-local, fs-local) stay included; after the swap they
+    // are the tested backends. Restore path: clear the `disabled: true` flags
+    // on sandbox/sandbox-policy/permission and revert the executor rows'
+    // `name`s in packages/bundle/base/cordis.patch.yml, then delete this list.
     exclude: [
       '**/*.expected.e2e.ts',
       'packages/experimental/inspector/tests/client-browser.e2e.ts',
+      'packages/sandbox/*/tests/**/*.e2e.ts',
+      'packages/shell/bash-sandbox/tests/**/*.e2e.ts',
+      'packages/shell/pwsh-sandbox/tests/**/*.e2e.ts',
+      'packages/fs/fs-sandbox/tests/**/*.e2e.ts',
     ],
     // Real model calls: generous timeouts, and retries for transient flakes
     // (the shared internal key hits concurrency quotas). No coverage — the
