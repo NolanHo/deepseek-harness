@@ -59,6 +59,11 @@ export default defineConfig({
       'packages/shell/bash-sandbox/tests/**/*.e2e.ts',
       'packages/shell/pwsh-sandbox/tests/**/*.e2e.ts',
       'packages/fs/fs-sandbox/tests/**/*.e2e.ts',
+      // Fork (FORK_CHANGES.md 2026-09-05): the ACP escalation loop exercises
+      // the sandbox denial→escalation flow; the fork mounts no confining
+      // executor, so the with-key describe would fail and the keyless smoke
+      // describes the upstream composition.
+      'apps/cli/tests/profiles/acp/tests/escalation.e2e.ts',
     ],
     // Real model calls: generous timeouts, and retries for transient flakes
     // (the shared internal key hits concurrency quotas). No coverage — the
