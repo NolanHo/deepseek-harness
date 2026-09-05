@@ -205,26 +205,38 @@
     - id: subprocess
       name: '@deepseek-ai/dsh-subprocess-local'
 
-    # Every shipped CLI mode starts with the same file-effect boundary.
-    # The environment remains an explicit deployment override; otherwise fresh
-    # sessions pin workspace-write + ask through the permission service below.
+    # Fork patch (FORK_SURFACE.md): the sandbox capability is disabled by fork
+    # decision (2026-09-05, FORK_CHANGES.md): this fork deploys only
+    # danger-full-access with no sandbox, so the sandbox and sandbox-policy
+    # rows stay present but disabled — zero-cost upstream syncs — while the
+    # bash/pwsh/fs executor rows below mount the local providers instead of
+    # the sandboxing ones (row ids and platform `disabled` expressions
+    # unchanged, so overlays, base.spec's platform gate, and upstream patches
+    # keep addressing them). dsh-permission-presets rejects composition over a
+    # non-confining executor at load (its constructor requires
+    # ctx.shell.sandboxMode), so its row is disabled with them. Restore the
+    # upstream composition by clearing the `disabled: true` flags on sandbox,
+    # sandbox-policy, and permission, and reverting the executor rows' `name`
+    # to the @deepseek-ai/dsh-*-sandbox packages.
     - id: sandbox
       name: '@deepseek-ai/dsh-sandbox-local'
+      disabled: true
 
     - id: sandbox-policy
       name: '@deepseek-ai/dsh-sandbox-policy'
+      disabled: true
       config:
         mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
         workspaceRoot: !!js process.cwd()
 
     - id: bash-sandbox
-      name: '@deepseek-ai/dsh-bash-sandbox'
+      name: '@deepseek-ai/dsh-bash-local'
       disabled: !!js process.platform === 'win32'
       config:
         timeoutMs: 60000
 
     - id: pwsh-sandbox
-      name: '@deepseek-ai/dsh-pwsh-sandbox'
+      name: '@deepseek-ai/dsh-pwsh-local'
       disabled: !!js process.platform !== 'win32'
 
     - id: approval
@@ -232,8 +244,12 @@
       config:
         policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
 
+    # Disabled with the sandbox rows above: the preset table bundles sandbox
+    # modes, so the service cannot load over the non-confining bash-local
+    # executor (see the fork patch comment at the sandbox row).
     - id: permission
       name: '@deepseek-ai/dsh-permission-presets'
+      disabled: true
       config:
         presets:
           read-only:
@@ -485,10 +501,16 @@
       config:
         agents: []
 
-    # The sandboxed filesystem provider. `cwd` defaults to `process.cwd()`; an
-    # overlay can pin another workspace.
+    # Fork patch (FORK_SURFACE.md): the local filesystem backend owns ctx.fs
+    # (the sandboxed one is disabled with the rest of the sandbox capability;
+    # see the fork patch comment at the sandbox row). Row id and overlay
+    # semantics unchanged; `cwd` defaults to `process.cwd()`, restated here
+    # after the sdk-minimal precedent. Restore upstream by reverting this
+    # row's `name` to '@deepseek-ai/dsh-fs-sandbox' and removing `config`.
     - id: fs-sandbox
-      name: '@deepseek-ai/dsh-fs-sandbox'
+      name: '@deepseek-ai/dsh-fs-local'
+      config:
+        cwd: !!js process.cwd()
 
     # The native DeepSeek adapter. No key or endpoint is inlined: both resolve per
     # request from the `llm-deepseek:` settings section over this entry, with the

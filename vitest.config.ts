@@ -69,6 +69,35 @@ const nonLinuxWebWorkerTests = process.platform === 'linux'
 
 const platformUnsupportedTests = [...windowsUnsupportedTests, ...nonLinuxWebWorkerTests]
 
+// Fork decision (FORK_CHANGES.md 2026-09-05): the fork disables the sandbox
+// capability — it deploys danger-full-access only, and packages/bundle/base
+// composes the local executors/backends instead of the sandboxing ones — so
+// the sandbox packages and the sandboxed bash/pwsh/fs backends are no longer
+// part of the mounted surface and their unit suites must not run. The local
+// counterparts (bash-local, pwsh-local, fs-local) stay included: after the
+// swap they are the tested backends. Restore path: re-enable the sandbox rows
+// in packages/bundle/base/cordis.patch.yml (clear the sandbox/sandbox-policy/
+// permission `disabled: true` flags and revert the bash-sandbox/pwsh-sandbox/
+// fs-sandbox row `name`s to the @deepseek-ai/dsh-*-sandbox packages), then
+// delete this list and its spreads below.
+const forkDisabledSandboxTests = [
+  'packages/sandbox/*/tests/**/*.spec.ts',
+  'packages/shell/bash-sandbox/tests/**/*.spec.ts',
+  'packages/shell/pwsh-sandbox/tests/**/*.spec.ts',
+  'packages/fs/fs-sandbox/tests/**/*.spec.ts',
+]
+
+// The same fork decision removes the disabled sandbox packages from the
+// per-file coverage gate: their sources are not mounted in fork compositions
+// and their unit suites (which provided the 100% coverage) no longer run.
+// Same restore path as forkDisabledSandboxTests.
+const forkDisabledSandboxCoverageExclusions = [
+  'packages/sandbox/*/src/**/*.ts',
+  'packages/shell/bash-sandbox/src/**/*.ts',
+  'packages/shell/pwsh-sandbox/src/**/*.ts',
+  'packages/fs/fs-sandbox/src/**/*.ts',
+]
+
 const windowsUnsupportedCoveragePackages = process.platform === 'win32'
   ? [...windowsUnsupportedPackages, 'packages/subprocess/*']
   : []
@@ -153,7 +182,7 @@ export default defineConfig({
     setupFiles: ['./scripts/test-invariants.ts'],
     // .tsx: client component specs (jsdom via per-file @vitest-environment pragma).
     include: testIncludes,
-    exclude: platformUnsupportedTests,
+    exclude: [...platformUnsupportedTests, ...forkDisabledSandboxTests],
     // One coverage invocation aggregates both projects. Every suite forks for
     // Node stability; process-bound suites stay separate for inventory control.
     projects: [
@@ -172,6 +201,7 @@ export default defineConfig({
             ...platformUnsupportedTests,
             ...processBoundTests,
             ...coverageExemptExcludes,
+            ...forkDisabledSandboxTests,
           ],
         },
       },
@@ -340,6 +370,7 @@ export default defineConfig({
         ...windowsOnlyCoverageExclusions,
         ...windowsRunnerCoverageExclusions,
         ...pwshCoverageExclusions,
+        ...forkDisabledSandboxCoverageExclusions,
       ],
       // 100% or it doesn't merge (docs/testing.md: excessive tests are welcome).
       // Per-file so a well-covered big file can't subsidize a bare one.

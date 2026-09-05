@@ -44,6 +44,8 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `api/session-controller` 客户端选择通知 + 快照身份 | C | `manager.ts` 内约 9 行 | 身份/稳定性逻辑（entry/items/subagents/jobs 缓存、内容相等复用前快照）在 `src/client/sessions/fork/snapshot-identity.ts`；选择仍走 `markDirty`，`open`/`openSubagent` 经 `followCurrent` 同步 stage |
 | `api/gateway` Remote stream mux permessage-deflate | C | ~35 行 | `RemoteStreamMuxServer` 接受 `Config.websocketPerMessageDeflate`（默认关）的 `perMessageDeflate` 参数；RFC 7692 协商配 `threshold: 1024`，journal `opened` 整窗帧压缩、实时帧原样；mux 帧处理本身未动
 | `ui-workspace` order store 引用稳定 | C | 标记+import+3 行守卫 | `sessionOrderChanged` 在 `src/client/fork/order-stability.ts`；store action 在 order 未变时保留旧数组引用（时间戳照常推进） |
+| `bundle/base/cordis.patch.yml` 沙箱禁用 + 本地 provider 换挂 | C | 6 行 + 注释 | Fork 决策 2026-09-05（仅 danger-full-access 部署，见 FORK_CHANGES.md）：行 `sandbox`、`sandbox-policy`、`permission` 置 `disabled: true`；执行器行 `bash-sandbox`/`pwsh-sandbox`/`fs-sandbox` 保留 id 与平台 `!!js` 门，但改挂 `@deepseek-ai/dsh-bash-local`/`dsh-pwsh-local`/`dsh-fs-local` 取代沙箱包。同步重放：按文件内 fork 注释回退 name/flag；`permission` 必须跟随沙箱行（其构造器拒绝非约束执行器之上的组合） |
+| 根 `vitest.config.ts` 沙箱套件禁用 | C | 2 份名单 + 展开 | `forkDisabledSandboxTests` 把 `packages/sandbox/*`、bash-sandbox、pwsh-sandbox、fs-sandbox 单元套件移出收集；`forkDisabledSandboxCoverageExclusions` 把对应源码移出 per-file 覆盖率门。恢复路径（恢复 base 行后删除名单）见文件内注释 |
 
 ## 优化方案（按优先级）
 
