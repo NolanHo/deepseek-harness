@@ -10,6 +10,8 @@ import { Button, IconChevronDownOutline14, Modal } from '@deepseek-ai/dsh-client
 import type { ChatViewSlotProps } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { PendingSteeringBubble, PendingSubmissionBubble } from './MessageItem.tsx'
+// Fork patch (FORK_SURFACE.md): reflow-stable reader position on non-prepend height changes.
+import { restoreAnchorOnReflow } from './fork/scroll-anchor.ts'
 import { ChatNodeSeat } from './ChatNodeSeat.tsx'
 import { TurnNavigator } from './TurnNavigator.tsx'
 import { mergeTurnRailItems, type TurnRailItem } from './turn-rail-items.ts'
@@ -636,6 +638,16 @@ export function ChatView({
     const observer = new ResizeObserver(() => {
       followRef.current?.()
       activeTurnRef.current?.()
+      // Fork patch (FORK_SURFACE.md): folds, image loads, and disclosures change
+      // flow height without a prepend, so the paging anchor never compensates
+      // them; re-assert the held reader row here and refresh the saved position.
+      const held = anchorRef.current
+      if (held !== null && pendingJumpRef.current === null) {
+        const next = restoreAnchorOnReflow(local, scrollport, held, anchorRef, observedTopRef)
+        if (next !== null) {
+          chatScroll.save({ anchorKey: next.key, anchorTop: next.top, scrollTop: scrollport.scrollTop })
+        }
+      }
     })
     observer.observe(column)
     if (composer !== null) observer.observe(composer)

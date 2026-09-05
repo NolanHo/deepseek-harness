@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-05-reflow-stable-scroll-anchor.md
+2026-09-05-reflow-stable-scroll-anchor.md: 09cf7570a90b7625c5e94b022ee3aea8899a7e75
+2026-09-05-reflow-stable-scroll-anchor.zh.md: 149ab7c6b5cf8637c818877dd9c82dacef3e356d
