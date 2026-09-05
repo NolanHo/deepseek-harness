@@ -52,6 +52,7 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `vitest.snapshot.config.ts` ACP snapshot 语料排除 | C | 1 份排除名单 | Fork 决策 2026-09-05（见 FORK_CHANGES.md）：`snapshots/acp/acp.snapshot.ts` 重放上游录制的沙箱 denial→escalation→approval 语料（escalation 三件套及其 sidecar 关联的 cancel/approval 与 schema-pin 用例）；实测 8 个重放中 6 个在 fork 组合下失败，且套件 pin/清单不变式禁止按场景名单排除，故整个文件不再收集。恢复路径见文件内注释 |
 | `apps/web/tests/shipped-composition.e2e.ts` 沙箱缺席断言 | C | 1 段断言 | Fork 决策 2026-09-05（见 FORK_CHANGES.md）：以 `ctx.get(...)` 解析为 `undefined` 的缺席断言取代上游 `sandboxPolicy`/`permissionPresets` 模式钉（approval 仍为 `ask`）。恢复路径见文件内注释 |
 | `apps/cli/tests/windows-shell.spec.ts` 权限行断言 | C | 1 段断言 | Fork 决策 2026-09-05（见 FORK_CHANGES.md）：上游「permission 面永不移动」循环断言 sandbox/permission 行保持启用；fork 断言其为 `disabled: true`，而 ui-permission/fs-sandbox/approval 保持启用。恢复路径见文件内注释 |
+| `apps/cli/tests/github-webhook-real.e2e.ts` permission 预设钉移除 | C | 1 个合取项 | Fork 决策 2026-09-05（FORK_CHANGES.md）：带 key 真测不再要求 `permission/preset read-only` 事件（唯一生产者 permission-presets 随沙箱行禁用）；标题 + webhook 来源 provenance 保留。沙箱行恢复时加回合取项 |
 
 ## 优化方案（按优先级）
 

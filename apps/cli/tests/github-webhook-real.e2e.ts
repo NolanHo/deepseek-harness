@@ -428,22 +428,21 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('GitHub webhook through the real 
       const admitted = await eventually(
         child,
         observation.text,
-        'webhook provenance, title, and permission events',
+        // Fork (FORK_CHANGES.md 2026-09-05): the `permission/preset read-only`
+        // event this test used to pin is produced by permission-presets,
+        // which the fork disables with the sandbox capability; the fork keeps
+        // the provenance and title checks. Restore the conjunct on re-enable.
+        'webhook provenance and title',
         async () => await history(baseUrl, sessionId),
         (page) => {
           const events = historyEvents(page)
           const title = events.find(event => event.type === 'session/title')
-          const permission = events.find(event =>
-            event.type === 'permission/preset'
-            && isRecord(event.data)
-            && event.data.preset === 'read-only')
           const message = events.find(event =>
             event.type === 'user/message'
             && isRecord(event.data)
             && isRecord(event.data.source)
             && event.data.source.kind === 'webhook')
           return isRecord(title?.data) && title.data.title === TITLE
-            && permission !== undefined
             && isRecord(message?.data) && isRecord(message.data.source)
             && message.data.source.provider === 'github'
             && message.data.source.deliveryId === DELIVERY
