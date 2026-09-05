@@ -768,6 +768,26 @@ describe('connected generation', () => {
     expect(api.callsOf('session.history')).toHaveLength(historyCallsBefore)
   })
 
+  it('re-opens failed session windows on reset', async () => {
+    const api = new FakeApiClient()
+    api.onHistory = () => Promise.reject(new RemoteError('gateway/internal', 'carrier reset', {}))
+    const manager = new SessionManager(fakeRemote(api))
+    const openedSession = manager.get(S1)
+    await openedSession.open().catch(() => {})
+    expect(openedSession.getSnapshot().openState).toBe('error')
+    api.onHistory = () => Promise.resolve(ok({
+      records: entries(plainTurn(SessionSeq(0), 0, 'a', 'b')) as never[],
+      hasMore: false,
+      modelSelection: { provider: 'deepseek-official', model: 'deepseek-chat' },
+    }))
+    const callsBefore = api.callsOf('session.follow').length
+    manager.handleConnected()
+    await vi.waitFor(() => {
+      expect(openedSession.getSnapshot().openState).toBe('open')
+    })
+    expect(api.callsOf('session.follow').length).toBe(callsBefore + 1)
+  })
+
   it('retains the durable parent address and refreshes its catalogs across reconnect', async () => {
     const api = new FakeApiClient()
     const address = {

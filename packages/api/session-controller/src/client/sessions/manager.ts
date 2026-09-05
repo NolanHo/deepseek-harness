@@ -812,6 +812,18 @@ export class SessionManager {
     if (selectedAddress !== undefined) void this.refreshSubagents(selectedAddress.parentSessionId)
     if (this.selected !== undefined) void this.refreshSubagents(this.selected)
     for (const parentSessionId of this.openCatalogs) void this.refreshSubagents(parentSessionId)
+    // Fork patch (FORK_SURFACE.md): a carrier reset aborts every logical stream;
+    // failed session windows never re-open on their own (the chat stays frozen
+    // on the last frame until a full page refresh), so reset re-opens the
+    // errored ones through their existing history route.
+    for (const session of this.sessions.values()) {
+      if (session.getSnapshot().openState === 'error') {
+        void session.resync().catch(() => {
+          // A failed re-open keeps the session errored; snapshot.openError
+          // already surfaces that failure to the UI.
+        })
+      }
+    }
   }
 
   /** Debounce membership refetches while one parent catalog is selected or open. */
