@@ -92,6 +92,70 @@ describe('list lifecycle', () => {
     expect(manager.getListSnapshot().items[0]?.updatedAt).toBe(500)
   })
 
+  it('skips the list rebuild when a status frame carries no change', async () => {
+    const manager = makeManager()
+    manager.handleSessionAdded(summary(S1))
+    await Promise.resolve()
+    manager.subscribe(() => {})
+    const rebuild = vi.spyOn(manager as unknown as { buildListSnapshot: () => unknown }, 'buildListSnapshot')
+    // The no-op status frame flips nothing: the summaries array keeps its
+    // identity, so the dirty flush has no rebuild to run.
+    manager.handleSessionStatus(S1, false)
+    await Promise.resolve()
+    expect(rebuild).not.toHaveBeenCalled()
+    // A real change still rebuilds and notifies.
+    manager.handleSessionStatus(S1, true)
+    await Promise.resolve()
+    expect(rebuild).toHaveBeenCalled()
+  })
+
+  it('skips the list rebuild when an activity frame carries no newer timestamp', async () => {
+    vi.useFakeTimers()
+    try {
+      const manager = makeManager()
+      manager.handleSessionAdded(summary(S1))
+      await Promise.resolve()
+      manager.subscribe(() => {})
+      manager.handleSessionActivity(S1, 500)
+      await Promise.resolve()
+      const rebuild = vi.spyOn(manager as unknown as { buildListSnapshot: () => unknown }, 'buildListSnapshot')
+      // Same timestamp again: the buffered flush must not rebuild the list.
+      manager.handleSessionActivity(S1, 500)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await Promise.resolve()
+      expect(rebuild).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('coalesces ambient activity flushes within a one-second window', async () => {
+    vi.useFakeTimers()
+    try {
+      const manager = makeManager()
+      manager.handleSessionAdded(summary(S1, { updatedAt: 0 }))
+      await Promise.resolve()
+      manager.subscribe(() => {})
+      const rebuild = vi.spyOn(manager as unknown as { buildListSnapshot: () => unknown }, 'buildListSnapshot')
+      // First activity of a window applies immediately.
+      manager.handleSessionActivity(S1, 100)
+      await Promise.resolve()
+      expect(rebuild).toHaveBeenCalledTimes(1)
+      // A second stamp 600ms later is still inside the window: it stays buffered.
+      await vi.advanceTimersByTimeAsync(600)
+      manager.handleSessionActivity(S1, 200)
+      await Promise.resolve()
+      expect(rebuild).toHaveBeenCalledTimes(1)
+      // The window ends 1s after the FIRST stamp, not the last: one flush
+      // carries the pair, pinning the trailing-window anchor.
+      await vi.advanceTimersByTimeAsync(500)
+      await Promise.resolve()
+      expect(rebuild).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the error in the list snapshot on failure', async () => {
     const api = new FakeApiClient()
     api.onList = () => Promise.resolve(err(new RemoteError('gateway/internal', 'boom', {})))
@@ -1005,8 +1069,8 @@ describe('background-job mirror', () => {
     manager.handleSessionAdded(summary(S1))
     await Promise.resolve()
     const before = manager.getListSnapshot()
-    // A no-op status frame rebuilds through the same paths but every observable
-    // field is unchanged: subscribers must see the identical reference and skip.
+    // A no-op status frame skips the rebuild entirely (identity guard); the
+    // snapshot reference stays put either way, so subscribers skip.
     manager.handleSessionStatus(S1, false)
     await Promise.resolve()
     expect(manager.getListSnapshot()).toBe(before)
