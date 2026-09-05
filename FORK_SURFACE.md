@@ -57,9 +57,10 @@ Every piece of fork logic that is more than a one-liner lives in a fork-owned mo
 ## Sync procedure (runbook)
 
 1. `git fetch upstream && git merge upstream/master` in a worktree.
-2. Tier A: no action (upstream has no such files); resolve only `pnpm-workspace`/tsconfig aggregates and `cordis.patch.yml`.
-3. Tier B: re-apply the flag/constant; expect trivial context conflicts.
-4. Tier C: re-apply each localized block per this file's inventory; run the owning package's suite.
-5. Tier D: re-apply the injection points (after step 1–2 above they are the only remaining history.ts/persistence diffs), then copy the fork-owned modules verbatim.
-6. Run `pnpm run test:gui`, the session-controller suite, and `DSH_SNAPSHOT=replay pnpm run test:web`; refresh goldens only for intentional output changes.
-7. Record the sync in `FORK_CHANGES.md`.
+2. **Parity review (AGENTS.md policy)**: walk every inventory row against the new tag; when upstream ships an equivalent, drop the fork row and adopt upstream's (record the retirement in FORK_CHANGES.md); update each retained row's why-upstream-cannot-serve note.
+3. Tier A: no action (upstream has no such files); resolve only `pnpm-workspace`/tsconfig aggregates and `cordis.patch.yml`.
+4. Tier B: re-apply the flag/constant; expect trivial context conflicts.
+5. Tier C: re-apply each localized block per this file's inventory; run the owning package's suite.
+6. Tier D: re-apply the injection points (after step 1–2 above they are the only remaining history.ts/persistence diffs), then copy the fork-owned modules verbatim.
+7. Run `pnpm run test:gui`, the session-controller suite, and `DSH_SNAPSHOT=replay pnpm run test:web`; refresh goldens only for intentional output changes.
+8. Record the sync in `FORK_CHANGES.md`.

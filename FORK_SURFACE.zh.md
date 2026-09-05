@@ -57,9 +57,10 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 ## 同步流程（runbook）
 
 1. 在 worktree `git fetch upstream && git merge upstream/master`。
-2. A 层：无操作（上游没有这些文件）；只解决 `pnpm-workspace`/tsconfig 聚合与 `cordis.patch.yml`。
-3. B 层：重放开关/常量；预期平凡的上下文冲突。
-4. C 层：按本清单逐块重放局部补丁；跑所属包的测试套件。
-5. D 层：重放注入点（完成上面 1–2 后，它们是 history.ts/persistence 仅剩的 diff），fork 自有模块整体拷贝。
-6. 跑 `pnpm run test:gui`、session-controller 套件、`DSH_SNAPSHOT=replay pnpm run test:web`；仅在有意输出变化时刷新金样。
-7. 在 `FORK_CHANGES.md` 记录本次同步。
+2. **平价复核（AGENTS.md 政策）**：对照新 tag 逐行核对清单；上游已提供等价功能时，删除该 fork 行并采用上游版本（退役记入 `FORK_CHANGES.md`）；保留行更新「上游为何不能满足」的理由。
+3. A 层：无操作（上游没有这些文件）；只解决 `pnpm-workspace`/tsconfig 聚合与 `cordis.patch.yml`。
+4. B 层：重放开关/常量；预期平凡的上下文冲突。
+5. C 层：按本清单逐块重放局部补丁；跑所属包的测试套件。
+6. D 层：重放注入点（完成上面 1–2 后，它们是 history.ts/persistence 仅剩的 diff），fork 自有模块整体拷贝。
+7. 跑 `pnpm run test:gui`、session-controller 套件、`DSH_SNAPSHOT=replay pnpm run test:web`；仅在有意输出变化时刷新金样。
+8. 在 `FORK_CHANGES.md` 记录本次同步。

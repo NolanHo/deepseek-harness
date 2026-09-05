@@ -9,6 +9,8 @@ This checkout is a **personal fork** of [deepseek-ai/deepseek-harness](https://g
 - **Sync before every change**: `git fetch upstream` and rebase (or merge) `upstream/master` into the fork at the start of every change session, so fork `master` stays mergeable with upstream. Upstream is the authority; the fork only absorbs updates from it.
 - **Never contribute back**: do not push to `upstream`, do not open PRs against `upstream`, do not merge fork work into upstream. All changes stay in the fork.
 - **Record every change**: append one entry to `FORK_CHANGES.md` (bilingual, append-only) per change: date, what changed, why. Keep personal changes small and reviewable.
+- **Pick up upstream on a cadence**: merge every `dsh-vX.Y-rc*`/stable tag (skip master's alpha churn); each sync refreshes `FORK_SURFACE.md`.
+- **Prefer upstream on parity; keep the fork minimal**: at every sync, walk `FORK_SURFACE.md` against the new tag — when upstream ships an equivalent, drop the fork row and adopt upstream's (record the retirement in `FORK_CHANGES.md`); every retained divergence states why upstream cannot serve it. New divergences justify themselves the same way, prefer `Config` fields over patches and `src/fork/` modules over upstream-file edits ([convention](FORK_SURFACE.md#the-fork-module-convention)).
 
 ## Working tree: branches, never a dirty main checkout
 
