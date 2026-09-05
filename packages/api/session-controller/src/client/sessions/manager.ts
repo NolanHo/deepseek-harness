@@ -28,6 +28,7 @@ import type { SessionRemotes } from './remotes.ts'
 // Fork patch (FORK_SURFACE.md): identity-stable list snapshot publication lives in the
 // fork-owned snapshot-identity module; this file keeps only the injection.
 import { SessionSnapshotIdentity } from './fork/snapshot-identity.ts'
+import { ACTIVITY_COALESCE_MS, ActivityCoalescer } from './fork/coalesced-refresh.ts'
 
 function sessionSeqCursor(value: number): SessionSeqCursor {
   return value === -1 ? -1 : SessionSeq(value)
@@ -140,8 +141,15 @@ export class SessionManager {
 
   private listSnapshotCache: SessionListSnapshot | undefined
   // Fork patch (FORK_SURFACE.md): entry-object identity, reference-stable subagents/jobs
-  // projections, and equal-content snapshot reuse live in fork/snapshot-identity.ts.
+  // projections, and equal-content snapshot reuse live in fork/snapshot-identity.ts;
+  // ambient activity events coalesce through fork/coalesced-refresh.ts so continuous
+  // streams from other sessions stop driving a full list rebuild per event render.
   private readonly snapshotIdentity = new SessionSnapshotIdentity()
+  private readonly activityCoalescer = new ActivityCoalescer<SessionId>(ACTIVITY_COALESCE_MS, (pending) => {
+    for (const [sessionId, updatedAt] of pending) {
+      this.recordMutation({ kind: 'activity', sessionId, updatedAt })
+    }
+  })
   private readonly notifier = new Notifier(() => {
     this.listSnapshotCache = this.buildListSnapshot()
   })
@@ -258,6 +266,7 @@ export class SessionManager {
    * @returns when every Session Remote iterator has completed teardown.
    */
   async dispose(): Promise<void> {
+    this.activityCoalescer.dispose()
     for (const timer of this.catalogDebounce.values()) clearTimeout(timer)
     this.catalogDebounce.clear()
     this.catalogStale.clear()
@@ -781,7 +790,7 @@ export class SessionManager {
    * @param updatedAt - durable message timestamp.
    */
   handleSessionActivity(sessionId: SessionId, updatedAt: number): void {
-    this.recordMutation({ kind: 'activity', sessionId, updatedAt })
+    this.activityCoalescer.collect(sessionId, updatedAt)
   }
 
   /**
