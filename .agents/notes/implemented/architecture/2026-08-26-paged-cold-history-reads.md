@@ -4,7 +4,7 @@ Status: implemented
 
 English | [中文](2026-08-26-paged-cold-history-reads.zh.md)
 
-> Scope: how the web `session.history` RPC reads detached (cold) sessions — suffix-window `readFrom` reads with a widening loop, turn-aligned page cuts, the projection-cache cold ladder for tail-page baselines, and the full-inspection fallback for repair-ambiguous tails. The persistence seam's [`readFrom`](../../docs/subsystems/session.md) primitive and the projection cache's `coldSnapshot` ladder are the building blocks this note composes.
+> Scope: how the web `session.history` RPC reads detached (cold) sessions — suffix-window `readFrom` reads with a widening loop, turn-aligned page cuts, the projection-cache cold ladder for tail-page baselines, and the full-inspection fallback for repair-ambiguous tails. The persistence seam's [`readFrom`](../../../../docs/subsystems/persistence.md) primitive and the projection cache's `coldSnapshot` ladder are the building blocks this note composes.
 
 ## Problem
 

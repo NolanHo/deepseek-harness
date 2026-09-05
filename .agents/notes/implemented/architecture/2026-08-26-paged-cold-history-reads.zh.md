@@ -4,7 +4,7 @@ Status: implemented
 
 [English](2026-08-26-paged-cold-history-reads.md) | 中文
 
-> Scope：web `session.history` RPC 如何读取未附加（冷）会话——带加宽循环的后缀窗口 `readFrom` 读取、按回合对齐的分页切点、tail 页投影基线的缓存冷读阶梯，以及修复歧义尾部时的全量 inspect 回退。组装素材：持久层缝隙的 [`readFrom`](../../docs/subsystems/session.md) 原语与投影缓存的 `coldSnapshot` 阶梯。
+> Scope：web `session.history` RPC 如何读取未附加（冷）会话——带加宽循环的后缀窗口 `readFrom` 读取、按回合对齐的分页切点、tail 页投影基线的缓存冷读阶梯，以及修复歧义尾部时的全量 inspect 回退。组装素材：持久层缝隙的 [`readFrom`](../../../../docs/subsystems/persistence.zh.md) 原语与投影缓存的 `coldSnapshot` 阶梯。
 
 ## Problem
 

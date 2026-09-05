@@ -36,14 +36,19 @@ interface WebBootEntry {
 ```
 
 ```ts type-equiv
-/** Initial scheduling phase for one content-addressed combo script. */
-type WebBootBatchPhase = 'bootstrap' | 'application'
+/**
+ * Initial scheduling phase for one content-addressed combo script. Bootstrap
+ * scripts block the parser; application scripts are preloaded before the shell
+ * runs; deferred scripts stay unfetched until the shell asks for their
+ * entries after first mount.
+ */
+type WebBootBatchPhase = 'bootstrap' | 'application' | 'deferred'
 ```
 
 ```ts type-equiv
 /** One initial combo script; a scheduling phase may span several descriptors. */
 interface WebBootBatch {
-  /** Parser-blocking bootstrap or preloaded application scheduling. */
+  /** Parser-blocking bootstrap, preloaded application, or post-mount deferred scheduling. */
   phase: WebBootBatchPhase
   /** Content-addressed combo script endpoint. */
   url: string
@@ -67,6 +72,12 @@ interface WebBootGraph {
   entries: WebBootEntry[]
   /** Initial combo descriptors; every entry belongs to exactly one descriptor. */
   batches: WebBootBatch[]
+  /**
+   * Non-loopback authorities this deployment serves pages at (the `/api`
+   * fence's trusted list, canonical `host[:port]`, port-less matches any
+   * port); the client treats a page authority in this list as first-party.
+   */
+  trustedAuthorities: string[]
 }
 ```
 

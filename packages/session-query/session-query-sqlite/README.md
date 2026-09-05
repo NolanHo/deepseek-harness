@@ -26,6 +26,7 @@ English | [中文](README.zh.md)
 ## Use this package
 
 The service requires `ctx.sessions` and observes optional `ctx.sessionPersistence` dynamically. One serialized state machine compares source-qualified lightweight durable snapshot revisions, non-mutatingly inspects only new or changed logs, extracts shared semantic documents, reconciles changes transactionally, and runs the query. Session queries never invoke the persistence backend's crash-repairing `load()`; an owner attaching during inspection cannot mutate its log, and the stable-observation retry makes the result live-preferred. The TEMP live row still records persisted availability, and the durable base refreshes after that live owner detaches. Repeated queries and an unchanged same-store reopen perform no full durable-log inspection; attached logs are memoized by event count and tail seq, so unchanged live sessions skip the per-query clone-and-fingerprint too (attached logs mutate by append only). Switching stores, or observing new, changed, deleted, or externally load-repaired sources, reconciles on the next stable observation. Source or transaction failure commits nothing, and the next search retries.
+
 Mount this package when a composition needs ranked full-text search over session history — for example the Web content search or `/resume` prior-work retrieval. The common path is explicit: mount the plugin, give it a dedicated database path, and call `ctx.sessionQuery.searchSessions` or `searchEvents` from code.
 
 ### When to choose it
@@ -75,8 +76,7 @@ Typed `SessionQueryError` failures carry stable codes: `SESSION_QUERY_SEARCH_DIS
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 
-<details>
-<summary>Implementation internals — click to expand</summary>
+<details> <summary>Implementation internals — click to expand</summary>
 
 This section explains the design decisions behind the backend and points at the code that realizes them; the observable behavior is fully covered in [Use this package](#use-this-package).
 
@@ -149,8 +149,7 @@ These limits define when this package is a poor fit or needs special operational
 <a id="dev-note"></a>
 ### Dev Note
 
-<details>
-<summary>Working context for maintainers — click to expand</summary>
+<details> <summary>Working context for maintainers — click to expand</summary>
 
 This Dev Note is working context for maintainers: open design questions and directions that are not decided. It is explicitly non-authoritative — shipped behavior, limits, and accepted rationale live in the sections above, the package code, and the linked Agent Notes.
 
