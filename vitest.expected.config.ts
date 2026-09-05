@@ -14,18 +14,33 @@ export default defineConfig({
     ],
     // Fork decision (FORK_CHANGES.md 2026-09-05): the sandbox capability is
     // disabled in the fork composition, so these expected-output suites are
-    // excluded — subagent-inheritance replays a delegation into the read-only
+    // excluded. subagent-inheritance replays a delegation into the read-only
     // sandbox mode and pins the sandbox/mode event, the sandbox-policy prompt
     // context, and the sandbox denial output in its assembled expectations,
     // and image-offload's assembled runtime context pins the
     // sandbox-policy-generated `Current DSH file policy` sentence (its only
-    // producer). Both hard-assert composition the fork no longer mounts.
+    // producer). goal, headless, semantic-checkpoint, subagent-diagnostic, and
+    // workspace-context-resume replay seeded/recorded sessions through
+    // assembled one-shot apps and diff whole normalized sessions against
+    // goldens recorded on the upstream composition: those goldens open with
+    // `permission/preset`, `sandbox/mode`, and `approval/policy` rows and
+    // carry the runtime-context user message with its sandbox:policy section,
+    // which the fork log does not produce (the base rows' sticky
+    // `disabled: true` cannot be cleared by fixture overlays), so every later
+    // seq index shifts as well. All seven goldens stay upstream-shaped and
+    // return when the rows are re-enabled or an upstream-synced corpus
+    // replaces them.
     // Restore path: clear the `disabled: true` flags on
     // sandbox/sandbox-policy/permission and revert the executor rows' `name`s
     // in packages/bundle/base/cordis.patch.yml, then delete this list.
     exclude: [
       'apps/cli/tests/profiles/headless/tests/subagent-inheritance.expected.e2e.ts',
       'apps/cli/tests/profiles/acp/tests/image-offload.expected.e2e.ts',
+      'apps/cli/tests/profiles/acp/tests/goal.expected.e2e.ts',
+      'apps/cli/tests/profiles/headless/tests/headless.expected.e2e.ts',
+      'apps/cli/tests/profiles/headless/tests/semantic-checkpoint.expected.e2e.ts',
+      'apps/cli/tests/profiles/headless/tests/subagent-diagnostic.expected.e2e.ts',
+      'apps/cli/tests/profiles/headless/tests/workspace-context-resume.expected.e2e.ts',
     ],
     testTimeout: 120_000,
     hookTimeout: 30_000,

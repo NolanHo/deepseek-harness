@@ -36,9 +36,15 @@ export default defineConfig({
     // snapshots/web/permission-policy-context/, access-confirmation drives the
     // Access-mode picker into Full access through the permission preset table,
     // and seeded-history lands a `/permission read-only` command row through
-    // the Access chip. All four hard-assert composition the fork no longer
+    // the Access chip. All five hard-assert composition the fork no longer
     // mounts (the permission switcher renders nothing without the host
-    // permission service). Restore path: clear the `disabled: true` flags on
+    // permission service). approval-composer replays the recorded approval
+    // session under snapshots/web/approval-composer/ and opens it by driving
+    // the same Access-mode chip (`[aria-label^="Access mode"]`) into Read
+    // Only: the chip renders only from the host permission service's
+    // `permissions` projection (InputBar.tsx), absent on the fork, so the
+    // suite cannot reach its approval-takeover subject either.
+    // Restore path: clear the `disabled: true` flags on
     // sandbox/sandbox-policy/permission and revert the executor rows' `name`s
     // in packages/bundle/base/cordis.patch.yml, then delete this list.
     exclude: [
@@ -46,6 +52,7 @@ export default defineConfig({
       'apps/web/tests/permission-policy-context.e2e.ts',
       'apps/web/tests/access-confirmation.e2e.ts',
       'apps/web/tests/seeded-history.e2e.ts',
+      'apps/web/tests/approval-composer.e2e.ts',
     ],
     // Local and record runs stay serial. CI runs workspace-mutating HMR and
     // dynamic Cordis lifecycle coverage before parallelizing the remaining files.
