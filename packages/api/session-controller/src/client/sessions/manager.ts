@@ -25,6 +25,9 @@ import { Notifier } from './notifier.ts'
 import { ProjectionValueStore } from './projection-store.ts'
 import { Session } from './session.ts'
 import type { SessionRemotes } from './remotes.ts'
+// Fork patch (FORK_SURFACE.md): identity-stable list snapshot publication lives in the
+// fork-owned snapshot-identity module; this file keeps only the injection.
+import { SessionSnapshotIdentity } from './fork/snapshot-identity.ts'
 
 function sessionSeqCursor(value: number): SessionSeqCursor {
   return value === -1 ? -1 : SessionSeq(value)
@@ -136,17 +139,9 @@ export class SessionManager {
   private selected: SessionId | undefined
 
   private listSnapshotCache: SessionListSnapshot | undefined
-  /** Entry-identity cache (reference stability): list rebuilds reuse the previous entry
-   *  object when every field matches — wire refreshes mint all-new summary objects, so identity
-   *  must be recovered by value or every SessionListItem memo misses on every refresh. */
-  private entryCache = new Map<SessionId, SessionListEntry>()
-  private itemsCache: readonly SessionListEntry[] = []
-  /** Reference-stable `subagentsByParent` projection: content-compare against the Map, keep
-   *  the previous object when no catalog reference moved (Map values are replaced immutably,
-   *  so a reference comparison is a complete change check). */
-  private subagentsSnapshot: Readonly<Record<SessionId, SubagentCatalogSnapshot>> = {}
-  /** Reference-stable `jobsBySession` projection, same policy as {@link subagentsSnapshot}. */
-  private jobsSnapshot: Readonly<Record<SessionId, readonly JobView[]>> = {}
+  // Fork patch (FORK_SURFACE.md): entry-object identity, reference-stable subagents/jobs
+  // projections, and equal-content snapshot reuse live in fork/snapshot-identity.ts.
+  private readonly snapshotIdentity = new SessionSnapshotIdentity()
   private readonly notifier = new Notifier(() => {
     this.listSnapshotCache = this.buildListSnapshot()
   })
@@ -933,50 +928,19 @@ export class SessionManager {
       }
     })
     const fresh = flattenLineage(merged, this.completedNotifications)
-    const items = fresh.map((entry) => {
-      const prev = this.entryCache.get(entry.sessionId)
-      if (
-        prev !== undefined && prev.updatedAt === entry.updatedAt && prev.running === entry.running
-        && prev.blank === entry.blank
-        && prev.parentSessionId === entry.parentSessionId && prev.cwd === entry.cwd
-        && prev.origin === entry.origin && prev.title === entry.title && prev.depth === entry.depth
-        && prev.projectionValues === entry.projectionValues
-        && prev.completed === entry.completed
-      ) return prev
-      this.entryCache.set(entry.sessionId, entry)
-      return entry
-    })
-    for (const id of this.entryCache.keys()) {
-      if (!items.some(e => e.sessionId === id)) this.entryCache.delete(id)
-    }
-    const sameOrder = items.length === this.itemsCache.length && items.every((e, i) => e === this.itemsCache[i])
-    if (!sameOrder) this.itemsCache = items
+    // Fork patch (FORK_SURFACE.md): entry identity, reference-stable projections, and the
+    // equal-content snapshot return live in the fork-owned snapshot-identity module.
+    const items = this.snapshotIdentity.stableEntries(fresh)
     const selected = this.selected
     const current = selected !== undefined
       && (items.some(item => item.sessionId === selected) || this.addresses.has(selected))
       ? selected
       : undefined
-    const subagentsByParent = this.stableSubagentsSnapshot()
-    const jobsBySession = this.stableJobsSnapshot()
+    const subagentsByParent = this.snapshotIdentity.stableSubagentsSnapshot(this.catalogs)
+    const jobsBySession = this.snapshotIdentity.stableJobsSnapshot(this.jobsBySession)
     const currentAddress = current === undefined ? undefined : this.addresses.get(current)
-    // Identity-stable publish: rebuilds land on the same observable content more often
-    // than not (catalog refreshes, jobs frames, and projection echoes that changed no
-    // list row), and a fresh object for equal content would re-render and re-derive
-    // every subscriber. Equal content returns the previous snapshot instead.
-    const previous = this.listSnapshotCache
-    if (previous !== undefined
-      && previous.items === this.itemsCache
-      && previous.current === current
-      && previous.state === this.listState
-      && previous.phase === this.listPhase
-      && previous.error === this.listError
-      && previous.subagentsByParent === subagentsByParent
-      && previous.jobsBySession === jobsBySession
-      && previous.currentAddress === currentAddress) {
-      return previous
-    }
-    return {
-      items: this.itemsCache,
+    return this.snapshotIdentity.publish(this.listSnapshotCache, {
+      items,
       current,
       state: this.listState,
       phase: this.listPhase,
@@ -984,47 +948,7 @@ export class SessionManager {
       subagentsByParent,
       jobsBySession,
       currentAddress,
-    }
-  }
-
-  /**
-   * Reference-stable `subagentsByParent`: the previous projection object while
-   * no catalog reference moved (Map set sites replace values immutably, so
-   * same reference means same content).
-   */
-  private stableSubagentsSnapshot(): Readonly<Record<SessionId, SubagentCatalogSnapshot>> {
-    const cached = this.subagentsSnapshot
-    const keys = Object.keys(cached)
-    if (keys.length !== this.catalogs.size) return this.rebuildSubagentsSnapshot()
-    for (const key of keys) {
-      if (this.catalogs.get(key as SessionId) !== (cached as Record<SessionId, SubagentCatalogSnapshot>)[key as SessionId]) {
-        return this.rebuildSubagentsSnapshot()
-      }
-    }
-    return cached
-  }
-
-  private rebuildSubagentsSnapshot(): Readonly<Record<SessionId, SubagentCatalogSnapshot>> {
-    this.subagentsSnapshot = Object.fromEntries(this.catalogs)
-    return this.subagentsSnapshot
-  }
-
-  /** Reference-stable `jobsBySession`, same policy as {@link stableSubagentsSnapshot}. */
-  private stableJobsSnapshot(): Readonly<Record<SessionId, readonly JobView[]>> {
-    const cached = this.jobsSnapshot
-    const keys = Object.keys(cached)
-    if (keys.length !== this.jobsBySession.size) return this.rebuildJobsSnapshot()
-    for (const key of keys) {
-      if (this.jobsBySession.get(key as SessionId) !== (cached as Record<SessionId, readonly JobView[]>)[key as SessionId]) {
-        return this.rebuildJobsSnapshot()
-      }
-    }
-    return cached
-  }
-
-  private rebuildJobsSnapshot(): Readonly<Record<SessionId, readonly JobView[]>> {
-    this.jobsSnapshot = Object.fromEntries(this.jobsBySession)
-    return this.jobsSnapshot
+    })
   }
 }
 

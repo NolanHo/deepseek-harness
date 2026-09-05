@@ -6,6 +6,9 @@
  * share from the return type.
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
+// Fork patch (FORK_SURFACE.md): the guard that keeps the previous order array
+// reference when its content is unchanged lives in the fork module.
+import { sessionOrderChanged } from './fork/order-stability.ts'
 
 /** Browser-local order account for the hierarchy-free flat Session list. */
 export const FLAT_SESSION_ORDER_KEY = '__flat_session_order__'
@@ -76,14 +79,9 @@ export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState
         )
       },
       syncSessionOrderAccount: (d, accountKey: string, order: string[], updatedAt: Record<string, number>) => {
-        // Keep the previous array reference when the order did not change:
-        // the timestamps advance on every activity tick, and a fresh array for
-        // equal content would re-run every order-derived memo on each one.
-        const previousOrder = d.sessionOrderByAccount[accountKey]
-        const orderChanged = previousOrder === undefined
-          || previousOrder.length !== order.length
-          || previousOrder.some((id, index) => id !== order[index])
-        if (orderChanged) d.sessionOrderByAccount[accountKey] = order
+        if (sessionOrderChanged(d.sessionOrderByAccount[accountKey], order)) {
+          d.sessionOrderByAccount[accountKey] = order
+        }
         d.sessionUpdatedAtByAccount[accountKey] = updatedAt
       },
       setSessionOrder: (d, accountKey: string, order: string[]) => {

@@ -9,7 +9,7 @@ import {
 import { isChunkRow, packChunkRuns, type ChunkRow } from '@deepseek-ai/dsh-session/chunk-rows'
 // Fork patch (FORK_SURFACE.md): user-aligned turn-complete paging lives in the
 // fork-owned page-boundary module; this file keeps only the injection.
-import { nthMessageCut, readIndexedPage, type SeekablePersistence } from './page-boundary.ts'
+import { nthMessageCut, readIndexedPage, type SeekablePersistence } from './fork/page-boundary.ts'
 import type {
   SessionEvent,
   SessionHeader,

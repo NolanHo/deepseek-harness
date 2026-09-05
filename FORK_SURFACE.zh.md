@@ -8,6 +8,10 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 
 0.1.2-alpha.1 同步（上游 1079 提交）解决了 123 个冲突。痛点集中在上游自有文件中的 fork 语义。下面的清单把每个差异面分类，让下一次同步变成机械的重放清单，而不是考古挖掘。
 
+## fork 模块约定
+
+凡超过一行的 fork 逻辑都住在 `<pkg>/src/fork/`（client 面：`<pkg>/src/client/<area>/fork/`）的 fork 自有模块里。上游文件只带一个标记注入点——一个 import 加一个调用——前面配 `// Fork patch (FORK_SURFACE.md): ...` 注释。同步操作 = 原样搬移所有 `fork/` 目录 + 重放下方登记的注入点。内在一行式改动（常量、单 hook 互换、CSS 块、配置字段）按政策保持内联；抽取它们只会增加间接层而不会缩小合并面。
+
 ## 隔离层级
 
 - **A 层 — fork 自有包**：上游永远不会有的文件。零合并成本。
@@ -23,23 +27,23 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `.agents/notes`、文档、快照、测试更新 | A | — | 随源更新；与对应源一起重放 |
 | `session.ts` PAGE_MESSAGES 8（上游 50） | B | 8 行 | 客户端页大小 |
 | `client/connection` browserAuth 开关 | B | ~50 行 | 配置字段后的可选认证关闭 |
-| `ui-chat` TurnProcessNodeView 标签+时长、ChatNodeSeat 门移除、locale、CSS | C | ~60 行 | 折叠增强；局部块 |
+| `ui-chat` TurnProcess 折叠摘要 | C | 标记+import+1 处调用 | 标签/时长逻辑在 `src/client/chat/fork/turn-process-summary.ts`；视图只做组合；ChatNodeSeat 门移除在同步时为一行删除 |
 | `ui-chat` ChatView 读者输入归因 | 已退役 | — | 上游自己的修复已落地（observed-top 几何台账覆盖全部输入设备，无需监听器）；fork 的设备标记补丁在 0.1.2-rc.1 同步时移除 |
 | `ui-conversation`/`ui-chat` CSS overflow-anchor + 安全区 | C | ~40 行 | 滚动容器锚定；局部规则 |
 | `api/session-controller/src/history.ts` 快路径注入 | C | ~60 行 | 委托给 fork 自有 `src/page-boundary.ts`（边界游走、梯子、快路径计划）；`page()` 一次调用加 `paginate` 的委托 |
-| `session-persistence-sqlite` 整包 + messageCut | A（0.1.2-rc.1 起 fork 拥有） | 8 个文件 | 上游按 JSONL-only 决策删除该包但为 out-of-tree 提供者保留接缝；fork 保留并移植到 handle-based `PersistenceBackend`/coordinator，SCHEMA_VERSION 19 不变（`isSeeded` 映射到可空 `seed_length` 列；ignorable 信封以保留 JSON 标签存于 `data` 列） |
-| `session-query-sqlite` 活动观察记忆化 | C | 30 行 | 单函数内的局部记忆化 |
-| `client/ui-layout` AppFrame 移动端 shell | C | ~62 行 + fork 自有 `mobile-shell.tsx` | 视口机制 hook、抽屉 chrome、详情面板在 fork 模块里；AppFrame 组合 |
+| `session-persistence-sqlite` 整包 + messageCut | A（0.1.2-rc.1 起 fork 拥有） | 8 个文件 | 上游按 JSONL-only 决策删除该包但为 out-of-tree 提供者保留接缝；fork 保留并移植到 handle-based `PersistenceBackend`/coordinator，采用上游最终 SCHEMA_VERSION 20（`ignorable` 列兼作 packed 行判别符；一次性 19→20 原地迁移；`seed_length` 承载继承切点） |
+| `session-query-sqlite` 活动观察记忆化 | C | `index.ts` 内约 13 行 | 指纹 memo（`length:tailSeq:tailTime`）在 `src/fork/live-observation-memo.ts`；`index.ts` 只留字段与 3 行委托 |
+| `client/ui-layout` AppFrame 移动端 shell | C | import + 组合 | 视口机制 hook、抽屉 chrome、详情面板在 `src/client/fork/mobile-shell.tsx`；AppFrame 的 diff 只剩 import 行与组合槽位 |
 | 对话头部移动端精简（session-log 胶囊 + 面包屑） | C | ~10 行 | `max-width: 560px` 媒体块在手机宽度隐藏 Session log 下载胶囊（`session-log-export`）与会话标题面包屑（`ui-conversation`） |
-| `api/session-controller` `openWorkspacePath` 桌面门控 + `ui-chat` 文件打开路由 | C | ~30 行 | 打开 RPC 查询 `canOpenPath()` 并以 `desktop unavailable` 快速失败；Chat 打开接口在第三方 `betterSidebar` 插件安装时把核心文件表面路由到其侧栏编辑器（`ctx.get` duck 检查），拒绝映射为 `fileOpen.desktopUnavailable` 文案，原生打开器保留为回落 |
+| `api/session-controller` `openWorkspacePath` 桌面门控 + `ui-chat` 文件打开路由 | C | 门控保持内联（5 行）；路由 = 标记+import+2 处调用 | 打开 RPC 查询 `canOpenPath()` 并快速失败（内在一行式）；路由决策与拒绝文案映射在 `src/client/chat/fork/open-file-routing.ts` |
 | `client/modules` + `client/web` 延迟启动批次 | C | 3 个文件约 120 行 | `WebBootBatchPhase 'deferred'` + `Config.defer` 切分 + 两段式 boot；上游形态（增量线格式字段、空默认）；defer 名单是部署配置而非仓库状态 |
-| `ui-workspace` 提升头部稳定 | C | ~20 行 | `nextSessionOrderAccount` 共流式时保持头部相对顺序；每个活跃突发一次提升 |
+| `ui-workspace` 提升头部稳定 | C | 标记+import | `nextSessionOrderAccount`/`reconciledSessionOrder` 在 `src/client/fork/order-stability.ts`；WorkspaceBrowser 直接调用 |
 | `ui-chat` StatsLine 绘制后测量 | C | 1 行 + 注释 | 省略号测试从 `useLayoutEffect` 移到 `useEffect`（绘制后）；行为零变化 |
-| `skill` 注册表目录限制 | C | 单文件约 92 行 | `SkillRegistry.restrict` + scope 层过滤（两个注入块：restrict/SkillLayer 接线、`collectFresh` 过滤钩子）；allow/deny 互斥，是相对 `tools.restrict` 的刻意分歧（JSDoc 已写明） |
-| `subagent` 子代理 cwd + skillFilter | C | 5 文件约 170 行 | 请求字段贯穿 `childSessionMeta`/`applyChildComposition`/in-process 驱动/continuation；descriptor v3→4（同步遇上游 bump：字段取并集）；冷恢复的 cwd 权威仍在会话 header |
-| `api/session-controller` 客户端选择通知 + 快照身份 | C | manager/service 约 60 行 | 选择走 `markDirty` 通知（列表投影渲染在交互之外）；`open`/`openSubagent` 经 `followCurrent` 读 manager 快照同步 stage；`buildListSnapshot` 内容未变返回上一个对象，`subagentsByParent`/`jobsBySession` 引用稳定 |
+| `skill` 注册表目录限制 | C | `index.ts` 内 17 行 | 全部逻辑在 `src/fork/skill-restrict.ts`（编译、按作用域存储、链式过滤）；`index.ts` 只留 import、一个字段、两个标记的委托调用；allow/deny 互斥记录在模块 JSDoc |
+| `subagent` 子代理 cwd + skillFilter | C | 接缝 + `child-agent.ts` 内 2 个注入点 | 逻辑在 `src/fork/child-scoping.ts`（`stampChildCwd`、`applyChildSkillFilter`）；贯穿 `childSessionMeta`/continuation/驱动的请求字段是保留的接缝；descriptor v3→4（同步遇上游 bump：字段取并集）；冷恢复的 cwd 权威仍在会话 header |
+| `api/session-controller` 客户端选择通知 + 快照身份 | C | `manager.ts` 内约 9 行 | 身份/稳定性逻辑（entry/items/subagents/jobs 缓存、内容相等复用前快照）在 `src/client/sessions/fork/snapshot-identity.ts`；选择仍走 `markDirty`，`open`/`openSubagent` 经 `followCurrent` 同步 stage |
 | `api/gateway` Remote stream mux permessage-deflate | C | ~35 行 | `RemoteStreamMuxServer` 接受 `Config.websocketPerMessageDeflate`（默认关）的 `perMessageDeflate` 参数；RFC 7692 协商配 `threshold: 1024`，journal `opened` 整窗帧压缩、实时帧原样；mux 帧处理本身未动
-| `ui-workspace` order store 引用稳定 | C | ~10 行 | `syncSessionOrderAccount` 在 order 未变时保留旧数组引用（时间戳照常推进） |
+| `ui-workspace` order store 引用稳定 | C | 标记+import+3 行守卫 | `sessionOrderChanged` 在 `src/client/fork/order-stability.ts`；store action 在 order 未变时保留旧数组引用（时间戳照常推进） |
 
 ## 优化方案（按优先级）
 

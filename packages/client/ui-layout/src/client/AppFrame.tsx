@@ -19,7 +19,8 @@ import type { PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from '@d
 import { computeColumns, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
 import { DocumentTitle } from './DocumentTitle.tsx'
 import type { createLayoutStore } from './stores.ts'
-import { DetailsColumn, DRAWER_WIDTH, MobileNavChrome, useMobileRegime } from './mobile-shell.tsx'
+// Fork patch (FORK_SURFACE.md): the mobile regime chrome lives in the fork-owned module.
+import { DetailsColumn, DRAWER_WIDTH, MobileNavChrome, useMobileRegime } from './fork/mobile-shell.tsx'
 import css from './AppFrame.module.css'
 
 /** Full composed props: runtime share + child-slot render share + store share + locale share. */

@@ -14,7 +14,6 @@ import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
-import { isAbsolute } from 'node:path'
 // Type-only: make `ctx.get('sandboxPolicy')` / `ctx.get('approval')` resolve
 // to the policy services when composed — delegation consumes both
 // opportunistically (the documented `ctx.get` pattern), never as a hard dep —
@@ -28,6 +27,7 @@ import type {} from '@deepseek-ai/dsh-user-approval'
 // them through the tool registry's global layer.
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import { delegationDepthOf } from './depth.ts'
+import { applyChildSkillFilter, stampChildCwd } from './fork/child-scoping.ts'
 import type { SkillFilter } from './types.ts'
 
 /** Thrown when starting a child would exceed the requested depth cap. */
@@ -149,12 +149,10 @@ export function childSessionMeta(
   isSeeded: boolean,
   cwd?: string,
 ): NonNullable<CreateAgentOptions['meta']> {
-  if (cwd !== undefined && !isAbsolute(cwd)) {
-    throw new Error(`child session cwd must be an absolute path, got "${cwd}"`)
-  }
   const parentHeader = parent.session.header
+  // Fork patch (FORK_SURFACE.md): cwd resolution and validation live in the fork-owned child-scoping module.
+  const resolvedCwd = stampChildCwd(cwd, parentHeader.cwd)
   const agentPreset = parent.ctx.get('agentPresets')?.composedPreset(parent.ctx)
-  const resolvedCwd = cwd ?? parentHeader.cwd
   return {
     ...resolvedCwd !== undefined ? { cwd: resolvedCwd } : {},
     ...agentPreset === undefined ? {} : { agentPreset },
@@ -176,16 +174,6 @@ export interface ChildComposition {
   readonly toolFilter?: ToolRestriction | undefined
   /** Per-child skill scoping. */
   readonly skillFilter?: SkillFilter | undefined
-}
-
-/**
- * The `ctx.skills` surface child composition consumes. Structural on purpose:
- * the subagent seam stays independent of the skill registry's declarations
- * while `applyChildComposition` still reaches the one method it needs. The
- * `SkillFilter` request field is the registry's `SkillRestriction` shape.
- */
-interface SkillsRestrictSurface {
-  restrict(filter: SkillFilter): () => void
 }
 
 /**
@@ -240,16 +228,8 @@ export function applyChildComposition(
     })
   }
   if (composition.toolFilter !== undefined) childCtx.tools.restrict(composition.toolFilter)
-  if (composition.skillFilter !== undefined) {
-    // The skill registry is an optional composition member; `ctx.get` returns
-    // `any` for untyped names, and this package deliberately does not depend
-    // on the registry's declarations, so the structural surface narrows it.
-    const skills: SkillsRestrictSurface | undefined = childCtx.get('skills')
-    if (skills === undefined) {
-      throw new Error('skillFilter requires the skill registry: compose @deepseek-ai/dsh-skill before restricting a child\'s skills')
-    }
-    skills.restrict(composition.skillFilter)
-  }
+  // Fork patch (FORK_SURFACE.md): per-child skill scoping applies in the fork-owned child-scoping module.
+  if (composition.skillFilter !== undefined) applyChildSkillFilter(childCtx, composition.skillFilter)
 }
 
 /** Policy seeded onto a child session's log at the delegation boundary. */

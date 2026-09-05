@@ -97,6 +97,6 @@
     }
   ],
   "include": [
-    "src/page-boundary.ts"
+    "src/fork/page-boundary.ts"
   ]
 }

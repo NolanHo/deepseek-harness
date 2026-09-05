@@ -22,6 +22,9 @@ import type { ChatSnapshot } from './contract/snapshot.ts'
 import { EMPTY_CHAT_SNAPSHOT } from './contract/snapshot.ts'
 import { ApprovalCommand } from './chat/ApprovalCommand.tsx'
 import { ChatView } from './chat/ChatView.tsx'
+// Fork patch (FORK_SURFACE.md): the open-file routing decision (sidebar editor
+// duck check and desktop-unavailable copy mapping) lives in the fork module.
+import { nativeOpenFailureText, routeOpenFile, type SidebarEditorLike } from './chat/fork/open-file-routing.ts'
 import { registerChatNodeRenderers } from './chat/register-node-renderers.ts'
 import { StatsLine } from './chat/StatsLine.tsx'
 import { registerConversationNodes } from './conversation-nodes/register.ts'
@@ -122,32 +125,16 @@ export function apply(ctx: Context): void {
           openFile: async (path) => {
             const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
             const absolute = resolveWorkspacePath(cwd, path)
-            // dsh-better-sidebar turns the produced-files chips into sidebar
-            // editor opens; route the core file surfaces — inline mentions,
-            // tool-row paths — through the same viewer when that plugin is
-            // installed, keeping the native Host opener for folder reveals
-            // (`.` carries no editor file) and plugin-less profiles.
-            if (path !== '.') {
-              const sidebar = ctx.get('betterSidebar') as {
-                openTab?: (spec: { type: string; title: string; path: string; id: string }) => void
-              } | undefined
-              if (sidebar?.openTab !== undefined) {
-                const cut = Math.max(absolute.lastIndexOf('/'), absolute.lastIndexOf('\\'))
-                const title = cut === -1 ? absolute : absolute.slice(cut + 1)
-                sidebar.openTab({ type: 'editor', title, path: absolute, id: `editor:${absolute}` })
-                return
-              }
+            const routing = routeOpenFile(path, absolute, ctx.get('betterSidebar') as SidebarEditorLike | undefined)
+            if (routing.kind === 'sidebar') {
+              routing.openTab(routing.tab)
+              return
             }
             const result = await ctx.remote.session.openWorkspacePath({
               path: absolute,
             })
             if (!result.ok) {
-              // A Host without a native opener refuses fast; relay the friendly
-              // localized reason instead of the wire message.
-              if (result.error.message.includes('desktop unavailable')) {
-                throw new Error(t('fileOpen.desktopUnavailable'))
-              }
-              throw new Error(`path open failed: ${result.error.message}`)
+              throw new Error(nativeOpenFailureText(result.error.message, t('fileOpen.desktopUnavailable')))
             }
           },
           loadOlder: () => { void session.loadOlder() },

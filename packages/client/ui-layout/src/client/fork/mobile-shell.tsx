@@ -7,8 +7,8 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { MOBILE_VIEWPORT } from './columns.ts'
-import css from './AppFrame.module.css'
+import { MOBILE_VIEWPORT } from '../columns.ts'
+import css from '../AppFrame.module.css'
 
 /** Owner-prop width fed to the sidebar occupant inside the mobile drawer (inside the sidebar contract range). */
 export const DRAWER_WIDTH = 300

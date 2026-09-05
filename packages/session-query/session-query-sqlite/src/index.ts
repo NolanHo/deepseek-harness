@@ -62,6 +62,9 @@ import {
   sanitizeFtsText,
   SQLITE_MAX_PAGE_LIMIT,
 } from './query.ts'
+// Fork patch (FORK_SURFACE.md): the live-observation memo (events fingerprint and
+// per-session cached observations) lives in the fork-owned module.
+import { LiveObservationMemo } from './fork/live-observation-memo.ts'
 
 export {
   SESSION_QUERY_SQLITE_APPLICATION_ID,
@@ -230,16 +233,9 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   private _persistenceEpoch = 0
   private _globalGeneration = 0
   private _localGeneration = 0
-  /**
-   * Live observations memoized by session: `observeLive` clones and
-   * fingerprints every event (tens of millions of JSON bytes for large
-   * attached logs), and `_observeStable` recomputed it for every attached
-   * session on every search. Attached logs mutate by append only
-   * (replacements and edits append too), so the event count plus the tail
-   * seq/time identifies the observation content; recompute only when that
-   * key changes.
-   */
-  private readonly _liveObservationMemo = new Map<SessionId, { key: string; observation: ObservedSession }>()
+  // Fork patch (FORK_SURFACE.md): the memoized live observations live in the fork-owned
+  // live-observation-memo module; the engine keeps only this owned instance.
+  private readonly _liveObservationMemo = new LiveObservationMemo<ObservedSession>()
   private _tail: Promise<void> = Promise.resolve()
   private _closed = false
   private _closePromise: Promise<void> | undefined
@@ -560,7 +556,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         if (durable !== undefined) assertSessionHeadersCompatible(observed.header, durable.header)
         live.set(session.id, observed)
       }
-      this._evictDetachedLiveObservations(live)
+      // Fork patch (FORK_SURFACE.md): the fork memo bounds itself to the attached sessions.
+      this._liveObservationMemo.evictDetached(live)
       if (!sameSessionIds(initiallyLive, live)) continue
       return { persistenceBinding, persisted, live }
     }
@@ -571,21 +568,12 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   }
 
   private _observeLiveCached(session: Session): ObservedSession {
-    const events = session.snapshotEvents()
-    const tail = events.at(-1)
-    const key = `${events.length}:${tail?.seq ?? 'none'}:${tail?.time ?? 'none'}`
-    const cached = this._liveObservationMemo.get(session.id)
-    if (cached !== undefined && cached.key === key) return cached.observation
-    const observation = observeLive(session)
-    this._liveObservationMemo.set(session.id, { key, observation })
-    return observation
-  }
-
-  /** Bound the memo to the currently attached sessions. */
-  private _evictDetachedLiveObservations(live: ReadonlyMap<SessionId, ObservedSession>): void {
-    for (const id of this._liveObservationMemo.keys()) {
-      if (!live.has(id)) this._liveObservationMemo.delete(id)
-    }
+    // Fork patch (FORK_SURFACE.md): memo lookup, recompute, and eviction are owned by the fork memo.
+    return this._liveObservationMemo.observe(
+      session.id,
+      session.snapshotEvents(),
+      () => observeLive(session),
+    )
   }
 
   private _mainGeneration(): number {
