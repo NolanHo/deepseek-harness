@@ -378,17 +378,18 @@ describe('indexed page fast path', () => {
       if (id !== sessionId) return Promise.reject(new Error('not found'))
       return Promise.resolve({ meta, events: events.filter(event => event.seq >= fromSeq) })
     })
+    const inspect = vi.fn((_id: SessionId) => Promise.resolve({ meta, events }))
     const messageCut = vi.fn((_id: SessionId, _maxMessages: number, _beforeSeq?: number) => Promise.resolve(cut))
     providePersistence(ctx, {
       list: () => Promise.resolve([meta]),
-      inspect: (_id: SessionId) => Promise.resolve({ meta, events }),
+      inspect,
       borrowSession: borrow,
       messageCut,
       readFrom,
       locate: () => undefined,
     })
     const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/proj' })
-    return { ctx, sessionId, borrow, readFrom, messageCut, remote }
+    return { ctx, sessionId, borrow, inspect, readFrom, messageCut, remote }
   }
 
   it('sizes the page from the indexed cut in one suffix read, never borrowing', async () => {
@@ -473,14 +474,14 @@ describe('indexed page fast path', () => {
   })
 
   it('bails softly when the suffix read answers a different session', async () => {
-    const { ctx, sessionId, borrow, readFrom, remote } = await mount(12)
+    const { ctx, sessionId, inspect, readFrom, remote } = await mount(12)
     readFrom.mockImplementation(async () => ({ meta: { ...header('another-session', 1000), cwd: '/proj' }, events: [] }))
     const response = await remote.page({
       address: { kind: 'session', sessionId }, throughSeq: 19, maxMessages: 2,
     }, new AbortController().signal)
     // The mismatched identity is a soft bail: the observation path answers.
     if (!response.ok) throw new Error('page failed')
-    expect(borrow).toHaveBeenCalled()
+    expect(inspect).toHaveBeenCalled()
     expect(response.value.records.length).toBeGreaterThan(0)
     await ctx.fiber.dispose()
   })
@@ -546,14 +547,14 @@ describe('indexed page fast path', () => {
   })
 
   it('falls back to the full observation when the backend cannot answer', async () => {
-    const { ctx, sessionId, borrow, readFrom, remote } = await mount(undefined)
+    const { ctx, sessionId, inspect, readFrom, remote } = await mount(undefined)
     const response = await remote.page({
       address: { kind: 'session', sessionId },
       throughSeq: 19,
       maxMessages: 2,
     })
     if (!response.ok) throw new Error('page failed')
-    expect(borrow).toHaveBeenCalled()
+    expect(inspect).toHaveBeenCalled()
     expect(readFrom).not.toHaveBeenCalled()
     expect(response.value.records.length).toBeGreaterThan(0)
     await ctx.fiber.dispose()
