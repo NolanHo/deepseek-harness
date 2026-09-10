@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
+import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useEffect } from 'react'
 import type {
   AssistantMessageNode, ChatNode, ChatNodeOwnerProps, ChatNodeViewProps, ChatSnapshot,
   ChatViewSlotProps, CommandNode, CompactionSummaryNode, ContextMessageNode, ConversationNode,
-  LegacyConversationSlice, ModelRetryNode, RunningToolCall, SelectionTarget, SteeringMessageNode,
+  LegacyConversationSlice, ModelRetryNode, RunningToolCall, SteeringMessageNode,
   ToolCallBlock, ToolResultNode, TurnErrorNode, TurnMaxTokensNode, UseChatNodeTurnData,
   TranscriptViewMode, UserMessageNode,
 } from '@deepseek-ai/dsh-client-ui-chat/client'
@@ -42,6 +43,9 @@ import { formatRunDuration } from '../src/client/chat/message-chrome.ts'
 import { ChatSnapshotBuilder } from '../src/client/conversation-nodes/chat-snapshot-builder.ts'
 import type { TurnProcessSpec } from '../src/client/contract/turn-process.ts'
 import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
+
+// Every session-scope fixture carries the resource hook the resources plugin merges into GlobalStandardProps.
+const useResource = (() => ({ status: 'none' as const, value: undefined, failure: undefined })) as GlobalStandardProps['useResource']
 
 afterEach(() => {
   cleanup()
@@ -245,7 +249,6 @@ function makeHarness(
   const useChatNodeProcess = bindKeyedSnapshotSelector(
     key => chatSource.source.getSnapshot().nodes.processSource(key),
   )
-  const openDetails = vi.fn<(t: SelectionTarget) => void>()
   const openFile = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined)
   const loadOlder = vi.fn()
   const loadThrough = vi.fn<(seq: number) => Promise<void>>().mockResolvedValue(undefined)
@@ -267,7 +270,6 @@ function makeHarness(
     callId: string
     toolName: string
     block: ToolCallBlock
-    selectedCallId: string | undefined
     openFile: ChatNodeOwnerProps['openFile']
     inspectCall: ChatNodeOwnerProps['inspectCall']
   }> = []
@@ -339,7 +341,6 @@ function makeHarness(
           callId: block.callId,
           toolName,
           block,
-          selectedCallId: nodeOwner.selectedCallId,
           openFile: nodeOwner.openFile,
           inspectCall: nodeOwner.inspectCall,
         }
@@ -363,6 +364,7 @@ function makeHarness(
   // ChatView never invokes it (pass-through stub).
   const SessionProviderStub: ChatViewSlotProps['SessionProvider'] = ({ children }) => <>{children}</>
   const props: ChatViewSlotProps = {
+    usePanelInfo: selector => selector({ activePanelId: null }),
     sessionId: SID,
     useSession: bindSnapshotSelector(session.source),
     useChat: bindSnapshotSelector(chatSource.source),
@@ -371,6 +373,7 @@ function makeHarness(
     useConversation: bindSnapshotSelector(createSnapshotStore(EMPTY_CONVERSATION_SNAPSHOT)),
     useTrajectory: (() => { throw new Error('unused') }),
     useSessions: emptySessions(),
+    useResource,
     useSessionPendingInteraction: bindSnapshotSelector(
       createSnapshotStore<SessionPendingInteractionSnapshot>(new Map()),
     ),
@@ -379,9 +382,10 @@ function makeHarness(
     useInput: (() => { throw new Error('unused') }),
     inputActions: {
       setDraft: () => {},
-      addImages: () => true,
-      removeImage: () => {},
-      pruneImages: () => {},
+      addAttachments: () => true,
+      removeAttachment: () => {},
+      pruneAttachments: () => {},
+      submit: () => {},
     },
     useStore: bindSnapshotSelector(chat),
     actions: chat.actions,
@@ -391,7 +395,6 @@ function makeHarness(
     viewRequest: null,
     openView,
     completeViewRequest: () => {},
-    openDetails,
     openFile,
     loadOlder,
     loadThrough,
@@ -420,12 +423,11 @@ function makeHarness(
     }
     session.set(sessionUpdate)
   }
-  const setSelection = (next: SelectionTarget | null): void => { chat.actions.select(next) }
   return {
     set, setSession: session.set, setChat: chatSource.set, ChatView, props,
-    openDetails, openFile, loadOlder, loadThrough, openView,
+    openFile, loadOlder, loadThrough, openView,
     setOutline: (value: unknown) => { outlineValue = value },
-    chatScroll, forkAt, setSelection, toolOwners,
+    chatScroll, forkAt, toolOwners,
     setTranscriptView: (mode: TranscriptViewMode) => { transcriptView.set(mode) },
     setNodeRenderer: (renderer: React.ComponentProps<typeof ChatNodeSeat>['renderSlot']) => {
       nodeSlotOverride = renderer
@@ -433,11 +435,9 @@ function makeHarness(
   }
 }
 
-/** Simulate reader input (any device): a trusted input marker followed by a
- * delivered position that deviates from the observed-top ledger of
- * programmatic writes. */
+/** Simulate reader input (any device): a delivered position that deviates
+ * from the observed-top ledger of programmatic writes. */
 function readerScroll(element: HTMLElement, top: number): void {
-  fireEvent.wheel(element)
   element.scrollTop = top
   fireEvent.scroll(element)
   fireEvent(element, new Event('scrollend'))
@@ -565,7 +565,7 @@ describe('ChatView', () => {
     const afterMount = railRenders
     expect(afterMount).toBeGreaterThan(0)
 
-    act(() => { h.setSelection({ turnSeq: 3, callId: 'a', toolName: 'bash' }) })
+    act(() => { h.setTranscriptView('compact') })
 
     expect(railRenders).toBe(afterMount)
   })
@@ -1042,7 +1042,7 @@ describe('ChatView', () => {
         pendingSubmissions: [
           {
             requestId: 'req-1' as never, placement: 'transcript',
-            time: 5_000, text: '即发即显', images: [],
+            time: 5_000, text: '即发即显', attachments: [],
           },
         ],
       },
@@ -1082,7 +1082,9 @@ describe('ChatView', () => {
           placement: 'steering',
           time: 5_500,
           text: '带图纠偏',
-          images: [{ previewUrl: 'blob:steer-preview', name: 'steer.png' }],
+          attachments: [{
+            type: 'image', value: { previewUrl: 'blob:steer-preview', name: 'steer.png' },
+          }],
         }],
       },
     )
@@ -1116,7 +1118,7 @@ describe('ChatView', () => {
         pendingSubmissions: [
           {
             requestId: 'req-q' as never, placement: 'queued',
-            time: 6_000, text: '排队中', images: [],
+            time: 6_000, text: '排队中', attachments: [],
           },
         ],
       },
@@ -1150,9 +1152,11 @@ describe('ChatView', () => {
           placement: 'transcript',
           time: 7_000,
           text: '',
-          images: [
-            { previewUrl: 'blob:echo-a', name: 'a.png', width: 4, height: 3 },
-            { previewUrl: 'blob:echo-b' },
+          attachments: [
+            {
+              type: 'image', value: { previewUrl: 'blob:echo-a', name: 'a.png', width: 4, height: 3 },
+            },
+            { type: 'image', value: { previewUrl: 'blob:echo-b' } },
           ],
         }],
       },
@@ -1160,15 +1164,72 @@ describe('ChatView', () => {
     const baseRenderSlot = h.props.renderSlot
     const renderSlot = ((key: string, owner: object, opts?: { fallback?: React.ReactNode }) => {
       if (key !== 'conversation.message.images') return baseRenderSlot(key as never, owner as never, opts as never)
-      const images = (owner as { images: readonly unknown[] }).images
-      return <div data-testid="echo-images" data-count={images.length} data-first={JSON.stringify(images[0])} />
+      const { images, compact } = owner as { images: readonly unknown[]; compact?: boolean }
+      return (
+        <div
+          data-testid="echo-image"
+          data-count={images.length}
+          data-compact={String(compact)}
+          data-first={JSON.stringify(images[0])}
+        />
+      )
     }) as unknown as ChatViewSlotProps['renderSlot']
     const view = render(<h.ChatView {...{ ...h.props, renderSlot }} />)
-    const gallery = view.getByTestId('echo-images')
-    expect(gallery.getAttribute('data-count')).toBe('2')
-    expect(JSON.parse(gallery.getAttribute('data-first') ?? '{}')).toEqual({
+    const images = view.getAllByTestId('echo-image')
+    expect(images).toHaveLength(2)
+    expect(images.every(image => image.getAttribute('data-count') === '1')).toBe(true)
+    expect(images.every(image => image.getAttribute('data-compact') === 'true')).toBe(true)
+    expect(images[0]?.parentElement).toBe(images[1]?.parentElement)
+    expect(JSON.parse(images[0]?.getAttribute('data-first') ?? '{}')).toEqual({
       preview: { url: 'blob:echo-a', name: 'a.png', width: 4, height: 3 },
     })
+  })
+
+  it('a mixed echo renders the Web file card between its selected images', () => {
+    const h = makeHarness(
+      { nodes: [] },
+      {
+        pendingSubmissions: [{
+          requestId: 'req-mixed' as never,
+          placement: 'transcript',
+          time: 7_500,
+          text: '',
+          attachments: [
+            { type: 'image', value: { previewUrl: 'blob:first', name: 'first.png' } },
+            {
+              type: 'file',
+              value: { attachmentId: 'file-1' as never, name: 'notes.txt', bytes: 23 },
+            },
+            { type: 'image', value: { previewUrl: 'blob:last', name: 'last.png' } },
+          ],
+        }],
+      },
+    )
+    const baseRenderSlot = h.props.renderSlot
+    const renderSlot = ((key: string, owner: object, opts?: { fallback?: React.ReactNode }) => {
+      if (key !== 'conversation.message.images') return baseRenderSlot(key as never, owner as never, opts as never)
+      const { images, compact } = owner as {
+        images: ReadonlyArray<{ preview?: { name?: string } }>
+        compact?: boolean
+      }
+      return (
+        <div
+          data-testid={`images-${images[0]?.preview?.name ?? 'unknown'}`}
+          data-compact={String(compact)}
+        />
+      )
+    }) as unknown as ChatViewSlotProps['renderSlot']
+    const view = render(<h.ChatView {...{ ...h.props, renderSlot }} />)
+    const first = view.getByTestId('images-first.png')
+    const file = view.getByTitle('notes.txt')
+    const last = view.getByTestId('images-last.png')
+    expect(first.getAttribute('data-compact')).toBe('true')
+    expect(last.getAttribute('data-compact')).toBe('true')
+    expect(first.parentElement).toBe(file.parentElement)
+    expect(file.parentElement).toBe(last.parentElement)
+    expect(first.compareDocumentPosition(file) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(file.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(view.getByText('TXT 23B')).toBeTruthy()
   })
 
   it('animates only the latest unresolved model retry', () => {
@@ -1285,7 +1346,7 @@ describe('ChatView', () => {
       turnEnds: new Map([[1, 6]]),
     })
     const view = render(<h.ChatView {...h.props} />)
-    const toggle = view.getByRole('button', { name: '已折叠 1 次工具调用 · 1 条消息 · 1 个 subagent · 4秒' })
+    const toggle = view.getByRole('button', { name: '1 次工具调用 · 1 条消息 · 1 个 subagent' })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(toggle.getAttribute('data-turn-process-tool-calls')).toBe('1')
     expect(toggle.getAttribute('data-turn-process-messages')).toBe('1')
@@ -1311,12 +1372,12 @@ describe('ChatView', () => {
     expect(members.map(member => member.getAttribute('hidden'))).toEqual([null, null, null])
 
     act(() => { h.set({ nodes: [user(1, 'question'), first] }) })
-    expect(view.getByRole('button', { name: '已思考 · 4秒' }).getAttribute('aria-expanded')).toBe('false')
+    expect(view.getByRole('button', { name: '已思考' }).getAttribute('aria-expanded')).toBe('false')
     expect(members[0]?.getAttribute('hidden')).toBeNull()
     act(() => { h.set({
       nodes: [user(1, 'question'), first, toolResult(3, 'a'), toolResult(4, 'b', 'subagent'), second],
     }) })
-    const renewedToggle = view.getByRole('button', { name: '已折叠 1 次工具调用 · 1 条消息 · 1 个 subagent · 4秒' })
+    const renewedToggle = view.getByRole('button', { name: '1 次工具调用 · 1 条消息 · 1 个 subagent' })
     expect(renewedToggle.getAttribute('aria-expanded')).toBe('true')
     expect(members[0]?.getAttribute('hidden')).toBeNull()
   })
@@ -1602,7 +1663,7 @@ describe('ChatView', () => {
     expect(contextRow?.getAttribute('hidden')).toBe('until-found')
   })
 
-  it('folds a closed Turn even while history is partial', () => {
+  it('keeps a foldable closed Turn fully visible while history is partial', () => {
     const h = makeHarness({
       nodes: [
         user(1, 'question'),
@@ -1616,19 +1677,17 @@ describe('ChatView', () => {
     const view = render(<h.ChatView {...h.props} />)
     const contextRow = view.container.querySelector<HTMLElement>('[data-chat-flow-kind="context"]')
 
-    // Partial history no longer withholds the fold: the closed turn folds by
-    // default, hiding its intermediate members behind the disclosure control.
+    expect(turnProcessControl(view.container)).toBeNull()
+    expect(contextRow?.getAttribute('hidden')).toBeNull()
+    expect(contextRow?.hasAttribute('data-turn-process-member')).toBe(false)
+
+    act(() => { h.set({ hasMore: false }) })
     const toggle = turnProcessControl(view.container)!
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(contextRow?.getAttribute('hidden')).toBe('until-found')
-    expect(contextRow?.hasAttribute('data-turn-process-member')).toBe(true)
-
-    act(() => { h.set({ hasMore: false }) })
-    expect(turnProcessControl(view.container)?.getAttribute('aria-expanded')).toBe('false')
-    expect(contextRow?.getAttribute('hidden')).toBe('until-found')
   })
 
-  it('folds final-page groups while history is partial', () => {
+  it('withholds process controls for partial history and folds final-page groups', () => {
     const h = makeHarness({
       nodes: [user(9, 'visible question'), assistant(10, 'visible answer', 2)],
       hasMore: true,
@@ -1657,12 +1716,6 @@ describe('ChatView', () => {
 
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(member?.getAttribute('hidden')).toBeNull()
-
-    // Loading an older page (hasMore flips) keeps the fold: the disclosure
-    // survives with the members' expanded state intact.
-    act(() => { h.set({ hasMore: true }) })
-    expect(turnProcessControl(view.container)).not.toBeNull()
     expect(member?.getAttribute('hidden')).toBeNull()
   })
 
@@ -2031,14 +2084,6 @@ describe('ChatView', () => {
     expect(rowRenders).toBe(afterMount)
   })
 
-  it('updates the selected call id handed to the Tool seat', () => {
-    const h = makeHarness({ nodes: [toolResult(3, 'a')] })
-    render(<h.ChatView {...h.props} />)
-    expect(h.toolOwners.at(-1)?.selectedCallId).toBeUndefined()
-    act(() => { h.setSelection({ turnSeq: 3, callId: 'a', toolName: 'bash' }) })
-    expect(h.toolOwners.at(-1)?.selectedCallId).toBe('a')
-  })
-
   it('hands running calls to a live Tool group', () => {
     const h = makeHarness({ runningCalls: [runningCall('r1')] }, { running: true })
     const view = render(<h.ChatView {...h.props} />)
@@ -2131,7 +2176,7 @@ describe('ChatView', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
       key: 'conversation.chat.node',
-      owner: { node: { kind: 'tool-call' }, selectedCallId: undefined },
+      owner: { node: { kind: 'tool-call' } },
       entryKey: 'tool-call',
     })
     const owner = calls[0]?.owner as RoutedChatNodeOwner
@@ -2188,18 +2233,6 @@ describe('ChatView', () => {
     await act(async () => { h.toolOwners[0]!.openFile('empty.ts') })
     await waitFor(() => {
       expect(screen.getByRole('dialog', { name: '无法打开文件' }).textContent).toContain('无法打开此文件')
-    })
-  })
-
-  it('names a workspace-folder Host refusal as a folder', async () => {
-    const openFile = vi.fn<(path: string) => Promise<void>>()
-      .mockRejectedValueOnce(new Error(''))
-    const h = makeHarness({ nodes: [toolResult(3, 'a')] })
-    h.props.openFile = openFile
-    render(<h.ChatView {...h.props} />)
-    await act(async () => { h.toolOwners[0]!.openFile('.') })
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: '无法打开文件夹' }).textContent).toContain('无法打开此文件夹')
     })
   })
 
@@ -2317,7 +2350,6 @@ describe('ChatView', () => {
     const view = render(<h.ChatView {...h.props} />)
     const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
     const metrics = installScrollMetrics(scroller, 1_000, 300)
-    fireEvent.wheel(scroller)
     scroller.scrollTop = 700
     fireEvent.scroll(scroller)
 
@@ -2336,12 +2368,167 @@ describe('ChatView', () => {
     expect(scroller.scrollTop).toBe(900)
   })
 
+  it('keeps following when a shrink clamp regrows before scrollend', () => {
+    const h = makeHarness({ nodes: [user(1, 'q'), assistant(2, 'a')] })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
+    const metrics = installScrollMetrics(scroller, 1_000, 300)
+    scroller.scrollTop = 700
+    fireEvent.scroll(scroller)
+    fireEvent(scroller, new Event('scrollend'))
+
+    metrics.setLayout(800, 700)
+    fireEvent.scroll(scroller)
+    metrics.setHeight(962)
+    act(() => { h.setSession({ running: true }) })
+    fireEvent(scroller, new Event('scrollend'))
+
+    expect(scroller.scrollTop).toBe(662)
+    expect(view.queryByLabelText('回到底部')).toBeNull()
+    expect(h.chatScroll.read()).toBeNull()
+  })
+
+  it('settles pinned deliveries before observer growth without reading row geometry', () => {
+    let notify: (() => void) | undefined
+    class ResizeObserverStub {
+      constructor(callback: ResizeObserverCallback) {
+        notify = () => { callback([], this as unknown as ResizeObserver) }
+      }
+
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const h = makeHarness({ nodes: [user(1, 'q'), assistant(2, 'a')] })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
+    const metrics = installScrollMetrics(scroller, 9_931, 300)
+    expect(notify).toBeDefined()
+    scroller.scrollTop = 9_631
+    fireEvent.scroll(scroller)
+    fireEvent(scroller, new Event('scrollend'))
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    rect.mockClear()
+    try {
+      metrics.setLayout(9_918, 9_631)
+      fireEvent.scroll(scroller)
+      metrics.setHeight(10_013)
+      act(() => { notify?.() })
+      expect(scroller.scrollTop).toBe(9_713)
+      fireEvent.scroll(scroller)
+      metrics.setHeight(10_093)
+      act(() => { notify?.() })
+      expect(scroller.scrollTop).toBe(9_793)
+      expect(rect).not.toHaveBeenCalled()
+      expect(h.chatScroll.read()).toBeNull()
+    } finally {
+      rect.mockRestore()
+    }
+  })
+
+  it('lets small reader movements accumulate past the follow threshold during growth', () => {
+    let notify: (() => void) | undefined
+    class ResizeObserverStub {
+      constructor(callback: ResizeObserverCallback) {
+        notify = () => { callback([], this as unknown as ResizeObserver) }
+      }
+
+      observe = vi.fn()
+      disconnect = vi.fn()
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const h = makeHarness({ nodes: [user(1, 'q'), assistant(2, 'a')] })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
+    const metrics = installScrollMetrics(scroller, 1_000, 300)
+    expect(notify).toBeDefined()
+    scroller.scrollTop = 700
+    fireEvent.scroll(scroller)
+    fireEvent(scroller, new Event('scrollend'))
+    scroller.scrollTop = 690
+    fireEvent.scroll(scroller)
+    metrics.setHeight(1_020)
+    act(() => { notify?.() })
+    expect(scroller.scrollTop).toBe(690)
+    scroller.scrollTop = 680
+    fireEvent.scroll(scroller)
+    fireEvent(scroller, new Event('scrollend'))
+    expect(view.getByLabelText('回到底部')).toBeTruthy()
+    metrics.setHeight(1_040)
+    act(() => { notify?.() })
+    expect(scroller.scrollTop).toBe(680)
+  })
+
+  it('clears an away sample when a back-to-bottom delivery restores pinned ownership', () => {
+    const h = makeHarness({ nodes: [user(1, 'q'), assistant(2, 'a')] })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
+    const metrics = installScrollMetrics(scroller, 1_000, 300)
+    scroller.scrollTop = 700
+    fireEvent.scroll(scroller)
+    scroller.scrollTop = 500
+    fireEvent.scroll(scroller)
+    fireEvent(scroller, new Event('scrollend'))
+    scroller.scrollTop = 400
+    fireEvent.scroll(scroller)
+    fireEvent.click(view.getByLabelText('回到底部'))
+    fireEvent.scroll(scroller)
+    metrics.setHeight(1_200)
+    act(() => { h.setSession({ running: true }) })
+    expect(scroller.scrollTop).toBe(900)
+    expect(h.chatScroll.read()).toBeNull()
+  })
+
+  it('samples away-reader geometry on the interval or scrollend and cancels it on unmount', () => {
+    vi.useFakeTimers()
+    try {
+      const h = makeHarness({ nodes: [user(1, 'q'), assistant(2, 'a')] })
+      const view = render(<h.ChatView {...h.props} />)
+      const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
+      installScrollMetrics(scroller, 1_000, 300)
+      scroller.scrollTop = 700
+      fireEvent.scroll(scroller)
+      scroller.scrollTop = 500
+      fireEvent.scroll(scroller)
+      fireEvent(scroller, new Event('scrollend'))
+      expect(view.getByLabelText('回到底部')).toBeTruthy()
+      const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      try {
+        act(() => { vi.advanceTimersByTime(500) })
+        rect.mockClear()
+        scroller.scrollTop = 400
+        fireEvent.scroll(scroller)
+        scroller.scrollTop = 300
+        fireEvent.scroll(scroller)
+        act(() => { vi.advanceTimersByTime(499) })
+        expect(rect).not.toHaveBeenCalled()
+        act(() => { vi.advanceTimersByTime(1) })
+        expect(rect).toHaveBeenCalled()
+        rect.mockClear()
+        scroller.scrollTop = 200
+        fireEvent.scroll(scroller)
+        expect(rect).not.toHaveBeenCalled()
+        fireEvent(scroller, new Event('scrollend'))
+        expect(rect).toHaveBeenCalled()
+        scroller.scrollTop = 100
+        fireEvent.scroll(scroller)
+        view.unmount()
+        rect.mockClear()
+        act(() => { vi.advanceTimersByTime(500) })
+        expect(rect).not.toHaveBeenCalled()
+      } finally {
+        rect.mockRestore()
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('uses the last delivered top when compositor scrolling precedes scroll delivery', () => {
     const h = makeHarness({ nodes: [user(1, 'q'), assistant(2, 'a')] })
     const view = render(<h.ChatView {...h.props} />)
     const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
     installScrollMetrics(scroller, 1_000, 300)
-    fireEvent.wheel(scroller)
     scroller.scrollTop = 700
     fireEvent.scroll(scroller)
 
@@ -2371,7 +2558,6 @@ describe('ChatView', () => {
     const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
     Object.defineProperty(scroller, 'scrollHeight', { value: 1_000, writable: true })
     Object.defineProperty(scroller, 'clientHeight', { value: 300, writable: true })
-    fireEvent.wheel(scroller)
     scroller.scrollTop = 700
     fireEvent.scroll(scroller)
     fireEvent(scroller, new Event('scrollend'))
@@ -2681,260 +2867,5 @@ describe('ChatView', () => {
     const failedView = render(<failed.ChatView {...failed.props} />)
     expect(failedView.getByText('Compaction cancelled.')).toBeTruthy()
     expect(failedView.container.querySelector('[data-state="error"]')).not.toBeNull()
-  })
-
-  it('captures the paging anchor on a plain reader scroll so a later fold above the reading line is compensated', () => {
-    let notify: (() => void) | undefined
-    class ResizeObserverStub {
-      constructor(callback: ResizeObserverCallback) {
-        notify = () => { callback([], this as unknown as ResizeObserver) }
-      }
-
-      observe = vi.fn()
-      disconnect = vi.fn()
-    }
-    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
-    const h = makeHarness({
-      nodes: [
-        userInTurn(1, 'question', 1),
-        context(2, 'policy', 1),
-        assistant(3, 'first answer', 1),
-        userInTurn(5, 'later question', 2),
-        assistant(6, 'later answer', 2),
-      ],
-    })
-    const view = render(<h.ChatView {...h.props} />)
-    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
-    installScrollMetrics(scroller, 1_000, 300)
-    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 300 } as DOMRect)
-    const flow = new Map<string, number>([
-      ['fixture:user:1', 0],
-      ['fixture:context:2', 40],
-      ['fixture:assistant:3', 80],
-      ['fixture:user:5', 120],
-      ['fixture:assistant:6', 160],
-    ])
-    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
-      .mockImplementation(function (this: HTMLElement) {
-        const top = this.dataset.chatFlowKey === undefined
-          ? undefined
-          : flow.get(this.dataset.chatFlowKey)
-        if (top === undefined) return { top: 0, bottom: 0 } as DOMRect
-        return { top: top - scroller.scrollTop, bottom: top - scroller.scrollTop + 40 } as DOMRect
-      })
-    try {
-      // The reader scrolls away from the pinned tail with no jump and no
-      // load-earlier arm: only this scroll can hold a paging anchor, and it
-      // lands on turn 2's first row (user 5), just below turn 1's process.
-      readerScroll(scroller, 120)
-      // Turn 1 completes and folds its process row above the reading line,
-      // shrinking the flow above the anchored row by the mocked 60px.
-      flow.set('fixture:assistant:3', 20)
-      flow.set('fixture:user:5', 60)
-      flow.set('fixture:assistant:6', 100)
-      act(() => { h.set({ turnEnds: new Map([[1, 4]]) }) })
-      act(() => { notify?.() })
-      expect(scroller.scrollTop).toBe(60)
-    } finally {
-      rect.mockRestore()
-    }
-  })
-
-  it('keeps the anchor held after a load-earlier prepend compensation so a later fold is compensated', () => {
-    let notify: (() => void) | undefined
-    class ResizeObserverStub {
-      constructor(callback: ResizeObserverCallback) {
-        notify = () => { callback([], this as unknown as ResizeObserver) }
-      }
-
-      observe = vi.fn()
-      disconnect = vi.fn()
-    }
-    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
-    const turns = [
-      userInTurn(1, 'question', 1),
-      context(2, 'policy', 1),
-      assistant(3, 'first answer', 1),
-      userInTurn(5, 'later question', 2),
-      assistant(6, 'later answer', 2),
-    ]
-    const h = makeHarness({ nodes: turns }, { hasMore: true })
-    const view = render(<h.ChatView {...h.props} />)
-    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
-    const metrics = installScrollMetrics(scroller, 800, 200)
-    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 200 } as DOMRect)
-    const flow = new Map<string, number>([
-      ['fixture:user:1', 0],
-      ['fixture:context:2', 40],
-      ['fixture:assistant:3', 80],
-      ['fixture:user:5', 120],
-      ['fixture:assistant:6', 160],
-    ])
-    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
-      .mockImplementation(function (this: HTMLElement) {
-        const top = this.dataset.chatFlowKey === undefined
-          ? undefined
-          : flow.get(this.dataset.chatFlowKey)
-        if (top === undefined) return { top: 0, bottom: 0 } as DOMRect
-        return { top: top - scroller.scrollTop, bottom: top - scroller.scrollTop + 40 } as DOMRect
-      })
-    try {
-      readerScroll(scroller, 50)
-      fireEvent.click(view.getByText('加载更早'))
-      readerScroll(scroller, 90)
-      // An older page arrives: the head row drops below seq 1 and the mocked
-      // rows shift down by 500px, exactly like the prepend test above.
-      metrics.setHeight(1_300)
-      flow.set('fixture:user:0', 0)
-      for (const [key, top] of [...flow]) {
-        if (key !== 'fixture:user:0') flow.set(key, top + 500)
-      }
-      act(() => {
-        h.setChat({ nodes: [user(0, 'older page question'), ...turns] })
-      })
-      expect(scroller.scrollTop).toBe(590) // reader offset 90 + the anchored row's 500px prepend shift
-      // A turn above the reader completes and folds after the prepend settled:
-      // the anchor that owned the prepend must still own this reflow.
-      flow.set('fixture:assistant:3', 430)
-      flow.set('fixture:user:5', 470)
-      flow.set('fixture:assistant:6', 510)
-      act(() => { h.set({ turnEnds: new Map([[1, 4]]) }) })
-      act(() => { notify?.() })
-      expect(scroller.scrollTop).toBe(440) // the fold above the anchored row shifts it by another 150px
-    } finally {
-      rect.mockRestore()
-    }
-  })
-
-  it('captures the anchor when a saved reader position is restored so a fold after remount is compensated', () => {
-    let notify: (() => void) | undefined
-    class ResizeObserverStub {
-      constructor(callback: ResizeObserverCallback) {
-        notify = () => { callback([], this as unknown as ResizeObserver) }
-      }
-
-      observe = vi.fn()
-      disconnect = vi.fn()
-    }
-    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
-    const host = document.createElement('div')
-    host.setAttribute('data-conversation-scroll', '')
-    Object.defineProperty(host, 'scrollHeight', { value: 2_000, writable: true, configurable: true })
-    Object.defineProperty(host, 'clientHeight', { value: 300, writable: true, configurable: true })
-    Object.defineProperty(host, 'scrollTop', { value: 0, writable: true, configurable: true })
-    document.body.appendChild(host)
-    vi.spyOn(host, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 300 } as DOMRect)
-    // The mocked layout places turn 2's opening row at flow offset 1700, so
-    // at scrollTop 1200 it sits 500px down the restored viewport.
-    const flow = new Map<string, number>([
-      ['fixture:user:1', 0],
-      ['fixture:context:2', 40],
-      ['fixture:assistant:3', 80],
-      ['fixture:user:5', 1_700],
-      ['fixture:assistant:6', 1_740],
-    ])
-    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
-      .mockImplementation(function (this: HTMLElement) {
-        const top = this.dataset.chatFlowKey === undefined
-          ? undefined
-          : flow.get(this.dataset.chatFlowKey)
-        if (top === undefined) return { top: 0, bottom: 0 } as DOMRect
-        return { top: top - host.scrollTop, bottom: top - host.scrollTop + 40 } as DOMRect
-      })
-    try {
-      const h = makeHarness({
-        nodes: [
-          userInTurn(1, 'question', 1),
-          context(2, 'policy', 1),
-          assistant(3, 'first answer', 1),
-          userInTurn(5, 'later question', 2),
-          assistant(6, 'later answer', 2),
-        ],
-      })
-      // The previous mount saved the reader's place at user 5's row, away
-      // from the tail; the restore path re-establishes that scroll position.
-      h.chatScroll.save({ anchorKey: 'fixture:user:5', anchorTop: 500, scrollTop: 1_200 })
-      render(<h.ChatView {...h.props} />, { container: host })
-      expect(host.scrollTop).toBe(1_200)
-      // Turn 1 completes and folds above the restored row after the open.
-      flow.set('fixture:user:5', 1_550)
-      flow.set('fixture:assistant:6', 1_590)
-      act(() => { h.set({ turnEnds: new Map([[1, 4]]) }) })
-      act(() => { notify?.() })
-      expect(host.scrollTop).toBe(1_050) // the 150px fold above the restored row is compensated
-    } finally {
-      rect.mockRestore()
-      host.remove()
-    }
-  })
-
-  it('keeps the anchor through load-earlier settlement so a fold after the busy state clears is compensated', () => {
-    let notify: (() => void) | undefined
-    class ResizeObserverStub {
-      constructor(callback: ResizeObserverCallback) {
-        notify = () => { callback([], this as unknown as ResizeObserver) }
-      }
-
-      observe = vi.fn()
-      disconnect = vi.fn()
-    }
-    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
-    const turns = [
-      userInTurn(1, 'question', 1),
-      context(2, 'policy', 1),
-      assistant(3, 'first answer', 1),
-      userInTurn(5, 'later question', 2),
-      assistant(6, 'later answer', 2),
-    ]
-    const h = makeHarness({ nodes: turns }, { hasMore: true })
-    const view = render(<h.ChatView {...h.props} />)
-    const scroller = view.container.querySelector('[class*="scroll"]') as HTMLDivElement
-    const metrics = installScrollMetrics(scroller, 800, 200)
-    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 200 } as DOMRect)
-    const flow = new Map<string, number>([
-      ['fixture:user:1', 0],
-      ['fixture:context:2', 40],
-      ['fixture:assistant:3', 80],
-      ['fixture:user:5', 120],
-      ['fixture:assistant:6', 160],
-    ])
-    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
-      .mockImplementation(function (this: HTMLElement) {
-        const top = this.dataset.chatFlowKey === undefined
-          ? undefined
-          : flow.get(this.dataset.chatFlowKey)
-        if (top === undefined) return { top: 0, bottom: 0 } as DOMRect
-        return { top: top - scroller.scrollTop, bottom: top - scroller.scrollTop + 40 } as DOMRect
-      })
-    try {
-      readerScroll(scroller, 50)
-      fireEvent.click(view.getByText('加载更早'))
-      readerScroll(scroller, 90)
-      // An older page arrives: the head row drops below seq 1 and the mocked
-      // rows shift down by 500px, exactly like the prepend test above.
-      metrics.setHeight(1_300)
-      flow.set('fixture:user:0', 0)
-      for (const [key, top] of [...flow]) {
-        if (key !== 'fixture:user:0') flow.set(key, top + 500)
-      }
-      act(() => {
-        h.setChat({ nodes: [user(0, 'older page question'), ...turns] })
-      })
-      expect(scroller.scrollTop).toBe(590) // reader offset 90 + the anchored row's 500px prepend shift
-      // The pull settles: the busy flip runs the settlement effect that, on
-      // the unfixed src, clears the anchor that owns the prepend.
-      act(() => { h.setSession({ loadingOlder: true }) })
-      act(() => { h.setSession({ loadingOlder: false }) })
-      // A turn above the reader completes and folds after settlement: the
-      // anchor that owned the prepend must still own this reflow.
-      flow.set('fixture:assistant:3', 430)
-      flow.set('fixture:user:5', 470)
-      flow.set('fixture:assistant:6', 510)
-      act(() => { h.set({ turnEnds: new Map([[1, 4]]) }) })
-      act(() => { notify?.() })
-      expect(scroller.scrollTop).toBe(440) // the fold above the anchored row shifts it by another 150px
-    } finally {
-      rect.mockRestore()
-    }
   })
 })

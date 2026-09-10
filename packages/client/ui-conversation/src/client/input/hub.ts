@@ -15,8 +15,8 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
 import { queueReadFaceOf } from './queue-store.ts'
 import type {
-  ComposerKeyboard, DraftAttachmentId, InputTriggerController, SessionInputResolver, SessionInput,
-  SubmitImageAttachment, SubmitOutcome,
+  ComposerKeyboard, DraftAttachmentId, DraftAttachmentSerializationResult, InputTriggerController,
+  SessionInputResolver, SessionInput, SubmitOutcome,
 } from '../contract/input.ts'
 import type { InputSubmitMode } from '../contract/composer-submission.ts'
 import type { PopupDismissFace } from './facade.ts'
@@ -38,12 +38,12 @@ interface ConversationAttachmentFace {
   sendSession(
     session: SessionFace,
     text: string,
-    imageIds: readonly DraftAttachmentId[],
+    attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal?: AbortSignal,
   ): Promise<SubmitOutcome>
-  serializeDraftImages(imageIds: readonly DraftAttachmentId[]): Promise<readonly SubmitImageAttachment[]>
-  releaseDraftImage(id: DraftAttachmentId): void
+  serializeDraftAttachments(attachmentIds: readonly DraftAttachmentId[]): Promise<DraftAttachmentSerializationResult>
+  releaseDraftAttachment(id: DraftAttachmentId): void
 }
 
 /** Session-addressed input facade registry (SessionInputResolver face + composer-layer extras). */
@@ -88,18 +88,22 @@ export class InputHub implements SessionInputResolver {
       inputTriggers: () => this.controller(actx),
       popup: () => this.popup(actx),
       queue: queueReadFaceOf(session),
-      defaultSink: (text, imageIds, mode, signal) => this.sink(session, text, imageIds, mode, signal),
-      commandImages: {
-        serialize: ids => this.conversation().serializeDraftImages(ids),
+      defaultSink: (text, attachmentIds, mode, signal) => this.sink(session, text, attachmentIds, mode, signal),
+      steerQueue: () => { void this.steerQueue(session, shell) },
+      commandAttachments: {
+        serialize: async (ids) => {
+          const result = await this.conversation().serializeDraftAttachments(ids)
+          return result.attachments
+        },
         // Asymmetric with serialize on purpose: release settles AFTER the
         // submit RPC, where session teardown may already have unloaded the
         // conversation service (the same tolerance as the scope disposer
         // above); leaked preview URLs then die with the document.
         release: (ids) => {
           const conversation = this.rootCtx.get('conversation') as ConversationAttachmentFace | undefined
-          for (const imageId of ids) conversation?.releaseDraftImage(imageId)
+          for (const attachmentId of ids) conversation?.releaseDraftAttachment(attachmentId)
         },
-        unsupportedNotice: token => this.t('command.imagesUnsupported', {
+        unsupportedNotice: token => this.t('command.attachmentsUnsupported', {
           command: token.trim().replace(/^\//u, ''),
         }),
       },
@@ -123,7 +127,7 @@ export class InputHub implements SessionInputResolver {
         const drafts = shell.dispose()
         this.shells.delete(id)
         const conversation = this.rootCtx.get('conversation') as ConversationAttachmentFace | undefined
-        for (const imageId of drafts) conversation?.releaseDraftImage(imageId)
+        for (const attachmentId of drafts) conversation?.releaseDraftAttachment(attachmentId)
       }
     }, 'conversation.input: session shell')
     return shell
@@ -174,12 +178,36 @@ export class InputHub implements SessionInputResolver {
   private sink(
     session: SessionFace,
     text: string,
-    imageIds: readonly DraftAttachmentId[],
+    attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal: AbortSignal,
   ): Promise<SubmitOutcome> {
-    if (text === '' && imageIds.length === 0) return Promise.resolve({ kind: 'success' })
-    return this.conversation().sendSession(session, text, imageIds, mode, signal)
+    if (text === '' && attachmentIds.length === 0) return Promise.resolve({ kind: 'success' })
+    return this.conversation().sendSession(session, text, attachmentIds, mode, signal)
+  }
+
+  /**
+   * Submit every still-pending queued message through QueueDock Steer, in FIFO
+   * request order — the same operation as the queue dock's per-row button.
+   * An Agent stopping before a command (`session/steer-unavailable`) or a row already
+   * claimed by the agent (`session/queue-item-not-found`) converges silently, while a
+   * genuine failure surfaces as one composer notice. Repeated triggers
+   * (e.g. two rapid empty-draft chords) rely on that `session/queue-item-not-found`
+   * convergence: the snapshot may still list a row the host already steered,
+   * and the duplicate Steer is a silent no-op.
+   * @param session - the addressed host session.
+   * @param shell - the resident shell (notice outlet).
+   */
+  private async steerQueue(session: SessionFace, shell: SessionInputShell): Promise<void> {
+    const queued = session.getSnapshot().queue.filter(item => item.placement === 'queued')
+    if (queued.length === 0) return
+    for (const item of queued) {
+      const result = await session.updateQueue(item.id, { kind: 'steer' })
+      if (result.ok) continue
+      if (result.error.code === 'session/steer-unavailable' || result.error.code === 'session/queue-item-not-found') return
+      shell.notify('error', this.t('queue.steerFailed'))
+      return
+    }
   }
 
   private controller(actx: Context): InputTriggerController | undefined {

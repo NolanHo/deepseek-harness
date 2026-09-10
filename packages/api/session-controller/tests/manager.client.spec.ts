@@ -374,7 +374,12 @@ describe('subagent catalogs', () => {
         address: {
           kind: 'subagent', parentSessionId: S1, childSessionId: S2, mode: 'continuable',
         },
+<<<<<<< HEAD
         maxMessages: 8,
+=======
+        assistantStream: true,
+        maxMessages: 50,
+>>>>>>> dsh-v0.1.5-rc.2
       },
     ])
     expect(api.callsOf('subagent.history')).toEqual([])
@@ -383,6 +388,7 @@ describe('subagent catalogs', () => {
         requestId: expect.any(String) as unknown as string,
         parentSessionId: S1, childSessionId: S2,
         mode: 'continuable',
+        delivery: 'queue',
         content: [{ type: 'text', text: 'continue' }],
         clientTimeZone: new Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
