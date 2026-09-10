@@ -25,6 +25,7 @@ import type {
   UserMessage,
 } from '@deepseek-ai/dsh-session'
 import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
+import type { SkillFilter } from './types.ts'
 import {
   appendDelegatedPolicyOverrides,
   applyChildComposition,
@@ -103,7 +104,12 @@ export interface MaterializeInputs {
     descriptor: SubagentDescriptorData
   }
   agentOptions: AgentOptions
-  composition: { persona?: string | undefined; toolFilter?: ToolRestriction | undefined }
+  composition: {
+    persona?: string | undefined
+    toolFilter?: ToolRestriction | undefined
+    // Fork patch (FORK_SURFACE.md): per-child skill scoping rides composition.
+    skillFilter?: SkillFilter | undefined
+  }
   signal: AbortSignal
 }
 

@@ -8,6 +8,7 @@ import { AppFrame } from '../src/client/AppFrame.tsx'
 import type { AppFrameProps } from '../src/client/AppFrame.tsx'
 import type { MainPanelId, RightbarOwnerProps, SidebarOwnerProps } from '../src/client/index.ts'
 import { createLayoutStore } from '../src/client/stores.ts'
+import { DRAWER_WIDTH } from '../src/client/fork/mobile-shell.tsx'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 
@@ -275,7 +276,9 @@ describe('AppFrame normal width concessions', () => {
     expect(frame.querySelector('[data-side="rightbar"]')).toBeNull()
     expect(instance.getSnapshot().layoutInfo).toMatchObject({ rightbarShown: true, rightbar: 864 })
     act(() => { instance.actions.closeRightbar() })
-    resize(455)
+    // 768 is the phone breakpoint: below it the fork renders the drawer regime,
+    // so the narrow-desktop concessions are asserted at the narrowest desktop width.
+    resize(768)
     expect(tracks(frame)).toEqual([56, 0])
     resize(1920)
     expect(tracks(frame)).toEqual([420, 0])
@@ -416,13 +419,15 @@ describe('AppFrame right panel presentation', () => {
     expect(frame.dataset.rightbarFullscreen).toBeUndefined()
   })
 
-  it('retains fullscreen without a track when normal columns cannot fit', () => {
+  it('retains fullscreen without a track below the phone breakpoint', () => {
     frameWidth = 700
     const { frame, instance, rightOwner } = mountFrame()
     act(() => { instance.actions.openRightbar(false, true) })
-    expect(tracks(frame)).toEqual([56, 0])
+    // Below the breakpoint the fork renders one in-flow track and the occupant
+    // presents itself fullscreen (its own rule), so the frame reserves nothing.
+    expect(frame.style.gridTemplateColumns).toBe('minmax(0, 1fr)')
     expect(rightOwner()).toEqual({ width: 0, viewportWidth: 700, canShow: false })
-    expect(instance.getSnapshot().layoutInfo.rightbarShown).toBe(true)
+    expect(instance.getSnapshot().layoutInfo).toMatchObject({ mobile: true, rightbarShown: true })
     expect(frame.querySelector('[data-side="rightbar"]')).toBeNull()
   })
 
@@ -436,6 +441,84 @@ describe('AppFrame right panel presentation', () => {
     expect(instance.getSnapshot().layoutInfo.rightbar).toBe(410)
     expect(rightOwner().width).toBe(410)
     expect(tracks(frame)[1]).toBe(0)
+  })
+})
+
+describe('AppFrame mobile drawer regime', () => {
+  /** The drawer box wrapping the sidebar occupant's slot content. */
+  function drawer(frame: HTMLElement): HTMLElement {
+    const content = frame.querySelector<HTMLElement>('[data-testid="sidebar-content"]')
+    if (content?.parentElement == null) throw new Error('missing sidebar slot content')
+    return content.parentElement
+  }
+
+  function opener(frame: HTMLElement): HTMLButtonElement | null {
+    return frame.querySelector<HTMLButtonElement>('button[aria-label="sidebar.open"]')
+  }
+
+  it('renders the sidebar as a closed overlay drawer without a sidebar track', () => {
+    frameWidth = 700
+    const { frame, instance, sidebarOwner } = mountFrame()
+    expect(frame.style.gridTemplateColumns).toBe('minmax(0, 1fr)')
+    expect(drawer(frame).dataset.open).toBeUndefined()
+    expect(opener(frame)).not.toBeNull()
+    expect(sidebarOwner()).toEqual({ collapsed: false, width: DRAWER_WIDTH })
+    expect(instance.getSnapshot().layoutInfo.mobile).toBe(true)
+    expect(frame.querySelector('[data-side="sidebar"]')).toBeNull()
+  })
+
+  it('opens the drawer from the frame-owned opener and closes it on Escape', () => {
+    frameWidth = 700
+    const { frame, instance } = mountFrame()
+    act(() => { opener(frame)!.click() })
+    expect(instance.getSnapshot().layoutInfo.drawerOpen).toBe(true)
+    expect(drawer(frame).dataset.open).toBe('true')
+    // The opener is replaced by the drawer's own toggle while the drawer is out.
+    expect(opener(frame)).toBeNull()
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    expect(instance.getSnapshot().layoutInfo.drawerOpen).toBe(false)
+    expect(drawer(frame).dataset.open).toBeUndefined()
+  })
+
+  it('closes the drawer with the scrim', () => {
+    frameWidth = 700
+    const { frame, instance } = mountFrame()
+    act(() => { instance.actions.setDrawerOpen(true) })
+    const scrim = drawer(frame).previousElementSibling
+    expect(scrim).not.toBeNull()
+    act(() => { scrim!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(instance.getSnapshot().layoutInfo.drawerOpen).toBe(false)
+  })
+
+  it('closes an open drawer when the current Session changes', () => {
+    frameWidth = 700
+    const { frame, instance, rerenderFrame } = mountFrame()
+    act(() => { instance.actions.setDrawerOpen(true) })
+    selectedSession = 's-other' as SessionId
+    rerenderFrame()
+    expect(instance.getSnapshot().layoutInfo.drawerOpen).toBe(false)
+    expect(drawer(frame).dataset.open).toBeUndefined()
+  })
+
+  it('closes the drawer when the frame re-crosses the phone breakpoint', () => {
+    frameWidth = 700
+    const { frame, instance } = mountFrame()
+    act(() => { instance.actions.setDrawerOpen(true) })
+    resize(600)
+    expect(instance.getSnapshot().layoutInfo).toMatchObject({ mobile: true, drawerOpen: true })
+    resize(1920)
+    expect(instance.getSnapshot().layoutInfo).toMatchObject({ mobile: false, drawerOpen: false })
+    expect(opener(frame)).toBeNull()
+    expect(frame.querySelector('[data-side="sidebar"]')).not.toBeNull()
+  })
+
+  it('toggles the drawer rather than the narrow re-expand override while mobile', () => {
+    frameWidth = 700
+    const { instance } = mountFrame()
+    act(() => { instance.actions.toggleSidebar() })
+    expect(instance.getSnapshot().layoutInfo).toMatchObject({ drawerOpen: true, narrowExpanded: false })
+    act(() => { instance.actions.toggleSidebar() })
+    expect(instance.getSnapshot().layoutInfo.drawerOpen).toBe(false)
   })
 })
 

@@ -27,6 +27,14 @@ type LayoutInfo = {
   viewportWidth: number
   narrowExpanded: boolean
   /**
+   * Whether the frame is in the mobile drawer regime (viewport below the phone
+   * breakpoint) and whether that drawer is open. Mobile is a narrower subset of
+   * narrow, so it owns the left column's presentation outright: the sidebar
+   * renders as a fixed overlay drawer and reserves no track.
+   */
+  mobile: boolean
+  drawerOpen: boolean
+  /**
    * Saved right panel width in px, or null before its first opening. Resizing
    * the frame and closing the panel preserve this preference.
    */
@@ -61,6 +69,8 @@ type LayoutActions = {
   setSidebar: (draft: LayoutState, px: number) => void
   toggleSidebar: (draft: LayoutState) => void
   setViewportWidth: (draft: LayoutState, width: number) => void
+  setMobile: (draft: LayoutState, mobile: boolean) => void
+  setDrawerOpen: (draft: LayoutState, open: boolean) => void
   setRightbar: (draft: LayoutState, px: number) => void
   openRightbar: (draft: LayoutState, track: boolean, fullscreen: boolean) => void
   closeRightbar: (draft: LayoutState) => void
@@ -83,6 +93,8 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         sidebar: SIDEBAR_DEFAULT,
         viewportWidth: window.innerWidth,
         narrowExpanded: false,
+        mobile: false,
+        drawerOpen: false,
         rightbar: null,
         rightbarShown: false,
         rightbarTrack: false,
@@ -104,10 +116,13 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         d.layoutInfo.sidebar = clampWidth(px, SIDEBAR_MIN, SIDEBAR_MAX)
       },
       // Narrow toggles flip only the override: the width preference survives
-      // untouched, so re-widening restores the pre-squeeze layout.
+      // untouched, so re-widening restores the pre-squeeze layout. Mobile wins
+      // over narrow (a mobile viewport is also narrow): there the toggle is the
+      // drawer's, and the re-expand override stays untouched.
       toggleSidebar: (d) => {
         d.layoutInfo.rightbarInstant = false
-        if (d.layoutInfo.viewportWidth < SIDEBAR_AUTO_COLLAPSE) d.layoutInfo.narrowExpanded = !d.layoutInfo.narrowExpanded
+        if (d.layoutInfo.mobile) d.layoutInfo.drawerOpen = !d.layoutInfo.drawerOpen
+        else if (d.layoutInfo.viewportWidth < SIDEBAR_AUTO_COLLAPSE) d.layoutInfo.narrowExpanded = !d.layoutInfo.narrowExpanded
         else d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? SIDEBAR_DEFAULT : 0
       },
       // Crossing the breakpoint in either direction drops the override: the
@@ -119,6 +134,16 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
           d.layoutInfo.narrowExpanded = false
         }
         d.layoutInfo.viewportWidth = width
+      },
+      // The drawer is transient: crossing the phone breakpoint in either
+      // direction closes it, and the width preferences survive untouched.
+      setMobile: (d, mobile: boolean) => {
+        if (d.layoutInfo.mobile === mobile) return
+        d.layoutInfo.mobile = mobile
+        d.layoutInfo.drawerOpen = false
+      },
+      setDrawerOpen: (d, open: boolean) => {
+        d.layoutInfo.drawerOpen = open
       },
       setRightbar: (d, px: number) => {
         d.layoutInfo.rightbarInstant = false

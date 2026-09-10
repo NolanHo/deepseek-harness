@@ -16,6 +16,9 @@ describe('createLayoutStore', () => {
         sidebar: 280,
         viewportWidth: 1920,
         narrowExpanded: false,
+        // Fork patch (FORK_SURFACE.md): the mobile drawer regime state.
+        mobile: false,
+        drawerOpen: false,
         rightbar: null,
         rightbarShown: false,
         rightbarTrack: false,

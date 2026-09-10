@@ -20,6 +20,8 @@ import type {
   PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore,
 } from '@deepseek-ai/dsh-client-ui-slots'
 import { computeColumns, RIGHTBAR_DEFAULT_RATIO, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
+// Fork patch (FORK_SURFACE.md): the mobile drawer regime lives in the fork-owned module.
+import { DRAWER_WIDTH, MobileNavChrome, useMobileRegime } from './fork/mobile-shell.tsx'
 import { DocumentTitle } from './DocumentTitle.tsx'
 import type { createLayoutStore } from './stores.ts'
 import css from './AppFrame.module.css'
@@ -47,8 +49,8 @@ function MainPanel({ usePanelInfo, renderSlot }: Pick<PropsRuntime<'root'>, 'use
  * occupant's panel is positioned against the column's right edge, which never
  * moves, so it can hang over the centre when there is no track.
  */
-function RightbarColumn(props: { children?: ReactNode }) {
-  return <div className={css.rightbarCol} data-rightbar-col>{props.children}</div>
+function RightbarColumn(props: { children?: ReactNode; mobile?: boolean }) {
+  return <div className={css.rightbarCol} data-rightbar-col data-mobile={props.mobile || undefined}>{props.children}</div>
 }
 
 /**
@@ -127,6 +129,7 @@ export function AppFrame({
   t,
 }: AppFrameProps) {
   const layoutInfo = useStore(state => state.layoutInfo)
+  const currentSession = useSessions(state => state.current)
   const frameRef = useRef<HTMLDivElement | null>(null)
   const viewport = layoutInfo.viewportWidth
 
@@ -157,6 +160,9 @@ export function AppFrame({
     }
   }, [actions])
 
+  // Mobile mirrors separately from narrow: below the phone breakpoint the left
+  // column is an overlay drawer, so the frame renders one in-flow track.
+  const { mobile, closeDrawer } = useMobileRegime(viewport, layoutInfo, currentSession, actions)
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
   const sidebarCollapsed = narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0
   const sidebarPreference = sidebarCollapsed
@@ -203,9 +209,13 @@ export function AppFrame({
     <div
       ref={frameRef}
       className={css.frame}
+      /* Mobile collapses to ONE in-flow track: the drawer and its scrim are
+         position:fixed (out of flow), so a three-track template would
+         auto-place the centre into the zero-width sidebar track. */
       style={{
-        gridTemplateColumns:
-          `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px`,
+        gridTemplateColumns: mobile
+          ? 'minmax(0, 1fr)'
+          : `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px`,
       }}
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-rightbar-collapsed={cols.rightbar === 0 || undefined}
@@ -218,12 +228,21 @@ export function AppFrame({
         useSessions={useSessions}
         usePanelInfo={usePanelInfo}
       />
-      <div className={css.sidebarCol}>
-        {sidebar}
-      </div>
+      {mobile
+        ? (
+          <MobileNavChrome
+            open={layoutInfo.drawerOpen}
+            onToggle={actions.toggleSidebar}
+            onClose={closeDrawer}
+            openLabel={t('sidebar.open')}
+          >
+            {renderSlot('sidebar', { collapsed: false, width: DRAWER_WIDTH })}
+          </MobileNavChrome>
+        )
+        : <div className={css.sidebarCol}>{sidebar}</div>}
       <>
         <CenterColumn>{main}</CenterColumn>
-        <RightbarColumn>
+        <RightbarColumn mobile={mobile}>
           {renderSlot('rightbar', { width: normal.rightbar, viewportWidth: viewport, canShow: normal.rightbar > 0 })}
         </RightbarColumn>
       </>
@@ -231,8 +250,8 @@ export function AppFrame({
         {overlays}
       </div>
       {/* The collapsed rail is fixed-width: no resize handle while closed. */}
-      {!sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
-      {layoutInfo.rightbarShown && !layoutInfo.rightbarFullscreen && normal.rightbar > 0 && (
+      {!mobile && !sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
+      {!mobile && layoutInfo.rightbarShown && !layoutInfo.rightbarFullscreen && normal.rightbar > 0 && (
         <DragHandle side="rightbar" left={viewport - normal.rightbar} onStart={onRightbarStart} onDrag={onRightbarDrag} onEnd={onDragEnd} />
       )}
     </div>

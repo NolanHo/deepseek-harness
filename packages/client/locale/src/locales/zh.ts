@@ -27,6 +27,8 @@ export const zh = {
   'more': '更多',
   'collapse': '收起',
   'expand': '展开',
+  // Fork patch (FORK_SURFACE.md): the mobile drawer's frame-owned opener.
+  'sidebar.open': '打开侧栏',
   'back': '返回',
   'brand.localBuild': 'DSH 本地构建',
   'unknown': '未知',

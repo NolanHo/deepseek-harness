@@ -123,6 +123,10 @@ export class SubagentContinuationManager {
       ...agentReasoningEffort !== undefined ? { agentReasoningEffort } : {},
       ...request.persona !== undefined ? { persona: request.persona } : {},
       ...request.toolFilter !== undefined ? { toolFilter: request.toolFilter } : {},
+      // Fork patch (FORK_SURFACE.md): the declared workspace and skill filter
+      // ride the descriptor so cold resume reapplies them without the request.
+      ...request.cwd !== undefined ? { cwd: request.cwd } : {},
+      ...request.skillFilter !== undefined ? { skillFilter: request.skillFilter } : {},
     })
     // Capture before the first await: a later parent switch belongs to the
     // parent's future, not to this child.
@@ -162,13 +166,18 @@ export class SubagentContinuationManager {
           parent,
           create: {
             seed,
-            meta: childSessionMeta(parent, childDepth, prepared.seed !== undefined),
+            // Fork patch (FORK_SURFACE.md): the declared cwd override is stamped over the parent's.
+            meta: childSessionMeta(parent, childDepth, prepared.seed !== undefined, request.cwd),
             inheritedEventCount,
             delegatedPolicies,
             descriptor,
           },
           agentOptions,
-          composition: { persona: request.persona, toolFilter: request.toolFilter },
+          composition: {
+            persona: request.persona,
+            toolFilter: request.toolFilter,
+            skillFilter: request.skillFilter,
+          },
           signal: spec.signal,
         })
         const childHeader = activation.handle.agent.session.header
@@ -442,7 +451,11 @@ export class SubagentContinuationManager {
             ? { reasoningEffort: ReasoningEffortId(descriptor.agentReasoningEffort) }
             : {},
         },
-        composition: { persona: descriptor.persona, toolFilter: descriptor.toolFilter },
+        composition: {
+          persona: descriptor.persona,
+          toolFilter: descriptor.toolFilter,
+          skillFilter: descriptor.skillFilter,
+        },
         signal: options.signal,
       })
     } catch (error: unknown) {
