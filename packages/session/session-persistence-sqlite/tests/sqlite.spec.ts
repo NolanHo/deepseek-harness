@@ -10,7 +10,9 @@ import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
+import { MessageId } from '@deepseek-ai/dsh-llm'
 import SessionStore, {
+  SESSION_FORMAT_VERSION,
   SessionId,
   SessionLogOffset,
   SessionSeq,
@@ -19,25 +21,25 @@ import SessionStore, {
 } from '@deepseek-ai/dsh-session'
 import SessionPersistenceSqlite, {
   DEFAULT_BUSY_TIMEOUT_MS,
+  DEFAULT_WRITE_BATCH_MAX_DELAY_MS,
   SCHEMA_VERSION,
 } from '@deepseek-ai/dsh-session-persistence-sqlite'
 import type { SessionStorageMetadata } from '@deepseek-ai/dsh-session-persistence'
 import {
-  runCoordinatorContract,
-  type CoordinatorFixture,
-} from '../../session-persistence/tests/coordinator-contract.ts'
-import {
   meta,
+  oneTurnLog,
   runPersistenceContract,
+  type ContractBackend,
 } from '../../session-persistence/tests/contract.ts'
-import { MAX_PACKED_DATA_BYTES } from '../src/codec.ts'
+import type { StoredChunkEvent, StoredLogicalEvent } from '../src/codec.ts'
 import {
+  currentHeaderOf,
   decodeEventRow,
   decodeSessionRow,
   decodeStoreIdentity,
   openDatabase,
+  storedPhysicalHeaderOf,
   validateSchemaForMutation,
-  rowToMeta,
   SESSION_PERSISTENCE_SQLITE_APPLICATION_ID,
   type SessionRow,
 } from '../src/schema.ts'
@@ -74,6 +76,17 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Mount one SQLite provider over `path`, as a separate process would see it. */
+async function mountSqlite(path: string): Promise<{
+  persistence: Context['sessionPersistence']
+  dispose: () => Promise<void>
+}> {
+  const ctx = new Context()
+  await ctx.plugin(SessionStore)
+  const fiber = await ctx.plugin(SessionPersistenceSqlite, { path })
+  return { persistence: ctx.sessionPersistence, dispose: async () => { await fiber.dispose() } }
+}
+
 /** Wrap a contract header (unseeded, cut 0) for direct backend-hook calls. */
 function storage(header: SessionHeader): SessionStorageMetadata {
   return { meta: header, inheritedEventCount: SessionLogOffset(0) }
@@ -99,7 +112,8 @@ function databaseWithJournalFailure(
   }
 }
 
-function chunk(seq: number, text = `token-${seq}`): SessionEvent {
+/** One retired top-level delta event; only legacy databases store these. */
+function chunk(seq: number, text = `token-${seq}`): StoredChunkEvent {
   return {
     type: 'assistant/chunk',
     seq: SessionSeq(seq),
@@ -112,7 +126,8 @@ function chunk(seq: number, text = `token-${seq}`): SessionEvent {
   }
 }
 
-function chunkLog(count: number): SessionEvent[] {
+/** One closed legacy turn whose delta run the schema-20 codec packs into one row. */
+function chunkLog(count: number): StoredLogicalEvent[] {
   return [
     { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
     { type: 'step/start', seq: SessionSeq(1), time: 2, data: { turn: 1, step: 1 } },
@@ -124,6 +139,81 @@ function chunkLog(count: number): SessionEvent[] {
       time: count + 4,
       data: { turn: 1, reason: { kind: 'completed' } },
     },
+  ]
+}
+
+function turnStart(seq: number, turn = 1): SessionEvent {
+  return { type: 'turn/start', seq: SessionSeq(seq), time: seq + 1, data: { turn } }
+}
+
+function turnEnd(seq: number, turn = 1): SessionEvent {
+  return {
+    type: 'turn/end',
+    seq: SessionSeq(seq),
+    time: seq + 1,
+    data: { turn, reason: { kind: 'completed' } },
+  }
+}
+
+/** `count` interleaved turn boundaries: every event is one scalar physical row. */
+function trafficLog(count: number): SessionEvent[] {
+  return Array.from({ length: count / 2 }, (_, index) => [
+    turnStart(index * 2, index + 1),
+    turnEnd(index * 2 + 1, index + 1),
+  ]).flat()
+}
+
+const LEGACY_ID = SessionId('v0-chunks')
+
+/** Seed the schema-19 fixture: one v0 session whose packed text run predates v3. */
+async function writeLegacyV0Fixture(): Promise<string> {
+  const path = await freshDbPath('dsh-sqlite-legacy-v0-')
+  const seed = new DatabaseSync(path)
+  seed.exec(testSql('create-schema-19-db'))
+  seed.exec(testSql('insert-schema-19-session'))
+  seed.exec(testSql('insert-schema-19-events'))
+  seed.close()
+  await chmod(path, 0o600)
+  return path
+}
+
+/**
+ * The exact current-format log the released v0-to-v3 chain restores from
+ * {@link writeLegacyV0Fixture}: sequence numbers renumbered, a system message
+ * synthesized for the open step, and the packed run folded into one attempt.
+ */
+function legacyMigratedLog(): SessionEvent[] {
+  return [
+    { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+    { type: 'step/start', seq: SessionSeq(1), time: 2, data: { turn: 1, step: 1 } },
+    {
+      type: 'system/message',
+      seq: SessionSeq(2),
+      time: 2,
+      surfaceOp: 'append',
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          id: MessageId('v2-to-v3-system-a4b68aee9afae52ac153aee39e90ce2172e655a75e62be2b765d4f382095eb50'),
+          role: 'system',
+          source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt' },
+          content: [],
+        },
+      },
+    },
+    {
+      type: 'assistant/attempt',
+      seq: SessionSeq(3),
+      time: 5,
+      data: {
+        turn: 1,
+        step: 1,
+        stream: [{ type: 'text-chunks', time0: 3, index: 0, dt: [1, 1], texts: ['a', 'b', 'c'] }],
+      },
+    },
+    { type: 'step/end', seq: SessionSeq(4), time: 6, data: { turn: 1, step: 1 } },
+    { type: 'turn/end', seq: SessionSeq(5), time: 7, data: { turn: 1, reason: { kind: 'completed' } } },
   ]
 }
 
@@ -170,7 +260,7 @@ async function measureWriteTraffic(
   await ctx.plugin(SessionPersistenceSqlite, { path, writeBatchMaxDelayMs: 200 })
   try {
     const header = meta('traffic')
-    await ctx.sessionPersistence.create(header)
+    const handle = await ctx.sessionPersistence.create(header)
     let previous = new Map<number, PhysicalRow>()
     let inserted = 0
     let changed = 0
@@ -179,7 +269,7 @@ async function measureWriteTraffic(
     try {
       const selectRows = probe.prepare(testSql('select-event-rows'))
       for (let offset = 0; offset < events.length; offset += 40) {
-        await ctx.sessionPersistence.append(header.id, events.slice(offset, offset + 40))
+        await handle.append(events.slice(offset, offset + 40))
         const current = new Map((selectRows.all(header.id) as unknown as PhysicalRow[])
           .map(row => [row.seq, row]))
         for (const [seq, row] of current) {
@@ -212,21 +302,12 @@ async function measureWriteTraffic(
   }
 }
 
-runPersistenceContract('sqlite', async () => {
-  const ctx = new Context()
-  await ctx.plugin(SessionStore)
-  const fiber = await ctx.plugin(SessionPersistenceSqlite, { path: ':memory:' })
+runPersistenceContract('sqlite', async (): Promise<ContractBackend> => {
+  const path = await freshDbPath('dsh-sqlite-contract-')
+  const primary = await mountSqlite(path)
   return {
-    persistence: ctx.sessionPersistence,
-    dispose: async () => { await fiber.dispose() },
-  }
-})
-
-runCoordinatorContract('sqlite', async (): Promise<CoordinatorFixture> => {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-sqlite-coord-'))
-  const path = join(directory, 'sessions.db')
-  return {
-    mount: async ctx => ctx.plugin(SessionPersistenceSqlite, { path }),
+    ...primary,
+    reopen: () => mountSqlite(path),
     corruptTail: async (id) => {
       const db = new DatabaseSync(path)
       const last = db.prepare(testSql('select-last-event'))
@@ -239,12 +320,11 @@ runCoordinatorContract('sqlite', async (): Promise<CoordinatorFixture> => {
         .run(id, next, 'assistant/chunk', 99, '{not valid json', null)
       db.close()
     },
-    cleanup: async () => { await rm(directory, { recursive: true, force: true }) },
   }
 })
 
 describe('SessionPersistenceSqlite physical packing', () => {
-  it('loads from cordis.yml and packs through the assembled service', async () => {
+  it('loads from cordis.yml and stores one row per V3 event through the assembled service', async () => {
     const path = await freshDbPath('dsh-sqlite-loader-')
     const configPath = join(path, '..', 'cordis.yml')
     await writeFile(configPath, [
@@ -276,83 +356,130 @@ describe('SessionPersistenceSqlite physical packing', () => {
     await ctx.loader.await()
 
     const header = meta('loader')
-    const events = chunkLog(4)
-    await ctx.sessionPersistence.create(header)
-    await ctx.sessionPersistence.append(header.id, events)
-    expect((await ctx.sessionPersistence.inspect(header.id)).events).toEqual(events)
+    const events = oneTurnLog()
+    const handle = await ctx.sessionPersistence.create(header)
+    await handle.append(events)
+    expect((await handle.read()).events).toEqual(events)
+    await handle.close()
     await ctx.fiber.dispose()
 
     const db = new DatabaseSync(path)
-    expect(db.prepare(testSql('count-packed-events')).get())
-      .toEqual({ count: 1 })
+    expect(db.prepare(testSql('count-events')).get()).toEqual({ count: events.length })
     db.close()
   })
 
-  it('packs each append once without rewriting earlier rows and seeks inside packed rows', async () => {
+  it('packs each raw append once without rewriting earlier rows', async () => {
     const path = await freshDbPath()
-    const ctx = new Context()
-    await ctx.plugin(SessionStore)
-    const fiber = await ctx.plugin(SessionPersistenceSqlite, { path })
+    const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
     const header = meta('packed')
     const events = chunkLog(100)
-    await ctx.sessionPersistence.create(header)
-    await ctx.sessionPersistence.append(header.id, events.slice(0, 3))
-    await ctx.sessionPersistence.append(header.id, events.slice(3, 4))
+    await store.appendBatch(storage(header), events.slice(0, 3), false)
+    await store.appendBatch(storage(header), events.slice(3, 4), true)
     const before = new DatabaseSync(path, { readOnly: true })
     const originalRows = before.prepare(testSql('select-event-rowids')).all()
     before.close()
-    await ctx.sessionPersistence.append(header.id, events.slice(4))
-
-    const inspected = await ctx.sessionPersistence.inspect(header.id)
-    expect(inspected.events).toEqual(events)
-    for (const offset of [0, 2, 25, 101, 104, 105]) {
-      const fromSeq = SessionLogOffset(offset)
-      expect((await ctx.sessionPersistence.readFrom(header.id, fromSeq)).events)
-        .toEqual(events.slice(fromSeq))
-    }
-    await fiber.dispose()
+    await store.appendBatch(storage(header), events.slice(4), true)
+    await store.close()
 
     const db = new DatabaseSync(path)
     expect(db.prepare(testSql('select-user-version')).get()).toEqual({ user_version: SCHEMA_VERSION })
     expect(db.prepare(testSql('select-page-size')).get()).toEqual({ page_size: 65_536 })
+    // Two turn boundaries and two scalar deltas from the first appends, one packed
+    // row for the 98-delta tail, and the closing step and turn.
     expect(db.prepare(testSql('count-events')).get()).toEqual({ count: 7 })
-    expect(db.prepare(testSql('count-packed-events')).get())
-      .toEqual({ count: 1 })
+    expect(db.prepare(testSql('count-packed-events')).get()).toEqual({ count: 1 })
+    expect(db.prepare(testSql('count-physical-types')).all())
+      .toEqual([{ type: 'text-chunks', count: 1 }])
     expect(db.prepare(testSql('select-event-rowids')).all().slice(0, originalRows.length))
       .toEqual(originalRows)
     db.close()
   })
 
+  it('serves every restored suffix of a legacy packed log', async () => {
+    const path = await writeLegacyV0Fixture()
+    const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
+    const expected = legacyMigratedLog()
+
+    for (const fromSeq of [0, 1, 2, 3, 4, 5, 6, 25]) {
+      const suffix = await store.loadStoredFrom(LEGACY_ID, SessionLogOffset(fromSeq))
+      expect(suffix?.events, `suffix from ${fromSeq}`)
+        .toEqual(expected.filter(event => event.seq >= fromSeq))
+    }
+    expect((await store.loadStoredLog(LEGACY_ID))?.events).toEqual(expected)
+    await store.close()
+
+    // The service seek surface restores a historical session once and slices it.
+    const mounted = await mountSqlite(path)
+    try {
+      for (const fromSeq of [0, 2, 5, 6]) {
+        const suffix = await (mounted.persistence as SessionPersistenceSqlite).readFrom(LEGACY_ID, fromSeq)
+        expect(suffix.events, `service suffix from ${fromSeq}`)
+          .toEqual(expected.filter(event => event.seq >= fromSeq))
+      }
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
   it.runIf(process.platform !== 'win32')('bounds paced-stream WAL extent without rewriting committed rows', async () => {
-    const events = chunkLog(1_000)
+    const events = trafficLog(1_000)
     const measured = await measureWriteTraffic(await freshDbPath('dsh-sqlite-traffic-'), events)
 
-    expect(measured).toMatchObject({ rows: 31, inserted: 31, changed: 0, removed: 0 })
+    expect(measured).toMatchObject({ rows: events.length, inserted: events.length, changed: 0, removed: 0 })
     expect(measured.inserted).toBe(measured.rows)
-    expect(measured.largest).toBeLessThanOrEqual(MAX_PACKED_DATA_BYTES)
+    // Every physical row holds one small scalar event: nothing accumulates.
+    expect(measured.largest).toBeLessThan(1_000)
     expect(measured.idleWalBytes).toBe(measured.walBytes)
   })
 
-  it('includes a packed predecessor when an overlapping scalar tail hides it', async () => {
-    const path = await freshDbPath('dsh-sqlite-overlap-')
+  it('drops a torn legacy tail and refuses corruption inside the committed span', async () => {
+    const expected = legacyMigratedLog()
+
+    // Repair writes target the migrated schema, so the first read opens and
+    // upgrades the fixture database before any raw corruption is injected.
+    const path = await writeLegacyV0Fixture()
     const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
-    const header = meta('overlap')
-    await store.appendBatch(storage(header), [chunk(0), chunk(1), chunk(2)], false)
-
-    const db = new DatabaseSync(path)
-    db.prepare(testSql('insert-corrupt-event'))
-      .run(header.id, 1, 'assistant/chunk', 2, JSON.stringify(chunk(1).data), null)
-    db.close()
-
-    expect((await store.loadStoredFrom(header.id, SessionLogOffset(2)))?.events).toEqual([chunk(2)])
-
-    const malformed = new DatabaseSync(path)
-    malformed.prepare(testSql('delete-session-events')).run(header.id)
-    malformed.prepare(testSql('insert-corrupt-event'))
-      .run(header.id, 0, 'text-chunks', 1, '{not json', 0)
-    malformed.close()
-    expect((await store.loadStoredFrom(header.id, SessionLogOffset(2)))?.events).toEqual([])
+    expect((await store.loadStoredLog(LEGACY_ID))?.events).toEqual(expected)
+    const torn = new DatabaseSync(path)
+    torn.prepare(testSql('insert-corrupt-event'))
+      .run(LEGACY_ID, 7, 'assistant/chunk', 8, '{not json', null)
+    torn.close()
+    expect((await store.loadStoredLog(LEGACY_ID))?.tornFrom).toBe(7)
+    expect((await store.loadStoredFrom(LEGACY_ID, SessionLogOffset(2)))?.events)
+      .toEqual(expected.filter(event => event.seq >= 2))
     await store.close()
+
+    // A malformed row overlapping the packed span sits before the committed
+    // turn end, so the log that hides the packed predecessor is refused whole.
+    const overlapping = await writeLegacyV0Fixture()
+    const strict = new SqliteStore({
+      path: overlapping,
+      journalMode: 'wal',
+      busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS,
+    })
+    expect((await strict.loadStoredLog(LEGACY_ID))?.events).toEqual(expected)
+    const shadow = new DatabaseSync(overlapping)
+    shadow.prepare(testSql('insert-corrupt-event'))
+      .run(LEGACY_ID, 3, 'assistant/chunk', 4, '{not json', null)
+    shadow.close()
+    await expect(strict.loadStoredLog(LEGACY_ID)).rejects.toThrow(/invalid committed physical row at seq 3/)
+    await expect(strict.loadStoredFrom(LEGACY_ID, SessionLogOffset(2)))
+      .rejects.toThrow(/invalid committed physical row at seq 3/)
+    await strict.close()
+
+    // A packed row that cannot be decoded is committed corruption as well.
+    const malformed = await writeLegacyV0Fixture()
+    const corrupted = new SqliteStore({
+      path: malformed,
+      journalMode: 'wal',
+      busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS,
+    })
+    expect((await corrupted.loadStoredLog(LEGACY_ID))?.events).toEqual(expected)
+    const broken = new DatabaseSync(malformed)
+    broken.prepare(testSql('corrupt-schema-19-packed-event')).run(LEGACY_ID)
+    broken.close()
+    await expect(corrupted.loadStoredLog(LEGACY_ID)).rejects.toThrow(/invalid committed physical row at seq 2/)
+    await corrupted.close()
   })
 
   it('locates the Nth append-origin user message by index and bounds it by beforeSeq', async () => {
@@ -370,7 +497,7 @@ describe('SessionPersistenceSqlite physical packing', () => {
       type: 'user/message',
       seq: SessionSeq(seq),
       time: seq,
-      surfaceOp: { op: 'replace', start: SessionSeq(0), end: SessionSeq(4) },
+      surfaceOp: { op: 'replace', startSeq: SessionSeq(0), endSeq: SessionSeq(4) },
       sourceEventSeqs: [0, 1, 2, 3, 4].map(SessionSeq),
       data: { role: 'user', id: `r${seq}` as never, content: [{ type: 'text', text: 'checkpoint' }], source: { kind: 'plugin', plugin: 'compact' } },
     })
@@ -400,7 +527,7 @@ describe('SessionPersistenceSqlite physical packing', () => {
     const path = await freshDbPath('dsh-sqlite-busy-')
     const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: 1_000 })
     const header = meta('busy')
-    await store.appendBatch(storage(header), [chunk(0)], false)
+    await store.appendBatch(storage(header), [turnStart(0)], false)
 
     const holder = spawn(process.execPath, ['--input-type=module', '-e', String.raw`
       import { DatabaseSync } from 'node:sqlite';
@@ -415,10 +542,10 @@ describe('SessionPersistenceSqlite physical packing', () => {
     })
     try {
       await once(holder.stdout, 'data')
-      await expect(store.appendBatch(storage(header), [chunk(1)], true)).resolves.toBeUndefined()
+      await expect(store.appendBatch(storage(header), [turnEnd(1)], true)).resolves.toBeUndefined()
       const code = await exited
       expect(code).toBe(0)
-      expect((await store.loadStored(header.id))?.events).toEqual([chunk(0), chunk(1)])
+      expect((await store.loadStoredLog(header.id))?.events).toEqual([turnStart(0), turnEnd(1)])
     } finally {
       if (holder.exitCode === null) holder.kill()
       await store.close()
@@ -436,53 +563,52 @@ describe('SessionPersistenceSqlite physical packing', () => {
   })
 
   it('migrates an established schema-19 database in place', async () => {
-    const path = await freshDbPath('dsh-sqlite-migrate-schema-19-')
-    const seed = new DatabaseSync(path)
-    seed.exec(testSql('create-schema-19-db'))
-    seed.exec(testSql('insert-schema-19-session'))
-    seed.exec(testSql('insert-schema-19-events'))
-    seed.close()
-    await chmod(path, 0o600)
+    const path = await writeLegacyV0Fixture()
 
     const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
-    const id = SessionId('schema-19-migration')
-    const chunkMember = (seq: number, text: string): SessionEvent => ({
-      type: 'assistant/chunk',
-      seq: SessionSeq(seq),
-      time: seq + 1,
-      data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text } },
+    const expected = legacyMigratedLog()
+    const stored = await store.loadStoredLog(LEGACY_ID)
+    expect(stored?.meta).toEqual({
+      version: SESSION_FORMAT_VERSION,
+      id: LEGACY_ID,
+      createdAt: 1,
+      isSeeded: false,
+      delegationDepth: 0,
     })
-    const expected = [
-      { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
-      chunkMember(1, 'a'),
-      chunkMember(2, 'b'),
-      chunkMember(3, 'c'),
-      {
-        type: 'turn/end',
-        seq: SessionSeq(4),
-        time: 5,
-        data: { turn: 1, reason: { kind: 'completed' } },
-      },
-    ]
-    const stored = await store.loadStored(id)
+    expect(stored?.inheritedEventCount).toBe(0)
+    expect(stored?.storedVersion).toBe(0)
     expect(stored?.events).toEqual(expected)
-    for (const event of stored?.events ?? []) expect(event).not.toHaveProperty('ignorable')
 
-    const storageMetadata = { meta: stored!.meta, inheritedEventCount: stored!.inheritedEventCount }
-    await store.appendBatch(storageMetadata, [chunkMember(5, 'd')], true)
-    expect((await store.loadStored(id))?.events).toEqual([...expected, chunkMember(5, 'd')])
-    await store.close()
-
+    // Opening the database migrated the schema in place: the packed row kept
+    // its sentinel in the new `ignorable` column before any publish ran.
     const upgraded = new DatabaseSync(path)
     expect(upgraded.prepare(testSql('select-user-version')).get()).toEqual({ user_version: SCHEMA_VERSION })
-    expect((upgraded.prepare(testSql('select-event-rows')).all(id) as unknown as PhysicalRow[])
+    expect((upgraded.prepare(testSql('select-event-rows')).all(LEGACY_ID) as unknown as PhysicalRow[])
       .map(row => ({ seq: row.seq, ignorable: row.ignorable }))).toEqual([
       { seq: 0, ignorable: null },
-      { seq: 1, ignorable: 0 },
-      { seq: 4, ignorable: null },
+      { seq: 1, ignorable: null },
+      { seq: 2, ignorable: 0 },
       { seq: 5, ignorable: null },
+      { seq: 6, ignorable: null },
     ])
     upgraded.close()
+
+    const storageMetadata = { meta: stored!.meta, inheritedEventCount: stored!.inheritedEventCount }
+    await store.publishStoredLog(storageMetadata, stored!.events)
+    await store.appendBatch(storageMetadata, [turnStart(6, 2)], true)
+    const published = await store.loadStoredLog(LEGACY_ID)
+    expect(published?.storedVersion).toBe(SESSION_FORMAT_VERSION)
+    expect(published?.events).toEqual([...expected, turnStart(6, 2)])
+    await store.close()
+
+    const rewritten = new DatabaseSync(path)
+    expect(rewritten.prepare(testSql('select-user-version')).get()).toEqual({ user_version: SCHEMA_VERSION })
+    expect(rewritten.prepare(testSql('select-session-version')).get(LEGACY_ID))
+      .toEqual({ version: SESSION_FORMAT_VERSION })
+    expect((rewritten.prepare(testSql('select-event-rows')).all(LEGACY_ID) as unknown as PhysicalRow[])
+      .map(row => row.ignorable)).toEqual([null, null, null, null, null, null, null])
+    expect(rewritten.prepare(testSql('count-packed-events')).get()).toEqual({ count: 0 })
+    rewritten.close()
   })
 
   it('keeps the page size of an established schema 20 database', async () => {
@@ -506,10 +632,10 @@ describe('SessionPersistenceSqlite physical packing', () => {
     const first = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
     const second = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
     const header = meta(SessionId('stale'))
-    await first.appendBatch(storage(header), [chunk(0)], false)
-    await second.appendBatch(storage(header), [chunk(1)], true)
-    await expect(first.appendBatch(storage(header), [chunk(1)], true)).rejects.toThrow(/stored next seq is 2/)
-    expect((await first.loadStored(header.id))?.events).toEqual([chunk(0), chunk(1)])
+    await first.appendBatch(storage(header), [turnStart(0)], false)
+    await second.appendBatch(storage(header), [turnEnd(1)], true)
+    await expect(first.appendBatch(storage(header), [turnEnd(1)], true)).rejects.toThrow(/stored next seq is 2/)
+    expect((await first.loadStoredLog(header.id))?.events).toEqual([turnStart(0), turnEnd(1)])
     await first.close()
     await second.close()
   })
@@ -522,10 +648,10 @@ describe('SessionPersistenceSqlite physical packing', () => {
     })
     const header = meta(SessionId('key-rollback'))
 
-    await expect(store.appendBatch(storage(header), [chunk(1)], false)).rejects.toThrow(/stored next seq is 0/)
-    await expect(store.appendBatch(storage(header), [chunk(0)], true)).rejects.toThrow(/metadata row is missing/)
-    await expect(store.appendBatch(storage(header), [chunk(0)], false)).resolves.toBeUndefined()
-    expect((await store.loadStored(header.id))?.events).toEqual([chunk(0)])
+    await expect(store.appendBatch(storage(header), [turnEnd(1)], false)).rejects.toThrow(/stored next seq is 0/)
+    await expect(store.appendBatch(storage(header), [turnStart(0)], true)).rejects.toThrow(/metadata row is missing/)
+    await expect(store.appendBatch(storage(header), [turnStart(0)], false)).resolves.toBeUndefined()
+    expect((await store.loadStoredLog(header.id))?.events).toEqual([turnStart(0)])
     await store.close()
   })
 
@@ -534,17 +660,119 @@ describe('SessionPersistenceSqlite physical packing', () => {
     const stale = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
     const winner = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
     const header = meta(SessionId('stale-repair'))
-    await stale.appendBatch(storage(header), [chunk(0)], false)
+    await stale.appendBatch(storage(header), [turnStart(0)], false)
     const db = new DatabaseSync(path)
     db.prepare(testSql('insert-corrupt-event')).run(header.id, 1, 'assistant/chunk', 2, '{not json', null)
     db.close()
-    expect((await stale.loadStored(header.id))?.tornMarker).toBe(1)
+    expect((await stale.loadStoredLog(header.id))?.tornFrom).toBe(1)
     await winner.commitRepair(storage(header), 1, [])
-    await winner.appendBatch(storage(header), [chunk(1), chunk(2)], true)
+    await winner.appendBatch(storage(header), [turnEnd(1)], true)
     await expect(stale.commitRepair(storage(header), 1, [])).rejects.toThrow(/repair is stale/)
-    expect((await stale.loadStored(header.id))?.events).toEqual([chunk(0), chunk(1), chunk(2)])
+    expect((await stale.loadStoredLog(header.id))?.events).toEqual([turnStart(0), turnEnd(1)])
     await stale.close()
     await winner.close()
+  })
+})
+
+describe('SessionPersistenceSqlite live write path', () => {
+  it('routes published session events into the active write handle after the batching window', async () => {
+    const path = await freshDbPath('dsh-sqlite-routed-')
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionPersistenceSqlite, { path })
+    const session = ctx.sessions.create(SessionId('routed'))
+    const handle = await ctx.sessionPersistence.create(session.header)
+    vi.useFakeTimers()
+    try {
+      session.append('turn/start', { turn: 1 })
+      session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+      // One tick short of the window: the routed batch is still buffered only.
+      await vi.advanceTimersByTimeAsync(DEFAULT_WRITE_BATCH_MAX_DELAY_MS - 1)
+      expect((await handle.read()).events).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+    } finally {
+      vi.useRealTimers()
+    }
+    await vi.waitFor(async () => {
+      expect((await handle.read()).events.map(event => event.seq)).toEqual([0, 1])
+    })
+    await handle.close()
+    await ctx.fiber.dispose()
+  })
+
+  it('drains the routed batch immediately on session/flush and on the service barrier', async () => {
+    const path = await freshDbPath('dsh-sqlite-live-flush-')
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionPersistenceSqlite, { path })
+    const flushed = ctx.sessions.create(SessionId('live-flush'))
+    const flushedHandle = await ctx.sessionPersistence.create(flushed.header)
+    flushed.append('turn/start', { turn: 1 })
+    await ctx.sessions.flush(flushed)
+    expect((await flushedHandle.read()).events.map(event => event.seq)).toEqual([0])
+
+    const swept = ctx.sessions.create(SessionId('live-sweep'))
+    const sweptHandle = await ctx.sessionPersistence.create(swept.header)
+    swept.append('turn/start', { turn: 1 })
+    await ctx.sessionPersistence.flush()
+    expect((await sweptHandle.read()).events.map(event => event.seq)).toEqual([0])
+    await flushedHandle.close()
+    await sweptHandle.close()
+    await ctx.fiber.dispose()
+  })
+
+  it('persists nothing for a session without an active write handle', async () => {
+    const path = await freshDbPath('dsh-sqlite-unrouted-')
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionPersistenceSqlite, { path })
+    const session = ctx.sessions.create(SessionId('unrouted'))
+    session.append('turn/start', { turn: 1 })
+    await ctx.sessions.flush(session)
+    await expect(ctx.sessionPersistence.stat(session.id)).resolves.toBeUndefined()
+    await ctx.fiber.dispose()
+  })
+
+  it('drains buffered events through backend teardown', async () => {
+    const path = await freshDbPath('dsh-sqlite-teardown-drain-')
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionPersistenceSqlite, { path })
+    const session = ctx.sessions.create(SessionId('teardown-drains'))
+    const handle = await ctx.sessionPersistence.create(session.header)
+    session.append('turn/start', { turn: 1 })
+
+    // Root disposal closes the still-open handle, which drains before closing.
+    await ctx.fiber.dispose()
+    await expect(handle.append([])).rejects.toThrow(/closed handle/)
+
+    const reopened = await mountSqlite(path)
+    try {
+      const reader = await reopened.persistence.open(SessionId('teardown-drains'), 'read')
+      expect((await reader.read()).events.map(event => event.seq)).toEqual([0])
+      await reader.close()
+    } finally {
+      await reopened.dispose()
+    }
+  })
+
+  it('routes events to a second write handle opened after close', async () => {
+    const path = await freshDbPath('dsh-sqlite-rebind-')
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionPersistenceSqlite, { path })
+    const session = ctx.sessions.create(SessionId('rebind'))
+    const first = await ctx.sessionPersistence.create(session.header)
+    session.append('turn/start', { turn: 1 })
+    await ctx.sessions.flush(session)
+    await first.close()
+
+    const second = await ctx.sessionPersistence.open(session.id, 'write')
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await ctx.sessions.flush(session)
+    expect((await second.read()).events.map(event => event.seq)).toEqual([0, 1])
+    await second.close()
+    await ctx.fiber.dispose()
   })
 })
 
@@ -730,10 +958,14 @@ describe('SessionPersistenceSqlite schema ownership', () => {
       delegation_depth: 2,
       agent_preset: 'minimal',
     }
-    expect(rowToMeta(decodeSessionRow(base))).toMatchObject({
+    expect(storedPhysicalHeaderOf(decodeSessionRow(base))).toEqual({
+      type: 'session',
+      version: 0,
+      id: 'stored-header',
+      createdAt: 1,
       cwd: '/project',
       parentSession: 'parent',
-      isSeeded: true,
+      seedLength: 4,
       origin: 'subagent',
       delegationDepth: 2,
       agentPreset: 'minimal',
@@ -741,6 +973,34 @@ describe('SessionPersistenceSqlite schema ownership', () => {
     expect(() => decodeSessionRow({ ...base, created_at: -1 })).toThrow(/created_at/)
     expect(() => decodeSessionRow({ ...base, origin: 'external' })).toThrow(/origin/)
     expect(() => decodeSessionRow({ ...base, delegation_depth: -1 })).toThrow(/delegation_depth/)
+
+    const current: SessionRow = { ...base, version: SESSION_FORMAT_VERSION }
+    expect(currentHeaderOf(decodeSessionRow(current))).toEqual({
+      version: SESSION_FORMAT_VERSION,
+      id: SessionId('stored-header'),
+      createdAt: 1,
+      cwd: '/project',
+      parentSession: SessionId('parent'),
+      isSeeded: true,
+      origin: 'subagent',
+      delegationDepth: 2,
+      agentPreset: 'minimal',
+    })
+    // Current-format rows carry the seed boolean; only v0/v1 rows carry the cut.
+    expect(storedPhysicalHeaderOf(decodeSessionRow(current))).toEqual({
+      type: 'session',
+      version: SESSION_FORMAT_VERSION,
+      id: 'stored-header',
+      createdAt: 1,
+      cwd: '/project',
+      parentSession: 'parent',
+      origin: 'subagent',
+      delegationDepth: 2,
+      agentPreset: 'minimal',
+      isSeeded: true,
+    })
+    expect(() => currentHeaderOf(decodeSessionRow(base)))
+      .toThrow(/is format v0, expected v3/)
   })
 
   it('rejects malformed SQLite row primitives generically', () => {
@@ -793,12 +1053,12 @@ describe('SessionPersistenceSqlite schema ownership', () => {
     const path = await freshDbPath('dsh-sqlite-metadata-')
     const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
     const header = meta('invalid-metadata')
-    await store.appendBatch(storage(header), [chunk(0)], false)
+    await store.appendBatch(storage(header), [turnStart(0)], false)
     const db = new DatabaseSync(path)
     db.prepare(testSql('update-invalid-session-metadata')).run(header.id)
     db.close()
     await expect(store.list()).rejects.toThrow(/seed_length|origin|delegation_depth/)
-    await expect(store.loadStored(header.id)).rejects.toThrow(/seed_length|origin|delegation_depth/)
+    await expect(store.loadStoredLog(header.id)).rejects.toThrow(/seed_length|origin|delegation_depth/)
     await store.close()
   })
 
@@ -810,20 +1070,31 @@ describe('SessionPersistenceSqlite schema ownership', () => {
 describe('SessionPersistenceSqlite edge behavior', () => {
   it('materializes an explicitly durable empty live session', async () => {
     const path = await freshDbPath('dsh-sqlite-empty-')
-    const ctx = new Context()
-    await ctx.plugin(SessionStore)
-    await ctx.plugin(SessionPersistenceSqlite, { path })
-    const session = ctx.sessions.create(SessionId('empty'), { meta: { cwd: '/workspace' } })
+    const header = meta('empty', '/workspace')
+    const mounted = await mountSqlite(path)
+    try {
+      const handle = await mounted.persistence.create(header)
+      await handle.flush()
+      await handle.close()
 
-    await ctx.sessionPersistence.ensureMaterialized(session)
+      expect((await mounted.persistence.list()).map(snapshot => snapshot.header.id)).toContain(header.id)
+      const reader = await mounted.persistence.open(header.id, 'read')
+      expect((await reader.read()).events).toEqual([])
+      await reader.close()
+    } finally {
+      await mounted.dispose()
+    }
 
-    await expect(ctx.sessionPersistence.list()).resolves.toEqual([session.header])
-    await expect(ctx.sessionPersistence.load(session.id)).resolves.toEqual({
-      meta: session.header,
-      inheritedEventCount: session.inheritedEventCount,
-      events: [],
-    })
-    await ctx.fiber.dispose()
+    const reopened = await mountSqlite(path)
+    try {
+      expect((await reopened.persistence.list()).map(snapshot => snapshot.header.id)).toContain(header.id)
+      expect((await reopened.persistence.stat(header.id))?.header).toMatchObject(header)
+      const reader = await reopened.persistence.open(header.id, 'read')
+      expect((await reader.read()).events).toEqual([])
+      await reader.close()
+    } finally {
+      await reopened.dispose()
+    }
   })
 
   it('keeps a fresh database unopened until the first persistence operation', async () => {
@@ -857,7 +1128,7 @@ describe('SessionPersistenceSqlite edge behavior', () => {
     await expect(stat(untouchedPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('uses constructor defaults and exposes locate and prepare directly', async () => {
+  it('constructs the provider directly and serves the handle API with constructor defaults', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
     let persistence!: SessionPersistenceSqlite
@@ -866,13 +1137,12 @@ describe('SessionPersistenceSqlite edge behavior', () => {
     }, { inject: ['sessions'] }))
 
     const header = meta('direct-provider')
-    const events = chunkLog(3)
-    expect(persistence.locate(header)).toBeUndefined()
-    await persistence.create(header)
-    await persistence.append(header.id, events)
-    const preparation = await persistence.prepare(header.id)
-    expect(preparation.session.header).toEqual(header)
-    preparation[Symbol.dispose]()
+    const events = oneTurnLog()
+    const handle = await persistence.create(header)
+    await handle.append(events)
+    expect((await handle.read()).events).toEqual(events)
+    expect((await persistence.stat(header.id))?.header).toMatchObject(header)
+    await handle.close()
     await ctx.fiber.dispose()
   })
 
@@ -885,7 +1155,7 @@ describe('SessionPersistenceSqlite edge behavior', () => {
     const header = meta('empty-store')
     await store.appendBatch(storage(header), [], false)
     await store.commitRepair(storage(header), undefined, [])
-    expect(await store.readStoredRevision(header.id)).toBeUndefined()
+    expect(await store.hasSession(header.id)).toBe(false)
     await expect(store.commitRepair(storage(header), 0, [])).rejects.toThrow(/metadata row is missing/)
     await store.close()
   })
@@ -894,19 +1164,19 @@ describe('SessionPersistenceSqlite edge behavior', () => {
     const path = await freshDbPath('dsh-sqlite-repair-validation-')
     const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
     const header = meta('repair-validation')
-    await store.appendBatch(storage(header), [chunk(0)], false)
+    await store.appendBatch(storage(header), [turnStart(0)], false)
     const db = new DatabaseSync(path)
     db.prepare(testSql('insert-corrupt-event')).run(header.id, 1, 'assistant/chunk', 2, '{not json', 0)
     db.close()
-    await expect(store.commitRepair(storage(header), undefined, [chunk(1)])).rejects.toThrow(/omitted current torn tail/)
+    await expect(store.commitRepair(storage(header), undefined, [turnEnd(1)])).rejects.toThrow(/omitted current torn tail/)
     await store.commitRepair(storage(header), 1, [])
-    await expect(store.commitRepair(storage(header), undefined, [chunk(2)])).rejects.toThrow(/closer starts at seq 2/)
+    await expect(store.commitRepair(storage(header), undefined, [turnEnd(2)])).rejects.toThrow(/closer starts at seq 2/)
 
     const cleared = new DatabaseSync(path)
     cleared.prepare(testSql('delete-session-events')).run(header.id)
     cleared.close()
-    await store.commitRepair(storage(header), undefined, [chunk(0)])
-    expect((await store.loadStored(header.id))?.events).toEqual([chunk(0)])
+    await store.commitRepair(storage(header), undefined, [turnStart(0)])
+    expect((await store.loadStoredLog(header.id))?.events).toEqual([turnStart(0)])
     await store.close()
   })
 
@@ -914,14 +1184,50 @@ describe('SessionPersistenceSqlite edge behavior', () => {
     const path = await freshDbPath('dsh-sqlite-tail-')
     const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
     const header = meta('invalid-tail')
-    await store.appendBatch(storage(header), [chunk(0)], false)
+    await store.appendBatch(storage(header), [turnStart(0)], false)
     const db = new DatabaseSync(path)
     db.prepare(testSql('insert-corrupt-event'))
       .run(header.id, 1, 'assistant/chunk', 2, '{not json', null)
     db.close()
 
-    await expect(store.appendBatch(storage(header), [chunk(2)], true)).rejects.toThrow(/invalid physical tail/)
+    await expect(store.appendBatch(storage(header), [turnEnd(2)], true)).rejects.toThrow(/invalid physical tail/)
     await store.close()
+  })
+
+  it('publishes a historical session on write open', async () => {
+    const path = await writeLegacyV0Fixture()
+    const expected = legacyMigratedLog()
+    const mounted = await mountSqlite(path)
+    try {
+      const writer = await mounted.persistence.open(LEGACY_ID, 'write')
+      expect((await writer.read()).events).toEqual(expected)
+      await writer.close()
+    } finally {
+      await mounted.dispose()
+    }
+
+    const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
+    expect((await store.loadStoredLog(LEGACY_ID))?.storedVersion).toBe(SESSION_FORMAT_VERSION)
+    await store.close()
+
+    const published = new DatabaseSync(path)
+    expect(published.prepare(testSql('select-session-version')).get(LEGACY_ID))
+      .toEqual({ version: SESSION_FORMAT_VERSION })
+    expect((published.prepare(testSql('select-event-rows')).all(LEGACY_ID) as unknown as PhysicalRow[])
+      .every(row => row.ignorable === null)).toBe(true)
+    expect(published.prepare(testSql('count-packed-events')).get()).toEqual({ count: 0 })
+    published.close()
+
+    // A write open that appends nothing still leaves the published log intact
+    // for the next process to read.
+    const reopened = await mountSqlite(path)
+    try {
+      const reader = await reopened.persistence.open(LEGACY_ID, 'read')
+      expect((await reader.read()).events).toEqual(expected)
+      await reader.close()
+    } finally {
+      await reopened.dispose()
+    }
   })
 
   it('rejects missing and empty store identities', async () => {

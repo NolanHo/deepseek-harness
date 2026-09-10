@@ -214,13 +214,15 @@
     # to the @deepseek-ai/dsh-*-sandbox packages.
     - id: sandbox
       name: '@deepseek-ai/dsh-sandbox-local'
-      disabled: true
 
+    # Fork patch (FORK_SURFACE.md): upstream 0.1.5's workspace-files and
+    # deliverables entries require the sandboxPolicy service, so the row can no
+    # longer stay disabled; the policy is pinned to danger-full-access, which is
+    # this deployment's only mode (the executor rows below stay local).
     - id: sandbox-policy
       name: '@deepseek-ai/dsh-sandbox-policy'
-      disabled: true
       config:
-        mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+        mode: danger-full-access
         workspaceRoot: !!js process.cwd()
 
     - id: bash-sandbox

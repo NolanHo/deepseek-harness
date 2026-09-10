@@ -24,6 +24,9 @@
       "path": "../../llm/llm"
     },
     {
+      "path": "../session-format-catalog"
+    },
+    {
       "path": "../session-persistence"
     },
     {

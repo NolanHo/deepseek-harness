@@ -11,6 +11,7 @@ import {
   MAX_PACKED_ROW_MEMBERS,
   packChunkRuns,
   type StorageRecord,
+  type StoredChunkEvent,
 } from '../src/codec.ts'
 import {
   bindRecord,
@@ -19,7 +20,8 @@ import {
 } from '../src/compression.ts'
 import type { EventRow } from '../src/schema.ts'
 
-function chunk(seq: number, text = `token-${seq}`): SessionEvent {
+/** One retired top-level delta event, the only shape schema-20 packs. */
+function chunk(seq: number, text = `token-${seq}`): StoredChunkEvent {
   return {
     type: 'assistant/chunk',
     seq: SessionSeq(seq),
@@ -32,8 +34,13 @@ function chunk(seq: number, text = `token-${seq}`): SessionEvent {
   }
 }
 
-function event(seq: number, time: number, value: StreamChunk, turn = 1, step = 1): SessionEvent {
+function event(seq: number, time: number, value: StreamChunk, turn = 1, step = 1): StoredChunkEvent {
   return { type: 'assistant/chunk', seq: SessionSeq(seq), time, data: { turn, step, chunk: value } }
+}
+
+/** The packer's declared input is the current vocabulary; these fixtures predate it. */
+function packChunks(events: readonly StoredChunkEvent[]): StorageRecord[] {
+  return packChunkRuns(events as unknown as readonly SessionEvent[])
 }
 
 function row(record: StorageRecord): EventRow {
@@ -58,7 +65,7 @@ describe('SQLite compression', () => {
 
   it('stores a 100-member run in one row and restores every logical event', () => {
     const events = Array.from({ length: 100 }, (_, index) => chunk(index))
-    const records = packChunkRuns(events)
+    const records = packChunks(events)
     expect(records).toHaveLength(1)
     expect(records[0]?.type).toBe('text-chunks')
     expect(scanRows(records.map(row)).preserved).toEqual(events)
@@ -66,12 +73,12 @@ describe('SQLite compression', () => {
 
   it('partitions long and large runs within schema-owned row limits', () => {
     const long = Array.from({ length: MAX_PACKED_ROW_MEMBERS + 3 }, (_, index) => chunk(index))
-    const longRecords = packChunkRuns(long)
+    const longRecords = packChunks(long)
     expect(longRecords).toHaveLength(2)
     expect(scanRows(longRecords.map(row)).preserved).toEqual(long)
 
     const large = Array.from({ length: 4 }, (_, index) => chunk(index, 'x'.repeat(300_000)))
-    const largeRecords = packChunkRuns(large)
+    const largeRecords = packChunks(large)
     expect(largeRecords).toHaveLength(2)
     for (const record of largeRecords) {
       if (record.type.endsWith('-chunks')) {
@@ -81,10 +88,10 @@ describe('SQLite compression', () => {
     expect(scanRows(largeRecords.map(row)).preserved).toEqual(large)
 
     const individuallyLarge = Array.from({ length: 3 }, (_, index) => chunk(index, 'x'.repeat(400_000)))
-    expect(packChunkRuns(individuallyLarge)).toEqual(individuallyLarge)
+    expect(packChunks(individuallyLarge)).toEqual(individuallyLarge)
 
     const byteBound = Array.from({ length: 10 }, (_, index) => chunk(index, 'x'.repeat(150_000)))
-    const byteBoundRecords = packChunkRuns(byteBound)
+    const byteBoundRecords = packChunks(byteBound)
     expect(byteBoundRecords.length).toBeGreaterThan(1)
     expect(scanRows(byteBoundRecords.map(row)).preserved).toEqual(byteBound)
   })
@@ -99,7 +106,7 @@ describe('SQLite compression', () => {
         type: 'tool-call-delta', index: 3, id: ToolCallId('unnamed'), argumentsDelta: `${seq}`,
       })),
     ]
-    const records = packChunkRuns(events)
+    const records = packChunks(events)
     expect(records.map(record => record.type)).toEqual([
       'reasoning-chunks', 'tool-call-chunks', 'tool-call-chunks',
     ])
@@ -109,12 +116,12 @@ describe('SQLite compression', () => {
   it('keeps every off-format delta scalar and splits incompatible runs', () => {
     const malformed = (seq: number, data: unknown): SessionEvent => ({
       type: 'assistant/chunk', seq, time: 10 + seq, data,
-    } as SessionEvent)
+    } as unknown as SessionEvent)
     const values: SessionEvent[] = [
       { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       { ...chunk(1), extra: true } as unknown as SessionEvent,
       { ...chunk(0), seq: -1 } as unknown as SessionEvent,
-      { ...chunk(3), time: 1.5 },
+      { ...chunk(3), time: 1.5 } as unknown as SessionEvent,
       malformed(4, 'data'),
       malformed(5, { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'x' }, extra: 1 }),
       malformed(6, { turn: '1', step: 1, chunk: { type: 'text-delta', index: 0, text: 'x' } }),
@@ -140,7 +147,7 @@ describe('SQLite compression', () => {
       ...seq === 2 ? {} : { name: 'write' }, argumentsDelta: 'x',
     }))
     for (const events of [gap, step, block, unsafeTime, toolName]) {
-      expect(packChunkRuns(events)).toEqual(events)
+      expect(packChunks(events)).toEqual(events)
     }
   })
 
@@ -188,7 +195,7 @@ describe('SQLite compression', () => {
   })
 
   it('rejects surface columns on packed rows', () => {
-    const packed = row(packChunkRuns([chunk(0), chunk(1), chunk(2)])[0]!)
+    const packed = row(packChunks([chunk(0), chunk(1), chunk(2)])[0]!)
     const invalid: EventRow[] = [
       { ...packed, source_event_seqs: Buffer.alloc(0) },
       { ...packed, surface_op: '"append"' },
@@ -392,7 +399,7 @@ describe('SQLite compression', () => {
     expect(() => scanRows([start, skipped, end])).toThrow(/invalid committed physical row at seq 2/)
 
     const malformed = {
-      ...row(packChunkRuns([chunk(0), chunk(1), chunk(2)])[0]!),
+      ...row(packChunks([chunk(0), chunk(1), chunk(2)])[0]!),
       data: '{not json',
     }
     const committedEnd = row({
@@ -416,5 +423,20 @@ describe('SQLite compression', () => {
       ignorable: 0,
     }
     expect(scanRows([malformed])).toEqual({ preserved: [], tornFrom: 0 })
+  })
+
+  it('serves the packed predecessor a scalar row overlaps', () => {
+    const packed = row(packChunks([chunk(0), chunk(1), chunk(2)])[0]!)
+    const overlapping = row({
+      type: 'assistant/chunk',
+      seq: SessionSeq(1),
+      time: 1_001,
+      data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'overlap' } },
+    })
+
+    // The scan trusts the packed row's represented span and treats the
+    // physically later scalar row as an uncommitted duplicate.
+    expect(scanRows([packed, overlapping], 0))
+      .toEqual({ preserved: [chunk(0), chunk(1), chunk(2)], tornFrom: 1 })
   })
 })

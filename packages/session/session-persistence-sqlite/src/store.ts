@@ -1,6 +1,7 @@
 /**
  * SQLite storage primitives: transactional append-batch packing, physical
- * reads, schema validation, revisions, repair, and lifecycle closure.
+ * reads through the released format restore, schema validation, revisions,
+ * repair, and lifecycle closure.
  * @module @deepseek-ai/dsh-session-persistence-sqlite/store
  */
 
@@ -10,40 +11,36 @@ import { lstat, mkdir, open } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
 import {
+  SESSION_FORMAT_VERSION,
+  SessionId,
   SessionLogOffset,
   type SessionEvent,
   type SessionHeader,
-  type SessionId,
-  type SessionLogOffset as SessionLogOffsetType,
 } from '@deepseek-ai/dsh-session'
 import {
+  SessionPersistenceCorruptionError,
   SessionPersistenceRevision,
-  type PersistenceBackend,
-  type SessionPersistenceRevision as PersistenceRevision,
-  type SessionPersistenceSnapshot,
+  validateStoredEvents,
   type SessionStorageMetadata,
-  type StoredPrefix,
-  type StoredSuffix,
 } from '@deepseek-ai/dsh-session-persistence'
-import {
-  MAX_PACKED_ROW_MEMBERS,
-  packChunkRuns,
-} from './codec.ts'
+import { type StoredLogicalEvent, MAX_PACKED_ROW_MEMBERS, packChunkRuns } from './codec.ts'
 import {
   bindRecord,
   decodeRow,
   scanRows,
   type BoundRecord,
 } from './compression.ts'
+import { restoreStoredHeader, restoreStoredLog } from './restore.ts'
 import {
   type EventRow,
   type JournalMode,
+  currentHeaderOf,
   decodeEventRow,
   decodeSessionRow,
   decodeStoreIdentity,
   openDatabase,
+  storedPhysicalHeaderOf,
   validateSchemaForMutation,
-  rowToMeta,
   type SessionRow,
 } from './schema.ts'
 import { sql } from './sql.ts'
@@ -55,8 +52,38 @@ export interface SqliteStoreOptions {
   readonly busyTimeoutMs: number
 }
 
-/** SQLite implementation of the coordinator's physical backend hooks. */
-export class SqliteStore implements PersistenceBackend<number> {
+/** One stored log restored and validated to the current logical format. */
+export interface SqliteStoredLog {
+  /** Validated immutable current-format header. */
+  readonly meta: SessionHeader
+  /** Exact fork-inherited prefix length in current coordinates. */
+  readonly inheritedEventCount: SessionLogOffset
+  /** Validated, deeply frozen current-format events. */
+  readonly events: readonly SessionEvent[]
+  /** Source-qualified revision token for this stored log. */
+  readonly revision: SessionPersistenceRevision
+  /** The stored physical header version this log was restored from. */
+  readonly storedVersion: number
+  /** Physical deletion base for a torn tail, when the stored log ends torn. */
+  readonly tornFrom?: number
+}
+
+/** One validated current-format suffix read for the seek-capable fork surface. */
+export interface SqliteStoredSuffix {
+  readonly meta: SessionHeader
+  readonly inheritedEventCount: SessionLogOffset
+  /** Valid contiguous current-format events with `seq >= fromSeq`. */
+  readonly events: readonly SessionEvent[]
+}
+
+/** One lightweight stored-session observation: migrated header plus revision. */
+export interface SqliteStoredSnapshot {
+  readonly header: SessionHeader
+  readonly revision: SessionPersistenceRevision
+}
+
+/** SQLite implementation of the physical storage hooks behind the session handle. */
+export class SqliteStore {
   readonly name = 'session-persistence-sqlite'
   private db!: DatabaseSync
   private databaseConstructor!: typeof import('node:sqlite')['DatabaseSync']
@@ -134,7 +161,15 @@ export class SqliteStore implements PersistenceBackend<number> {
     }
   }
 
-  async loadStored(id: SessionId, signal?: AbortSignal): Promise<StoredPrefix<number> | undefined> {
+  /**
+   * Read, restore, and validate one stored session as the current logical log.
+   * A torn physical tail is never part of the returned events; its deletion
+   * base is reported for the write path.
+   * @param id - the stored session to load.
+   * @param signal - optional cancellation for the metadata and event reads.
+   * @returns the restored log, or `undefined` when the session is absent.
+   */
+  async loadStoredLog(id: SessionId, signal?: AbortSignal): Promise<SqliteStoredLog | undefined> {
     await this.observe(signal)
     const snapshot = this.readTransaction(() => {
       const row = this.rowFor(id)
@@ -145,14 +180,116 @@ export class SqliteStore implements PersistenceBackend<number> {
     signal?.throwIfAborted()
     if (snapshot === undefined) return undefined
     const scanned = scanRows(snapshot.eventRows)
+    const restored = restoreStoredLog(storedPhysicalHeaderOf(snapshot.row), scanned.preserved, id)
+    if (snapshot.row.version === SESSION_FORMAT_VERSION
+      && Number(restored.inheritedEventCount) !== (snapshot.row.seed_length ?? 0)) {
+      throw new SessionPersistenceCorruptionError(
+        `session "${id}" seed cut column disagrees with its log (${snapshot.row.seed_length ?? 0} vs ${restored.inheritedEventCount})`,
+        { cause: new Error('stored inherited cut mismatch') },
+      )
+    }
     return {
-      ...this.storageForRow(snapshot.row),
-      events: scanned.preserved,
+      ...restored,
       revision: sqliteRevision(this.storeIdentity, snapshot.row),
-      ...scanned.tornFrom === undefined ? {} : { tornMarker: scanned.tornFrom },
+      storedVersion: snapshot.row.version,
+      ...scanned.tornFrom === undefined ? {} : { tornFrom: scanned.tornFrom },
     }
   }
 
+  /**
+   * Read the stored events from `fromSeq` onward. Current-format sessions use
+   * the physical suffix seek; historical sessions restore the whole log once
+   * and slice, because a suffix alone cannot fold legacy chunk runs.
+   * @param id - the stored session to read.
+   * @param fromSeq - first event offset to include.
+   * @param signal - optional cancellation for backend read work.
+   * @returns the validated suffix, or `undefined` when the session is absent.
+   */
+  async loadStoredFrom(
+    id: SessionId,
+    fromSeq: number,
+    signal?: AbortSignal,
+  ): Promise<SqliteStoredSuffix | undefined> {
+    await this.observe(signal)
+    const row = this.rowFor(id)
+    signal?.throwIfAborted()
+    if (row === undefined) return undefined
+    if (row.version !== SESSION_FORMAT_VERSION) {
+      const full = await this.loadStoredLog(id, signal)
+      if (full === undefined) return undefined
+      return {
+        meta: full.meta,
+        inheritedEventCount: full.inheritedEventCount,
+        events: full.events.filter(event => event.seq >= fromSeq),
+      }
+    }
+    const snapshot = this.readTransaction(() => ({
+      row,
+      ...this.physicalSpanFrom(this.sessionKey(id), fromSeq),
+    }))
+    signal?.throwIfAborted()
+    const { preserved } = scanRows(snapshot.eventRows, snapshot.base)
+    const meta = currentHeaderOf(row)
+    const events = preserved.filter(event => event.seq >= fromSeq) as SessionEvent[]
+    validateStoredEvents(meta, events)
+    return {
+      meta,
+      inheritedEventCount: SessionLogOffset(row.seed_length ?? 0),
+      events,
+    }
+  }
+
+  /** Whether a stored session row exists; opens the database on first use. */
+  async hasSession(id: SessionId, signal?: AbortSignal): Promise<boolean> {
+    await this.observe(signal)
+    const exists = this.rowFor(id) !== undefined
+    signal?.throwIfAborted()
+    return exists
+  }
+
+  /**
+   * Observe one stored session header plus its source-qualified revision
+   * without reading event rows.
+   * @param id - the stored session to observe.
+   * @param signal - optional cancellation before or after the metadata query.
+   * @returns the migrated header and revision, or `undefined` when absent.
+   */
+  async stat(id: SessionId, signal?: AbortSignal): Promise<SqliteStoredSnapshot | undefined> {
+    await this.observe(signal)
+    const row = this.rowFor(id)
+    signal?.throwIfAborted()
+    if (row === undefined) return undefined
+    return {
+      header: restoreStoredHeader(storedPhysicalHeaderOf(row), id),
+      revision: sqliteRevision(this.storeIdentity, row),
+    }
+  }
+
+  /**
+   * List every stored session with its migrated header and source-qualified
+   * revision, without loading event rows.
+   * @param signal - optional cancellation before or after the metadata query.
+   * @returns one snapshot per stored session.
+   */
+  async list(signal?: AbortSignal): Promise<SqliteStoredSnapshot[]> {
+    await this.observe(signal)
+    const rows = this.sessionRows()
+    signal?.throwIfAborted()
+    return rows.map(row => ({
+      header: restoreStoredHeader(storedPhysicalHeaderOf(row), SessionId(row.id)),
+      revision: sqliteRevision(this.storeIdentity, row),
+    }))
+  }
+
+  /**
+   * Answer the indexed Nth append-origin user-message cut; see the fork's
+   * page-boundary surface. The store answers in one scan.
+   * @param id - the stored session to seek.
+   * @param maxMessages - message count of the page cut.
+   * @param beforeSeq - optional exclusive upper bound for older-page seeks.
+   * @param signal - optional cancellation before or after the query.
+   * @returns the cut seq, or `undefined` when no such message exists.
+   */
   async userMessageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined> {
     await this.observe(signal)
     const snapshot = this.readTransaction(() => {
@@ -170,36 +307,16 @@ export class SqliteStore implements PersistenceBackend<number> {
     return snapshot ?? undefined
   }
 
-  async readStoredRevision(id: SessionId, signal?: AbortSignal): Promise<PersistenceRevision | undefined> {
-    await this.observe(signal)
-    const row = this.rowFor(id)
-    signal?.throwIfAborted()
-    return row === undefined ? undefined : sqliteRevision(this.storeIdentity, row)
-  }
-
-  async loadStoredFrom(
-    id: SessionId,
-    fromSeq: SessionLogOffsetType,
-    signal?: AbortSignal,
-  ): Promise<StoredSuffix | undefined> {
-    await this.observe(signal)
-    const snapshot = this.readTransaction(() => {
-      const row = this.rowFor(id)
-      if (row === undefined) return undefined
-      return { row, ...this.physicalSpanFrom(this.sessionKey(id), fromSeq) }
-    })
-    signal?.throwIfAborted()
-    if (snapshot === undefined) return undefined
-    const { preserved } = scanRows(snapshot.eventRows, snapshot.base)
-    return {
-      ...this.storageForRow(snapshot.row),
-      events: preserved.filter(event => event.seq >= fromSeq),
-    }
-  }
-
+  /**
+   * Durably append one contiguous batch; lazily materializes the session row
+   * on the first write.
+   * @param storage - the session's current-format metadata.
+   * @param events - the contiguous batch, in seq order.
+   * @param isMaterialized - whether the session row already exists.
+   */
   async appendBatch(
     storage: SessionStorageMetadata,
-    events: readonly SessionEvent[],
+    events: readonly StoredLogicalEvent[],
     isMaterialized: boolean,
   ): Promise<void> {
     await this.open()
@@ -211,13 +328,13 @@ export class SqliteStore implements PersistenceBackend<number> {
       const tailRows = this.tailRows(sessionKey)
       const currentLast = this.logicalLastEvent(storage.meta.id, tailRows)
       const expected = currentLast === undefined ? 0 : currentLast.seq + 1
-      const first = events[0] as SessionEvent
+      const first = events[0] as StoredLogicalEvent
       if (first.seq !== expected) {
         throw new Error(`session ${storage.meta.id} append starts at seq ${first.seq}, stored next seq is ${expected}`)
       }
 
       const insert = this.insertStatement()
-      for (const record of packChunkRuns(events)) this.insertRecord(insert, sessionKey, bindRecord(record))
+      for (const record of packChunkRuns(events as readonly SessionEvent[])) this.insertRecord(insert, sessionKey, bindRecord(record))
       this.incrementRevision(storage.meta.id)
       this.db.exec(sql('commit'))
     } catch (error: unknown) {
@@ -225,6 +342,7 @@ export class SqliteStore implements PersistenceBackend<number> {
     }
   }
 
+  /** Durably materialize a header-only row for an explicitly flushed empty session. */
   async materializeHeader(storage: SessionStorageMetadata): Promise<void> {
     await this.open()
     this.db.exec(sql('begin-immediate'))
@@ -238,10 +356,46 @@ export class SqliteStore implements PersistenceBackend<number> {
     }
   }
 
+  /**
+   * Publish one restored historical log as the stored current format: replace
+   * every event row with the migrated current-format events and stamp the
+   * session row's version. Granting write access to a historical session
+   * publishes it first, so later reads never mix stored-format generations.
+   * @param storage - the migrated current-format metadata.
+   * @param events - the migrated current-format log, in seq order.
+   */
+  async publishStoredLog(storage: SessionStorageMetadata, events: readonly SessionEvent[]): Promise<void> {
+    await this.open()
+    if (events.length === 0) {
+      await this.materializeHeader(storage)
+      return
+    }
+    this.db.exec(sql('begin-immediate'))
+    try {
+      validateSchemaForMutation(this.databaseConstructor, this.db, this.databasePath)
+      const sessionKey = this.sessionKey(storage.meta.id)
+      this.writeRow(storage)
+      this.db.prepare(sql('delete-events-from')).run(sessionKey, 0)
+      const insert = this.insertStatement()
+      for (const record of packChunkRuns(events)) this.insertRecord(insert, sessionKey, bindRecord(record))
+      this.incrementRevision(storage.meta.id)
+      this.db.exec(sql('commit'))
+    } catch (error: unknown) {
+      this.rollback(error, 'publish stored migration')
+    }
+  }
+
+  /**
+   * Durably truncate a torn physical tail and optionally append repair
+   * closers, inside one transaction.
+   * @param storage - the session's current-format metadata.
+   * @param tornMarker - physical deletion base, or `undefined` to skip truncation.
+   * @param closers - contiguous repair events appended after truncation.
+   */
   async commitRepair(
     storage: SessionStorageMetadata,
     tornMarker: number | undefined,
-    closers: readonly SessionEvent[],
+    closers: readonly StoredLogicalEvent[],
   ): Promise<void> {
     await this.open()
     if (tornMarker === undefined && closers.length === 0) return
@@ -265,7 +419,7 @@ export class SqliteStore implements PersistenceBackend<number> {
       if (closers.length > 0) {
         const expected = current.preserved.at(-1)?.seq === undefined
           ? 0
-          : (current.preserved.at(-1) as SessionEvent).seq + 1
+          : (current.preserved.at(-1) as StoredLogicalEvent).seq + 1
         if (closers[0]?.seq !== expected) {
           throw new Error(`session ${storage.meta.id} repair is stale: closer starts at seq ${closers[0]?.seq}, stored next seq is ${expected}`)
         }
@@ -277,28 +431,6 @@ export class SqliteStore implements PersistenceBackend<number> {
     } catch (error: unknown) {
       this.rollback(error, 'repair')
     }
-  }
-
-  async list(signal?: AbortSignal): Promise<SessionHeader[]> {
-    await this.observe(signal)
-    const rows = this.sessionRows()
-    signal?.throwIfAborted()
-    return rows.map(rowToMeta)
-  }
-
-  /**
-   * Return every materialized header with its source-qualified revision.
-   * @param signal - optional cancellation before or after the metadata query.
-   * @returns stored headers and revisions without loading event rows.
-   */
-  async listSnapshots(signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]> {
-    await this.observe(signal)
-    const rows = this.sessionRows()
-    signal?.throwIfAborted()
-    return rows.map(row => ({
-      header: rowToMeta(row),
-      revision: sqliteRevision(this.storeIdentity, row),
-    }))
   }
 
   async close(): Promise<void> {
@@ -315,14 +447,6 @@ export class SqliteStore implements PersistenceBackend<number> {
   private rowFor(id: SessionId): SessionRow | undefined {
     const value = this.db.prepare(sql('select-session')).get(id)
     return value === undefined ? undefined : decodeSessionRow(value)
-  }
-
-  /** Reconstruct storage metadata (header plus fork cut) from one durable row. */
-  private storageForRow(row: SessionRow): SessionStorageMetadata {
-    return {
-      meta: rowToMeta(row),
-      inheritedEventCount: SessionLogOffset(row.seed_length ?? 0),
-    }
   }
 
   private sessionKey(id: SessionId): number {
@@ -398,7 +522,7 @@ export class SqliteStore implements PersistenceBackend<number> {
     return { base, eventRows }
   }
 
-  private logicalLastEvent(id: SessionId, tailRows: readonly EventRow[]): SessionEvent | undefined {
+  private logicalLastEvent(id: SessionId, tailRows: readonly EventRow[]): StoredLogicalEvent | undefined {
     if (tailRows.length === 0) return undefined
     const { preserved, tornFrom } = scanRows(tailRows, (tailRows[0] as EventRow).seq)
     if (tornFrom !== undefined) throw new Error(`session ${id} has an invalid physical tail at seq ${tornFrom}`)
@@ -442,7 +566,7 @@ export class SqliteStore implements PersistenceBackend<number> {
   }
 }
 
-function sqliteRevision(storeIdentity: string, row: SessionRow): PersistenceRevision {
+function sqliteRevision(storeIdentity: string, row: SessionRow): SessionPersistenceRevision {
   return SessionPersistenceRevision(
     `${storeIdentity}:incarnation:${row.incarnation}:revision:${row.revision}`,
   )

@@ -15,6 +15,7 @@ import {
   type ChunkRow,
   MAX_PACKED_DATA_BYTES,
   type StorageRecord,
+  type StoredLogicalEvent,
 } from './codec.ts'
 import type { EventRow } from './schema.ts'
 
@@ -57,11 +58,11 @@ function isChunkTag(value: string): value is ChunkTag {
 }
 
 /**
- * Decode one physical SQLite row into its complete logical event span.
+ * Decode one physical SQLite row into its complete stored-format logical event span.
  * @param row - detached SQLite event row.
  * @returns every logical event represented by the row.
  */
-export function decodeRow(row: EventRow): SessionEvent[] {
+export function decodeRow(row: EventRow): StoredLogicalEvent[] {
   if (row.ignorable !== PACKED_ROW_SENTINEL) return [decodeScalarRow(row)]
   if (!isChunkTag(row.type)) {
     throw new Error(`malformed ${row.type} storage row: packed discriminator requires a chunk tag`)
@@ -95,7 +96,12 @@ export function bindRecord(record: StorageRecord): BoundRecord {
     }
   }
   const event = record
-  const surface = event as SessionEvent<SurfaceEventType>
+  // Scalar rows may carry the optional surface envelope on any event type;
+  // the structural cast keeps the runtime presence checks meaningful.
+  const surface = event as SessionEvent & {
+    readonly sourceEventSeqs?: readonly number[]
+    readonly surfaceOp?: unknown
+  }
   return {
     seq: event.seq,
     type: event.type,
@@ -265,26 +271,22 @@ function isChunkRow(record: StorageRecord): record is ChunkRow {
   return isChunkTag(record.type) && 'seq0' in record && !('seq' in record)
 }
 
-function decodeScalarRow(row: EventRow): SessionEvent {
-  const surfaceFields = {
-    ...row.source_event_seqs === null
-      ? {}
-      : {
-        sourceEventSeqs: decodeSourceEventSeqs(row.source_event_seqs, row.seq)
-          .map(seq => SessionSeq(seq)),
-      },
-    ...row.surface_op === null
-      ? {}
-      : { surfaceOp: JSON.parse(row.surface_op) as SessionEvent<SurfaceEventType>['surfaceOp'] },
-  }
+function decodeScalarRow(row: EventRow): StoredLogicalEvent {
+  const sourceEventSeqs = row.source_event_seqs === null
+    ? undefined
+    : decodeSourceEventSeqs(row.source_event_seqs, row.seq).map(seq => SessionSeq(seq))
+  const surfaceOp = row.surface_op === null
+    ? undefined
+    : JSON.parse(row.surface_op) as SessionEvent<SurfaceEventType>['surfaceOp']
   return {
-    type: row.type as SessionEvent['type'],
+    type: row.type as StoredLogicalEvent['type'],
     seq: SessionSeq(row.seq),
     time: row.time,
-    data: JSON.parse(decodeData(row.data)) as SessionEvent['data'],
-    ...surfaceFields,
+    data: JSON.parse(decodeData(row.data)) as StoredLogicalEvent['data'],
+    ...sourceEventSeqs === undefined ? {} : { sourceEventSeqs },
+    ...surfaceOp === undefined ? {} : { surfaceOp },
     ...row.ignorable === 1 ? { ignorable: true as const } : {},
-  } as SessionEvent
+  } as StoredLogicalEvent
 }
 
 /**
@@ -298,7 +300,7 @@ function decodeScalarRow(row: EventRow): SessionEvent {
 export function scanRows(
   rows: readonly EventRow[],
   base = 0,
-): { preserved: SessionEvent[]; tornFrom?: number } {
+): { preserved: StoredLogicalEvent[]; tornFrom?: number } {
   let lastTurnEndRow = -1
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     try {
@@ -311,11 +313,11 @@ export function scanRows(
     }
   }
 
-  const preserved: SessionEvent[] = []
+  const preserved: StoredLogicalEvent[] = []
   let expected = base
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     const physical = rows[rowIndex] as EventRow
-    let logicalEvents: SessionEvent[] | undefined
+    let logicalEvents: StoredLogicalEvent[] | undefined
     try {
       logicalEvents = decodeRow(physical)
     } catch {

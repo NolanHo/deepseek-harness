@@ -7,7 +7,9 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { MOBILE_VIEWPORT } from '../columns.ts'
+// Fork patch (FORK_SURFACE.md): upstream 0.1.5 rewrote columns.ts without the
+// fork's phone breakpoint; the fork module owns its own value now.
+const MOBILE_VIEWPORT = 768
 import css from '../AppFrame.module.css'
 
 /** Owner-prop width fed to the sidebar occupant inside the mobile drawer (inside the sidebar contract range). */

@@ -11,7 +11,25 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 /* jscpd:ignore-start -- schema 20 deliberately owns a frozen physical codec;
  * importing or sharing the JSONL codec would let that format mutate this database interpreter. */
 type DeltaKind = 'text-delta' | 'reasoning-delta' | 'tool-call-delta'
-type DeltaEvent = SessionEvent<'assistant/chunk'>
+
+/**
+ * One top-level assistant chunk event: retired logical vocabulary retained by
+ * this physical format. Schema-20 packed rows represent runs of these events;
+ * the released format catalog folds them into `assistant/message` streams
+ * when a stored log restores to the current format.
+ */
+export interface StoredChunkEvent {
+  readonly type: 'assistant/chunk'
+  readonly seq: SessionSeq
+  readonly time: number
+  readonly data: { readonly turn: number; readonly step: number; readonly chunk: StreamChunk }
+  readonly ignorable?: true
+}
+
+/** One logical event a schema-20 row may represent: current-format events plus legacy chunk events. */
+export type StoredLogicalEvent = SessionEvent | StoredChunkEvent
+
+type DeltaEvent = StoredChunkEvent
 
 interface RunDataBase {
   readonly turn: number
@@ -37,7 +55,7 @@ export type ChunkRow =
   | { readonly type: 'tool-call-chunks'; readonly seq0: number; readonly time0: number; readonly data: ToolCallRunData }
 
 /** One scalar event or schema-20 packed physical record. */
-export type StorageRecord = SessionEvent | ChunkRow
+export type StorageRecord = SessionEvent | StoredChunkEvent | ChunkRow
 
 /** Minimum eligible members in a packed physical record. */
 export const MIN_PACKED_ROW_MEMBERS = 3
@@ -54,7 +72,7 @@ function hasExactKeys(value: object, keys: readonly string[]): boolean {
   return Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 }
 
-function classify(event: SessionEvent): DeltaKind | undefined {
+function classify(event: StoredLogicalEvent): DeltaKind | undefined {
   if (event.type !== 'assistant/chunk') return undefined
   if (!hasExactKeys(event, ['type', 'seq', 'time', 'data'])) return undefined
   if (!Number.isSafeInteger(event.seq) || event.seq < 0 || !Number.isSafeInteger(event.time)) return undefined
@@ -196,7 +214,7 @@ export function packChunkRuns(events: readonly SessionEvent[]): StorageRecord[] 
       out.push(event)
       continue
     }
-    const delta = event as DeltaEvent
+    const delta = event as unknown as DeltaEvent
     const previous = run.at(-1)
     if (nextKind === kind && previous !== undefined && continues(previous, delta, nextKind)) {
       run.push(delta)
@@ -274,9 +292,9 @@ function validateRow(
   return value as unknown as ChunkRow
 }
 
-function expandRow(row: ChunkRow): SessionEvent[] {
+function expandRow(row: ChunkRow): StoredChunkEvent[] {
   const members = row.type === 'tool-call-chunks' ? row.data.args : row.data.texts
-  const events: SessionEvent[] = []
+  const events: StoredChunkEvent[] = []
   let time = row.time0
   for (let index = 0; index < members.length; index += 1) {
     if (index > 0) time += row.data.dt[index - 1] as number
@@ -311,14 +329,14 @@ function expandRow(row: ChunkRow): SessionEvent[] {
 /**
  * Decode one scalar or packed schema-20 record.
  * @param value - parsed physical-record value.
- * @returns the represented logical events.
+ * @returns the represented stored-format logical events.
  */
-export function decodeStorageRecord(value: unknown): SessionEvent[] {
-  if (!isRecord(value)) return [value as SessionEvent]
+export function decodeStorageRecord(value: unknown): StoredLogicalEvent[] {
+  if (!isRecord(value)) return [value as StoredLogicalEvent]
   const tag = value.type
   if (tag !== 'text-chunks' && tag !== 'reasoning-chunks' && tag !== 'tool-call-chunks') {
     if (typeof value.seq === 'number') SessionSeq(value.seq)
-    return [value as unknown as SessionEvent]
+    return [value as unknown as StoredLogicalEvent]
   }
   return expandRow(validateRow(value, tag))
 }
@@ -337,7 +355,7 @@ export function decodeSerializedChunkRow(
   seq0: number,
   time0: number,
   serializedData: string,
-): SessionEvent[] {
+): StoredChunkEvent[] {
   const bytes = Buffer.byteLength(serializedData)
   if (bytes > MAX_PACKED_DATA_BYTES) malformed(tag, `data exceeds ${MAX_PACKED_DATA_BYTES} UTF-8 bytes`)
   return expandRow(validateRow({ type: tag, seq0, time0, data: JSON.parse(serializedData) as unknown }, tag, bytes))

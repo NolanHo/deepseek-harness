@@ -4,23 +4,32 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import { ToolCallId, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import {
+  MessageId,
+  ToolCallId,
+  freezeMessage,
+  type AssistantStreamRecord,
+  type StreamChunk,
+} from '@deepseek-ai/dsh-llm'
 import SessionStore, {
-  SessionLogOffset,
   SessionSeq,
   type SessionEvent,
+  type SessionId,
 } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import SessionPersistenceJsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionPersistenceSqlite from '@deepseek-ai/dsh-session-persistence-sqlite'
-import { meta } from '../../session-persistence/tests/contract.ts'
-import { testSql } from './test-sql.ts'
+import { meta, oneTurnLog } from '../../session-persistence/tests/contract.ts'
 
 type BackendName = 'jsonl-zstd' | 'sqlite'
 
 interface MountedBackend {
   readonly persistence: SessionPersistence
+  /**
+   * Fork seek surface, present only on the SQLite backend: the current-format
+   * suffix read behind the session controller's paged cold history.
+   */
+  readFrom?(id: SessionId, fromSeq: number): Promise<{ readonly events: readonly SessionEvent[] }>
   dispose(): Promise<void>
 }
 
@@ -47,70 +56,136 @@ async function mount(name: BackendName, root: string): Promise<MountedBackend> {
     }
     case 'sqlite': {
       const fiber = await ctx.plugin(SessionPersistenceSqlite, { path: join(root, 'sessions.db') })
-      return { persistence: ctx.sessionPersistence, dispose: async () => { await fiber.dispose() } }
+      const sqlite = ctx.sessionPersistence as SessionPersistenceSqlite
+      return {
+        persistence: ctx.sessionPersistence,
+        readFrom: (id, fromSeq) => sqlite.readFrom(id, fromSeq),
+        dispose: async () => { await fiber.dispose() },
+      }
     }
   }
 }
 
-function closedChunkLog(
-  entries: readonly { readonly chunk: StreamChunk; readonly time: number }[],
-): SessionEvent[] {
-  const chunks = entries.map(({ chunk, time }, index): SessionEvent => ({
-    type: 'assistant/chunk',
-    seq: SessionSeq(index + 2),
-    time,
-    data: { turn: 1, step: 1, chunk },
-  }))
-  return [
-    { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
-    { type: 'step/start', seq: SessionSeq(1), time: 2, data: { turn: 1, step: 1 } },
-    ...chunks,
-    { type: 'step/end', seq: SessionSeq(chunks.length + 2), time: 3, data: { turn: 1, step: 1 } },
-    {
-      type: 'turn/end',
-      seq: SessionSeq(chunks.length + 3),
-      time: 4,
-      data: { turn: 1, reason: { kind: 'completed' } },
+function userMessage(seq: number, turn: number, text: string): SessionEvent {
+  return {
+    type: 'user/message',
+    seq: SessionSeq(seq),
+    time: seq + 1,
+    surfaceOp: 'append',
+    data: freezeMessage({
+      id: MessageId(`turn-${turn}-user`),
+      role: 'user',
+      content: [{ type: 'text', text }],
+      source: { kind: 'user' },
+    }),
+  }
+}
+
+/** One settling assistant message carrying its exact timed model stream. */
+function assistantMessage(input: {
+  readonly seq: number
+  readonly time: number
+  readonly turn: number
+  readonly step: number
+  readonly id: string
+  readonly stream: AssistantStreamRecord[]
+}): SessionEvent {
+  return {
+    type: 'assistant/message',
+    seq: SessionSeq(input.seq),
+    time: input.time,
+    surfaceOp: 'append',
+    data: {
+      turn: input.turn,
+      step: input.step,
+      message: freezeMessage({
+        id: MessageId(input.id),
+        role: 'assistant',
+        content: [{ type: 'text', text: 'settled' }],
+        source: {
+          kind: 'model',
+          ...{ provider: 'mock', model: 'mock' },
+        },
+      }),
+      stream: input.stream,
     },
+  }
+}
+
+/**
+ * The compact stream form the accumulator produces: a delta becomes a packed
+ * run, every other chunk stays a raw timed chunk record.
+ */
+function compactRecord(chunk: StreamChunk, time: number): AssistantStreamRecord {
+  switch (chunk.type) {
+    case 'text-delta':
+      return { type: 'text-chunks', time0: time, index: chunk.index, dt: [], texts: [chunk.text] }
+    case 'reasoning-delta':
+      return { type: 'reasoning-chunks', time0: time, index: chunk.index, dt: [], texts: [chunk.text] }
+    case 'tool-call-delta':
+      return {
+        type: 'tool-call-chunks',
+        time0: time,
+        index: chunk.index,
+        dt: [],
+        id: chunk.id,
+        ...chunk.name === undefined ? {} : { name: chunk.name },
+        args: [chunk.argumentsDelta],
+      }
+    default:
+      return { type: 'chunk', time, chunk }
+  }
+}
+
+/** One multi-stream second turn continuing {@link oneTurnLog}. */
+function secondTurn(stream: AssistantStreamRecord[]): SessionEvent[] {
+  return [
+    { type: 'turn/start', seq: SessionSeq(6), time: 9, data: { turn: 2 } },
+    userMessage(7, 2, 'again'),
+    { type: 'step/start', seq: SessionSeq(8), time: 9, data: { turn: 2, step: 1 } },
+    assistantMessage({ seq: 9, time: 10, turn: 2, step: 1, id: 'second-turn-assistant', stream }),
+    { type: 'step/end', seq: SessionSeq(10), time: 11, data: { turn: 2, step: 1 } },
+    { type: 'turn/end', seq: SessionSeq(11), time: 12, data: { turn: 2, reason: { kind: 'completed' } } },
   ]
 }
 
-function packingMatrixLog(): SessionEvent[] {
-  const entries: { chunk: StreamChunk; time: number }[] = [
-    ...Array.from({ length: 5 }, (_, index) => ({
-      chunk: { type: 'text-delta' as const, index: 0, text: `text-${index}` },
-      time: 1_000 + index,
-    })),
-    ...Array.from({ length: 4 }, (_, index) => ({
-      chunk: { type: 'reasoning-delta' as const, index: 1, text: `reason-${index}` },
-      time: 990 - index,
-    })),
-    ...Array.from({ length: 4 }, (_, index) => ({
-      chunk: {
-        type: 'tool-call-delta' as const,
+/** Every stream record kind in one log, including two packed run kinds. */
+function mixedStreamLog(): SessionEvent[] {
+  return [
+    ...oneTurnLog(),
+    ...secondTurn([
+      { type: 'chunk', time: 10, chunk: { type: 'block-start', index: 0, blockType: 'text' } },
+      { type: 'text-chunks', time0: 10, index: 0, dt: [0, 1], texts: ['multi', '-stream', '-text'] },
+      { type: 'reasoning-chunks', time0: 10, index: 1, dt: [1], texts: ['why', 'not'] },
+      {
+        type: 'tool-call-chunks',
+        time0: 10,
         index: 2,
+        dt: [2, 0],
         id: ToolCallId('named-call'),
         name: 'write',
-        argumentsDelta: `{${index}`,
+        args: ['{', '"a"', '}'],
       },
-      time: 2_000 + index,
-    })),
-    ...Array.from({ length: 3 }, (_, index) => ({
-      chunk: {
-        type: 'tool-call-delta' as const,
+      {
+        type: 'tool-call-chunks',
+        time0: 10,
         index: 3,
+        dt: [1, 1],
         id: ToolCallId('unnamed-call'),
-        argumentsDelta: `${index}}`,
+        args: ['{', '"b"', '}'],
       },
-      time: 3_000 + index,
-    })),
-    { chunk: { type: 'block-start', index: 4, blockType: 'text' }, time: 4_000 },
-    { chunk: { type: 'text-delta', index: 4, text: 'short-a' }, time: 4_001 },
-    { chunk: { type: 'text-delta', index: 4, text: 'short-b' }, time: 4_002 },
-    { chunk: { type: 'text-delta', index: 5, text: 'scalar-singleton' }, time: 4_003 },
-    { chunk: { type: 'finish', reason: { kind: 'stop' } }, time: 4_004 },
+      { type: 'chunk', time: 10, chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'multi-stream-text' } } },
+      { type: 'chunk', time: 10, chunk: { type: 'finish', reason: { kind: 'stop' } } },
+    ]),
   ]
-  return closedChunkLog(entries)
+}
+
+/** One randomized second turn built from arbitrary stream chunks. */
+function randomStreamLog(entries: readonly { readonly chunk: StreamChunk; readonly time: number }[]): SessionEvent[] {
+  return [
+    ...oneTurnLog(),
+    ...secondTurn(entries.map(entry => compactRecord(entry.chunk, entry.time))),
+  ]
 }
 
 function batches(events: readonly SessionEvent[], sizes: readonly number[]): SessionEvent[][] {
@@ -135,34 +210,39 @@ async function verifyBackend(
   const header = { ...meta('differential', '/work'), delegationDepth: 0 }
   let mounted = await mount(name, root)
   try {
-    await mounted.persistence.create(header)
+    const handle = await mounted.persistence.create(header)
     for (const batch of batches(events, sizes)) {
-      await mounted.persistence.append(header.id, batch)
+      await handle.append(batch)
     }
-    expect(await mounted.persistence.inspect(header.id), name).toEqual({
-      meta: header,
-      inheritedEventCount: SessionLogOffset(0),
-      events,
-    })
-    expect(await mounted.persistence.list(), name).toEqual([header])
-    const revision = (await mounted.persistence.listSnapshots())[0]?.revision
-    for (let fromSeq = 0; fromSeq <= events.length + 1; fromSeq += 1) {
-      const offset = SessionLogOffset(fromSeq)
-      expect((await mounted.persistence.readFrom(header.id, offset)).events, `${name} seq ${fromSeq}`)
-        .toEqual(events.slice(offset))
+    expect((await handle.read()).events, name).toEqual(events)
+    await handle.flush()
+    await handle.close()
+
+    const snapshot = await mounted.persistence.stat(header.id)
+    expect(snapshot?.header, name).toMatchObject(header)
+    expect((await mounted.persistence.list()).map(entry => entry.header.id), name).toContain(header.id)
+    // Revisions are backend-owned tokens: stable across reads here, never
+    // comparable with another backend's token.
+    const listed = (await mounted.persistence.list()).find(entry => entry.header.id === header.id)
+    expect((await mounted.persistence.stat(header.id))?.revision, name).toBe(snapshot?.revision)
+    expect(listed?.revision, name).toBe(snapshot?.revision)
+
+    if (name === 'sqlite') {
+      for (let fromSeq = 0; fromSeq <= events.length + 1; fromSeq += 1) {
+        const suffix = await mounted.readFrom?.(header.id, fromSeq)
+        expect(suffix?.events, `${name} seq ${fromSeq}`).toEqual(events.slice(fromSeq))
+      }
     }
-    expect((await mounted.persistence.listSnapshots())[0]?.revision, name).toBe(revision)
   } finally {
     await mounted.dispose()
   }
 
   mounted = await mount(name, root)
   try {
-    expect(await mounted.persistence.inspect(header.id), `${name} reopen`).toEqual({
-      meta: header,
-      inheritedEventCount: SessionLogOffset(0),
-      events,
-    })
+    const reader = await mounted.persistence.open(header.id, 'read')
+    expect((await reader.read()).events, `${name} reopen`).toEqual(events)
+    await reader.close()
+    expect((await mounted.persistence.stat(header.id))?.header, `${name} reopen`).toMatchObject(header)
   } finally {
     await mounted.dispose()
   }
@@ -202,40 +282,19 @@ const randomWorkload = fc.record({
   }), { maxLength: 30 }),
   batchSizes: fc.array(fc.integer({ min: 1, max: 8 }), { minLength: 1, maxLength: 8 }),
 }).map(({ entries, batchSizes }) => ({
-  events: JSON.parse(JSON.stringify(closedChunkLog(entries))) as SessionEvent[],
+  events: JSON.parse(JSON.stringify(randomStreamLog(entries))) as SessionEvent[],
   batchSizes,
 }))
 
 const randomizedDifferentialTimeoutMs = process.platform === 'win32' ? 120_000 : 60_000
 
 describe('SQLite cross-backend differential behavior', () => {
-  it('matches JSONL/Zstandard for every packed kind, scalar fallback, suffix, partition, and reopen', async () => {
-    const events = packingMatrixLog()
+  it('matches JSONL/Zstandard for every stream record kind, suffix, partition, and reopen', async () => {
+    const events = mixedStreamLog()
     for (const [partitionIndex, sizes] of [[events.length], [1], [2, 1, 5, 3]].entries()) {
       const directory = await freshDirectory(`dsh-sqlite-matrix-${partitionIndex}-`)
       for (const name of ['jsonl-zstd', 'sqlite'] as const) {
-        const root = join(directory, name)
-        await verifyBackend(name, root, events, sizes)
-        if (name === 'sqlite') {
-          const db = new DatabaseSync(join(root, 'sessions.db'), { readOnly: true })
-          try {
-            expect(db.prepare(testSql('count-physical-types')).all()).toEqual([
-              [
-                { type: 'reasoning-chunks', count: 1 },
-                { type: 'text-chunks', count: 1 },
-                { type: 'tool-call-chunks', count: 2 },
-              ],
-              [],
-              [
-                { type: 'reasoning-chunks', count: 1 },
-                { type: 'text-chunks', count: 1 },
-                { type: 'tool-call-chunks', count: 1 },
-              ],
-            ][partitionIndex])
-          } finally {
-            db.close()
-          }
-        }
+        await verifyBackend(name, join(directory, name), events, sizes)
       }
     }
   }, 30_000)
@@ -248,5 +307,4 @@ describe('SQLite cross-backend differential behavior', () => {
       }
     }), { numRuns: 100, seed: 0x5A17E })
   }, randomizedDifferentialTimeoutMs)
-
 })

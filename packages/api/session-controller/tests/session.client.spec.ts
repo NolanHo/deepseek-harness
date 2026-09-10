@@ -411,12 +411,8 @@ describe('prompt and cancel errors', () => {
         address: {
           kind: 'subagent', parentSessionId: PARENT, childSessionId: SID, mode: 'continuable',
         },
-<<<<<<< HEAD
-        maxMessages: 8,
-=======
         assistantStream: true,
-        maxMessages: 50,
->>>>>>> dsh-v0.1.5-rc.2
+        maxMessages: 8,
       },
     ])
     expect(api.callsOf('subagent.history')).toEqual([])
@@ -543,12 +539,8 @@ describe('prompt and cancel errors', () => {
         address: {
           kind: 'subagent', parentSessionId: PARENT, childSessionId: SID, mode: 'one-shot',
         },
-<<<<<<< HEAD
-        maxMessages: 8,
-=======
         assistantStream: true,
-        maxMessages: 50,
->>>>>>> dsh-v0.1.5-rc.2
+        maxMessages: 8,
       },
     ])
     expect(api.callsOf('subagent.history')).toEqual([])

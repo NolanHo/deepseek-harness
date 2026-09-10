@@ -374,12 +374,8 @@ describe('subagent catalogs', () => {
         address: {
           kind: 'subagent', parentSessionId: S1, childSessionId: S2, mode: 'continuable',
         },
-<<<<<<< HEAD
-        maxMessages: 8,
-=======
         assistantStream: true,
-        maxMessages: 50,
->>>>>>> dsh-v0.1.5-rc.2
+        maxMessages: 8,
       },
     ])
     expect(api.callsOf('subagent.history')).toEqual([])
