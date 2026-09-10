@@ -613,7 +613,7 @@ describe('SubagentRuntime.startContinuable', () => {
     const { ctx } = await setup([])
     // A routeless parent declares no provider/model, and this start declares no
     // cwd or skill filter, so the descriptor records only what exists.
-    const routeless = ctx.agentLoop.create(SessionId('routeless'), {})
+    const routeless = await ctx.agentLoop.create(SessionId('routeless'), {})
     const started = await ctx.subagents.startContinuable(startSpec(routeless))
     const child = await vi.waitFor(() => {
       const found = ctx.agents.get(started.childId)

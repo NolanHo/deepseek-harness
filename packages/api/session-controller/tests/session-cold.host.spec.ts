@@ -360,7 +360,7 @@ describe('indexed page fast path', () => {
   const turn = (base: number, n: number): SessionEvent[] => [
     { type: 'turn/start', seq: SessionSeq(base), time: base, data: { turn: n } },
     { type: 'user/message', seq: SessionSeq(base + 1), time: base + 1, surfaceOp: 'append', data: createUserMessage({ content: [{ type: 'text', text: `q${n}` }], source: { kind: 'user' } }) },
-    { type: 'assistant/message', seq: SessionSeq(base + 2), time: base + 2, surfaceOp: 'append', data: { turn: n, step: 1, message: { role: 'assistant', id: MessageId(`a${n}`), content: [{ type: 'text', text: `a${n}` }], source: { kind: 'model', provider: 'p', model: 'm' } } } },
+    { type: 'assistant/message', seq: SessionSeq(base + 2), time: base + 2, surfaceOp: 'append', data: { turn: n, step: 1, stream: [], message: { role: 'assistant', id: MessageId(`a${n}`), content: [{ type: 'text', text: `a${n}` }], source: { kind: 'model', provider: 'p', model: 'm' } } } },
     { type: 'turn/end', seq: SessionSeq(base + 3), time: base + 3, data: { turn: n, reason: { kind: 'completed' } } },
   ]
 
