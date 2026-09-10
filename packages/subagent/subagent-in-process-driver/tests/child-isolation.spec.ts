@@ -33,7 +33,7 @@ async function setup(script: Script): Promise<{ ctx: Context; parent: Agent }> {
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
   ctx.llm.registerAdapter(['mock'], new MockAdapter(script))
-  const parent = ctx.agentLoop.create(
+  const parent = await ctx.agentLoop.create(
     SessionId('parent'),
     { provider: 'mock', model: 'mock' },
     { cwd: '/parent-workspace' },

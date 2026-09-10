@@ -60,12 +60,17 @@ export function restoreAnchorOnReflow(
     anchorRef.current = null
     return null
   }
-  const next = { key: row.dataset.chatAnchorKey as string, top: flowTop(row, scrollport) }
-  const delta = next.top - anchor.top
+  const key = row.dataset.chatAnchorKey as string
+  const delta = flowTop(row, scrollport) - anchor.top
   if (delta !== 0) {
     scrollport.scrollTop += delta
     ledger.current = scrollport.scrollTop
   }
-  anchorRef.current = next
-  return next
+  // Measure AFTER the write: with scroll-coupled geometry the row returns to
+  // anchor.top once compensated, so the pre-write value would make the next
+  // callback compute -delta and undo this compensation; a clamped write keeps
+  // the true post-write position here.
+  const held = { key, top: flowTop(row, scrollport) }
+  anchorRef.current = held
+  return held
 }

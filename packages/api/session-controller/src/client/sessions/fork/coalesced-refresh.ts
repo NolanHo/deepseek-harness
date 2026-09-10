@@ -45,8 +45,9 @@ export class ActivityCoalescer<SessionKey extends string = string> {
 }
 
 /**
- * Activity flush window: below the interaction budget, so a busy side
- * session's activity stamps the list at most five times per second
- * instead of once per user-message event.
+ * Activity flush window: one second. List timestamps display at minute
+ * granularity, so a stamp within the second costs nothing visible, while a
+ * busy side session's activity now drives the full list rebuild chain at
+ * most once per second instead of up to five times.
  */
-export const ACTIVITY_COALESCE_MS = 200
+export const ACTIVITY_COALESCE_MS = 1_000

@@ -36,9 +36,9 @@ function turnOf(node: ChatNode | undefined): number | undefined {
 
 /** Subscribe, apply Turn-process visibility, and dispatch one stable Context key. */
 export const ChatNodeSeat = memo(function ChatNodeSeat({
-  nodeKey, useChatNode, useChatNodeProcess, compactTranscript,
-  selectedCallId, cwd, openFile, inspectCall, forkAt,
-  renderMessageImages, fileMentions, useStore, actions, renderSlot, t,
+  nodeKey, useChatNode, useChatNodeProcess, historyIncomplete, compactTranscript,
+  cwd, openFile, inspectCall, forkAt,
+  loadImage, renderMessageImages, fileMentions, useStore, actions, renderSlot, t,
 }: ChatNodeSeatProps) {
   const node = useChatNode(nodeKey)
   const routedNode = node as ChatNode | undefined
@@ -65,6 +65,7 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
     && processSpec.answerAnchorSeq !== null
     && processPresentation.turn === processSpec.turn
     && processPresentation.turnClosed
+    && !historyIncomplete
   const processMember = routedNode !== undefined
     && processWindowReady
     && !TURN_PROCESS_INDEPENDENT_KINDS.has(routedNode.kind)
@@ -102,17 +103,17 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
   const owner = useMemo<ChatNodeOwnerProps | null>(() => node === undefined
     ? null
     : {
-      selectedCallId,
       cwd,
       openFile,
       inspectCall,
       forkAt,
+      loadImage,
       renderMessageImages,
       fileMentions,
       turnProcess,
     }, [
-    node, selectedCallId, cwd, openFile, inspectCall, forkAt,
-    renderMessageImages, fileMentions, turnProcess,
+    node, cwd, openFile, inspectCall, forkAt,
+    loadImage, renderMessageImages, fileMentions, turnProcess,
   ])
   if (routedNode === undefined || owner === null) return null
   const turnData = turnDataOf(routedNode)

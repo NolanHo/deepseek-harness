@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 
 export type TestSqlName =
   | 'add-unexpected-column'
+  | 'corrupt-schema-19-packed-event'
   | 'count-events'
   | 'count-packed-events'
   | 'count-physical-types'
@@ -20,6 +21,7 @@ export type TestSqlName =
   | 'replace-events-with-nonstrict-table'
   | 'select-last-event'
   | 'select-page-size'
+  | 'select-session-version'
   | 'select-event-rowids'
   | 'select-event-rows'
   | 'select-user-version'

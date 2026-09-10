@@ -9,6 +9,7 @@ import { performance } from 'node:perf_hooks'
 import type { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
+  SESSION_FORMAT_VERSION,
   SessionId,
   type SessionHeader,
 } from '@deepseek-ai/dsh-session'
@@ -356,19 +357,48 @@ export function decodeStoreIdentity(value: unknown): string {
 }
 
 /**
- * Reconstruct an immutable session header from a validated metadata row.
+ * Rebuild the physical stored header record one validated row represents, in
+ * the shape of its stored format version: released v0/v1 carry `seedLength`
+ * while v2/v3 carry `isSeeded` and derive the cut from the log. The released
+ * format catalog reads this record to migrate historical headers.
  * @param row - validated stored metadata row.
- * @returns the session header.
+ * @returns the physical header record for the stored version.
  */
-export function rowToMeta(row: SessionRow): SessionHeader {
+export function storedPhysicalHeaderOf(row: SessionRow): Record<string, unknown> {
+  const base = {
+    type: 'session',
+    version: row.version,
+    id: row.id,
+    createdAt: row.created_at,
+    delegationDepth: row.delegation_depth ?? 0,
+    ...row.cwd === null ? {} : { cwd: row.cwd },
+    ...row.parent_session === null ? {} : { parentSession: row.parent_session },
+    ...row.origin === null ? {} : { origin: row.origin },
+    ...row.agent_preset === null ? {} : { agentPreset: row.agent_preset },
+  }
+  return row.version <= 1
+    ? { ...base, ...row.seed_length === null ? {} : { seedLength: row.seed_length } }
+    : { ...base, isSeeded: row.seed_length !== null }
+}
+
+/**
+ * Reconstruct the current-format session header from a validated row whose
+ * stored version already equals {@link SESSION_FORMAT_VERSION}.
+ * @param row - validated stored metadata row.
+ * @returns the immutable current-format header.
+ */
+export function currentHeaderOf(row: SessionRow): SessionHeader {
+  if (row.version !== SESSION_FORMAT_VERSION) {
+    throw new Error(`stored session "${row.id}" is format v${row.version}, expected v${SESSION_FORMAT_VERSION}`)
+  }
   return {
     version: row.version,
     id: SessionId(row.id),
     createdAt: row.created_at,
     ...row.cwd === null ? {} : { cwd: row.cwd },
     ...row.parent_session === null ? {} : { parentSession: SessionId(row.parent_session) },
-    // Schema 19 persists the seed as a nullable cut: a stored cut means the
-    // session inherits a fork prefix, so it decodes to isSeeded.
+    // The durable seed cut stays a nullable column: unseeded rows keep NULL
+    // and seeded rows store the inherited event count.
     isSeeded: row.seed_length !== null,
     ...row.origin === null ? {} : { origin: row.origin },
     ...row.delegation_depth === null ? {} : { delegationDepth: row.delegation_depth },

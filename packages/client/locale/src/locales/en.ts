@@ -29,6 +29,8 @@ export const en = {
   'more': 'More',
   'collapse': 'Collapse',
   'expand': 'Expand',
+  // Fork patch (FORK_SURFACE.md): the mobile drawer's frame-owned opener.
+  'sidebar.open': 'Open sidebar',
   'back': 'Back',
   'brand.localBuild': 'DSH Local Build',
   'unknown': 'Unknown',

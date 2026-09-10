@@ -36,21 +36,11 @@
   overflow: hidden;
 }
 
-.detailsCol {
-  min-width: 0;
-  overflow: hidden;
-  border-left: 0.5px solid var(--dsw-alias-border-l3);
-}
-
-/* The details subtree stays mounted at zero width, so its border must not paint
-   a 1px seam. The collapsed sidebar instead retains a bordered compact rail. */
-.frame[data-details-collapsed] .detailsCol {
-  border-left: none;
-}
-
 /* Drag handles are frame children (columns clip overflow): an 8px hit strip
-   centered on the column border via inline left, above column content. Details
-   adds a visible 12x32 pill at vertical center; sidebar keeps only the hit strip. */
+   centered on the column border via inline left, above column content. No
+   handle draws a visible pill. The right handle sits above the right panel
+   (which states z-index 10) so it stays grabbable when the panel hangs over
+   the centre. */
 .handle {
   position: absolute;
   top: 0;
@@ -58,7 +48,7 @@
   width: 8px;
   margin-left: -4px;
   cursor: col-resize;
-  z-index: 2;
+  z-index: 11;
   touch-action: none;
   /* Rides the same curve as the tracks so the pill stays on the moving
      border during collapse/expand; paused while dragging (frame rule). */
@@ -69,42 +59,45 @@
   transition: none;
 }
 
+/* Fullscreen covers the frame while its underlying columns enter or exit. */
+.frame[data-rightbar-fullscreen],
+.frame[data-rightbar-fullscreen] .handle,
+.frame[data-rightbar-instant],
+.frame[data-rightbar-instant] .handle {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .handle {
     transition: none;
   }
 }
 
-.handle[data-side='details']::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 12px;
-  height: 32px;
-  border-radius: 10px;
-  box-sizing: border-box;
-  background: var(--dsw-alias-button-floating-fill);
-  border: 0.5px solid var(--dsw-alias-border-l2-darkmode-thin);
-  /* Hover affordance: the details pill hides until the pointer is over its
-     column, the strip itself, or a drag. */
-  opacity: 0;
-  transition:
-    opacity var(--ds-transition-duration-slow) var(--ds-ease-in-out),
-    background var(--ds-transition-duration-slow) var(--ds-ease-in-out);
+/*
+ * The right column never clips: its occupant anchors a fixed-width panel to the
+ * column's right edge (the frame's edge, which never moves) and lets the track
+ * decide whether the centre makes room. With no track the panel hangs over the
+ * centre from a zero-width column, and while the track animates the panel stays
+ * where it is. The occupant draws its own left border.
+ */
+.rightbarCol {
+  position: relative;
+  min-width: 0;
+  overflow: visible;
 }
 
-.detailsCol:hover ~ .handle[data-side='details']::after,
-.handle[data-side='details']:hover::after,
-.handle[data-side='details'][data-dragging='true']::after {
-  opacity: 1;
+/* Mobile keeps the column out of the single-track grid: the occupant presents
+   itself fullscreen below the phone breakpoint (its own rule), so this box only
+   anchors the panel at the frame's right edge and must not take a grid row.
+   Pointer events pass through the transparent box to the panel it anchors. */
+.rightbarCol[data-mobile] {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
 }
 
-.handle[data-side='details']:hover::after,
-.handle[data-side='details'][data-dragging='true']::after {
-  background: var(--dsw-alias-button-floating-hover);
-  border-color: var(--dsw-alias-border-l3);
+.rightbarCol[data-mobile] > * {
+  pointer-events: auto;
 }
 
 .overlayLayer {
@@ -118,10 +111,9 @@
   pointer-events: auto;
 }
 
-/* Mobile overlays (< MOBILE_VIEWPORT, AppFrame decides the regime): drawer
-   scrim and details-sheet scrim share one class; the sheet scrim stacks above
-   the drawer (z 31) because the sheet is the higher layer. Mask tokens match
-   the Modal primitive (SettingsRoot overlay: --dsw-alias-bg-mask-1). */
+/* Mobile drawer scrim (< MOBILE_VIEWPORT, AppFrame decides the regime).
+   Mask tokens match the Modal primitive (SettingsRoot overlay:
+   --dsw-alias-bg-mask-1). */
 .scrim {
   position: fixed;
   inset: 0;
@@ -131,9 +123,6 @@
   padding: 0;
 }
 
-.scrim[data-sheet] {
-  z-index: 31;
-}
 
 /* Sidebar drawer: always mounted (keeps the sidebar subtree alive across
    open/close), slid off-canvas until [data-open]; mirrors the sidebar
@@ -159,71 +148,10 @@
   transform: translateX(0);
 }
 
-/* Details sheet: the details column itself becomes a fixed right sheet while
-   [data-mobile] (AppFrame writes the attribute); [data-open] slides it in.
-   The subtree stays mounted when closed — the existing zero-width contract. */
-.detailsCol[data-mobile] {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 33;
-  width: min(92vw, 420px);
-  box-sizing: border-box;
-  background: var(--dsw-alias-bg-base);
-  border-left: 0.5px solid var(--dsw-alias-border-l2);
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
-  transform: translateX(100%);
-  transition: transform var(--ds-transition-duration-slow) var(--ds-ease-in-out);
-}
-
-.detailsCol[data-mobile][data-open] {
-  transform: translateX(0);
-}
-
-/* Sheet close affordance owned by the frame (occupants assume the desktop
-   shell): a floating button pinned to the sheet's top-left corner. */
-.sheetClose {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 1;
-  width: 24px;
-  height: 24px;
-  box-sizing: border-box;
-  border: none;
-  border-radius: 50%;
-  corner-shape: round;
-  background: var(--dsw-alias-button-floating-fill);
-  cursor: pointer;
-}
-
-.sheetClose:hover {
-  background: var(--dsw-alias-button-floating-hover);
-}
-
-/* The sheet's own icon: a CSS × drawn with rotated bars (no literal colors). */
-.sheetClose::before,
-.sheetClose::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 10px;
-  height: 1.5px;
-  background: var(--dsw-alias-label-primary-inverted);
-  transform: translate(-50%, -50%) rotate(45deg);
-}
-
-.sheetClose::after {
-  transform: translate(-50%, -50%) rotate(-45deg);
-}
-
 /* Mobile drawer opener: frame-owned floating button at the frame's top-left,
    the only navigation entry while the drawer is closed (the drawer's own
    toggle rides inside the slid-out panel). Sits above column content, below
-   the drawer scrims. */
+   the drawer scrim. */
 .mobileMenu {
   position: fixed;
   top: calc(8px + env(safe-area-inset-top));
@@ -248,8 +176,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mobileDrawer,
-  .detailsCol[data-mobile] {
+  .mobileDrawer {
     transition: none;
   }
 }

@@ -12,7 +12,7 @@ Status: implemented
 
 ## 决策
 
-`chat/fork/scroll-anchor.ts` 泛化了持有的读者锚点：在每次列尺寸变化时（与动态高度尾随共用的同一个 ResizeObserver——布局后、绘制前触发），`restoreAnchorOnReflow` 把持有行的流偏移位移写入 `scrollTop` 重新断言其位置，将写入记入 observed-top 台账（读者输入归因不会把补偿误判为用户滚动），并重新捕获锚点。折叠隐藏锚点行本身时，其上方最近存活可见行保持原位，其下内容全部保持对齐。ChatView 的注入为 import + 一个回调分支（持有锚点且无跳转进行中时执行）。
+`chat/fork/scroll-anchor.ts` 泛化了持有的读者锚点：在每次列尺寸变化时（与动态高度尾随共用的同一个 ResizeObserver——布局后、绘制前触发），`restoreAnchorOnReflow` 把持有行的流偏移位移写入 `scrollTop` 重新断言其位置，将写入记入 observed-top 台账（读者输入归因不会把补偿误判为用户滚动），并重新捕获锚点。折叠隐藏锚点行本身时，其上方最近存活可见行保持原位，其下内容全部保持对齐。ChatView 的注入为 import + 一个回调分支（持有锚点且无跳转进行中时执行）；锚点生命周期跟进（[note](2026-09-05-scroll-anchor-recapture.zh.md)）后来补充了 ChatView 中的捕获与重持编辑，并让重捕获锚点记录写入后的位置。
 
 不选原生 `overflow-anchor`：fork 移除了它，因为原生调整在几何读者台账中无法与用户滚动区分；fork 自有的补偿显式写台账。不选首帧即折叠（历史行首帧就渲染为折叠态）：那要把折叠与投影管线同步，改动大得多。
 

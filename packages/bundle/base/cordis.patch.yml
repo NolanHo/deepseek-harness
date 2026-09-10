@@ -76,7 +76,7 @@
       name: '@deepseek-ai/dsh-agent-default-model'
       config:
         provider: deepseek-official
-        model: deepseek-v4-flash
+        model: deepseek-flash
 
     - id: jobs
       name: '@deepseek-ai/dsh-jobs-local'
@@ -140,7 +140,7 @@
 
     # Durable KV storage: the storage hub, the json backend, and the
     # schema-validated domain form over them. Session-layer persistence (the
-    # projection cache below; workspace and message-feedback in web layers)
+    # projection cache below; workspace in web layers)
     # routes through this stack, so it belongs to the shared base.
     - id: storage
       name: '@deepseek-ai/dsh-storage'
@@ -165,14 +165,8 @@
         writeEveryEvents: 200
         writeIntervalMs: 5000
 
-    # Session telemetry defaults to feedback-gated sharing: FEEDBACK_ONLY
-    # uploads only when the user records /feedback, releasing the session
-    # records since the last handoff through that event (a resumed session
-    # shares only its current lifecycle). DSH_TELEMETRY_MODE overrides to
-    # FULL or DISABLED; uploading mirrors session-log records onto OTLP/HTTP
-    # logs with no session-telemetry/record redaction rule, so exports are
-    # the raw captured copy. The deployment stance, env seams, and follow-ups
-    # are pinned in the feedback-gated-default Agent Note.
+    # OTel releases a Session-log prefix only after explicit user feedback,
+    # regardless of model provider. Ordinary activity never triggers capture.
     # DSH_TELEMETRY_OTLP_URL overrides the production endpoint. A non-empty
     # DSH_TELEMETRY_DISABLED — any value, including '0'/'false' — opts the
     # process out (the launchers patch the row disabled; config cannot disable
@@ -205,28 +199,28 @@
     - id: subprocess
       name: '@deepseek-ai/dsh-subprocess-local'
 
-    # Fork patch (FORK_SURFACE.md): the sandbox capability is disabled by fork
+    # Fork patch (FORK_SURFACE.md): the sandbox capability is unavailable by fork
     # decision (2026-09-05, FORK_CHANGES.md): this fork deploys only
-    # danger-full-access with no sandbox, so the sandbox and sandbox-policy
-    # rows stay present but disabled — zero-cost upstream syncs — while the
-    # bash/pwsh/fs executor rows below mount the local providers instead of
-    # the sandboxing ones (row ids and platform `disabled` expressions
-    # unchanged, so overlays, base.spec's platform gate, and upstream patches
-    # keep addressing them). dsh-permission-presets rejects composition over a
-    # non-confining executor at load (its constructor requires
-    # ctx.shell.sandboxMode), so its row is disabled with them. Restore the
-    # upstream composition by clearing the `disabled: true` flags on sandbox,
-    # sandbox-policy, and permission, and reverting the executor rows' `name`
-    # to the @deepseek-ai/dsh-*-sandbox packages.
+    # danger-full-access with no sandbox, so the bash/pwsh/fs executor rows
+    # below mount the local providers instead of the sandboxing ones (row ids
+    # and platform `disabled` expressions unchanged, so overlays, base.spec's
+    # platform gate, and upstream patches keep addressing them), and the
+    # sandbox backend is the local one. dsh-permission-presets rejects
+    # composition over a non-confining executor at load (its constructor
+    # requires ctx.shell.sandboxMode), so its row is disabled. Restore the
+    # upstream composition by re-enabling permission and reverting the executor
+    # rows' `name` to the @deepseek-ai/dsh-*-sandbox packages.
     - id: sandbox
       name: '@deepseek-ai/dsh-sandbox-local'
-      disabled: true
 
+    # Fork patch (FORK_SURFACE.md): upstream 0.1.5's workspace-files and
+    # deliverables entries require the sandboxPolicy service, so the row can no
+    # longer stay disabled; the policy is pinned to danger-full-access, which is
+    # this deployment's only mode (the executor rows below stay local).
     - id: sandbox-policy
       name: '@deepseek-ai/dsh-sandbox-policy'
-      disabled: true
       config:
-        mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+        mode: danger-full-access
         workspaceRoot: !!js process.cwd()
 
     - id: bash-sandbox
@@ -437,11 +431,6 @@
         subagentProvider: spawn
         maxRounds: 64
 
-    - id: tool-str-replace-editor
-      name: '@deepseek-ai/dsh-tool-str-replace-editor'
-      config:
-        maxOutputChars: 16000
-
     # Consecutive-repeat reminders on the tool chain.
     - id: repeat-tool-reminder
       name: '@deepseek-ai/dsh-repeat-tool-reminder'
@@ -492,7 +481,7 @@
     - id: system-prompt
       name: '@deepseek-ai/dsh-system-prompt'
       config:
-        persona: ''
+        personaPrefix: ''
 
     # Agents created at startup. The base stays empty; raw overlays may create
     # agents, while Web creates sessions on client request.
