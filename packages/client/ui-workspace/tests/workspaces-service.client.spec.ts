@@ -195,6 +195,7 @@ function bench(options: BenchOptions = {}) {
   const layout = new LayoutController({
     selectPanel: vi.fn(), retainMainPanels: vi.fn(),
     setSidebar: vi.fn(), toggleSidebar: vi.fn(), setViewportWidth: vi.fn(),
+    setMobile: vi.fn(), setDrawerOpen: vi.fn(),
     setRightbar: vi.fn(), openRightbar: vi.fn(), closeRightbar: vi.fn(),
   }, () => true)
   const selectPanel = vi.spyOn(layout, 'selectPanel')
