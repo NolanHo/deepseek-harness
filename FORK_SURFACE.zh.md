@@ -27,7 +27,7 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `.agents/notes`、文档、快照、测试更新 | A | — | 随源更新；与对应源一起重放 |
 | `session.ts` PAGE_MESSAGES 8（上游 50） | B | 8 行 | 客户端页大小 |
 | `client/connection` browserAuth 开关 | B | ~50 行 | 配置字段后的可选认证关闭 |
-| `ui-chat` TurnProcess 折叠摘要 | C | 标记+import+1 处调用 | 标签/时长逻辑在 `src/client/chat/fork/turn-process-summary.ts`；视图只做组合；ChatNodeSeat 门移除在同步时为一行删除 |
+| `ui-chat` TurnProcess 折叠标签 + 时长 | 已退役（双路径） | — | 上游 0.1.5-rc.2 在 `TurnProcessNodeView` 内联构建同一折叠标签；fork 的 `src/client/chat/fork/turn-process-summary.ts`（分类计数 + 墙钟时长 + 折叠前缀）已删除，视图恢复为上游实现，fork 自有的 `message.turnProcess.collapsed` 字典键随之移除。时长仍在轮次页脚的用量详情中可见。`TurnProcessNodeView.tsx` 与 `locale.ts` 现与上游完全一致。 |
 | `ui-chat` ChatView 读者输入归因 | 已退役 | — | 上游自己的修复已落地（observed-top 几何台账覆盖全部输入设备，无需监听器）；fork 的设备标记补丁在 0.1.2-rc.1 同步时移除 |
 | `ui-conversation`/`ui-chat` CSS overflow-anchor + 安全区 | C | ~40 行 | 滚动容器锚定；局部规则 |
 | `api/session-controller/src/history.ts` 快路径注入 | C | `page()` 约 10 行，`follow` 约 60 行 | 分页注入委托给 fork 自有 `src/page-boundary.ts`（边界游走、梯子、快路径计划）：`page()` 一次调用加 `paginate` 的委托。打开注入增加同步服务检查、带观测回落的窗口快照分支，以及第二个构造器回调（按 id 激活窗口化 Session）。两条快速路径都通过 `seekSurface` 辅助函数取得持久化方法，并绑定到 `ctx.get` 返回的 tracker 代理：未绑定的提取方法会以包装对象为 `this` 运行，在任何读取自身状态的提供方里抛错 |

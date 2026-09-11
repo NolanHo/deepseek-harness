@@ -1,9 +1,6 @@
 import { memo } from 'react'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeViewProps } from '../contract/slots.ts'
-// Fork patch (FORK_SURFACE.md): the fold label and duration summary live in the
-// fork-owned module.
-import { turnProcessSummaryLabel } from './fork/turn-process-summary.ts'
 import css from './TurnProcessNodeView.module.css'
 
 /** Turn-level process disclosure controller. */
@@ -13,7 +10,34 @@ export const TurnProcessNodeView = memo(function TurnProcessNodeView({
   if (turnProcess === undefined) throw new Error('turn-process node requires Turn process owner state')
   if (!turnProcess.foldable) return null
   const open = turnProcess.open
-  const label = turnProcessSummaryLabel(node, t)
+  const labels: string[] = []
+  if (node.data.toolCallCount > 0) {
+    labels.push(t(
+      node.data.toolCallCount === 1
+        ? 'message.turnProcess.toolCalls.one'
+        : 'message.turnProcess.toolCalls.other',
+      { count: node.data.toolCallCount },
+    ))
+  }
+  if (node.data.messageCount > 0) {
+    labels.push(t(
+      node.data.messageCount === 1
+        ? 'message.turnProcess.messages.one'
+        : 'message.turnProcess.messages.other',
+      { count: node.data.messageCount },
+    ))
+  }
+  if (node.data.subagentCount > 0) {
+    labels.push(t(
+      node.data.subagentCount === 1
+        ? 'message.turnProcess.subagents.one'
+        : 'message.turnProcess.subagents.other',
+      { count: node.data.subagentCount },
+    ))
+  }
+  const label = labels.length === 0
+    ? t('message.turnProcess.thoughtForAWhile')
+    : labels.join(t('message.turnProcess.separator'))
   return (
     <button
       type="button"
@@ -29,8 +53,8 @@ export const TurnProcessNodeView = memo(function TurnProcessNodeView({
         turnProcess.setOpen(!open)
       }}
     >
-      <IconChevronDownOutline14 className={css.chevron} />
       <span className={css.label}>{label}</span>
+      <IconChevronDownOutline14 className={css.chevron} />
     </button>
   )
 })
