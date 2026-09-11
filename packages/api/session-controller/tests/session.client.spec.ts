@@ -5,6 +5,7 @@ import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import { RemoteStreamCarrierError } from '@deepseek-ai/dsh-api-gateway/client'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import { LlmAttemptId } from '@deepseek-ai/dsh-llm'
 import { JUMP_PAGE_MESSAGES, Session, type SessionOptions } from '../src/client/sessions/session.ts'
 import { FakeApiClient, deferred, err, fakeRemote, ok } from './fake-api.client.ts'
 import { entries, ev, historyValue, plainTurn } from './event-script.client.ts'
@@ -129,6 +130,35 @@ describe('Session open', () => {
   })
 })
 
+
+  it('publishes live chunk frames at frame cadence, not once per chunk', async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    const { api, session } = makeSession()
+    api.onHistory = () => histResponse(plainTurn(SessionSeq(0), 0, '早', '安'))
+    await session.open()
+    let notified = 0
+    const unsubscribe = session.subscribe(() => { notified++ })
+    const attempt = LlmAttemptId('session:cadence')
+    await api.pushFollow(SID, { type: 'assistant-stream', frame: {
+      type: 'start', attemptId: attempt, revision: 1, startedAfterSeq: -1, turn: 1, step: 1,
+    } } as never)
+    for (const index of [0, 1, 2]) {
+      await api.pushFollow(SID, { type: 'assistant-stream', frame: {
+        type: 'chunk', attemptId: attempt, revision: index + 2, index, time: 20 + index,
+        chunk: { type: 'text-delta', index: 0, text: `chunk-${String(index)}` },
+      } } as never)
+    }
+    for (let turn = 0; turn < 4; turn++) await new Promise<void>((resolve) => { queueMicrotask(() => { resolve() }) })
+    // Three chunk frames landed; the session snapshot still awaits the frame.
+    expect(notified).toBe(0)
+    for (const callback of frames.splice(0)) callback(0)
+    expect(notified).toBe(1)
+    unsubscribe()
+  })
 
 describe('live event path', () => {
   async function opened(events: SessionEvent[] = plainTurn(SessionSeq(0), 0, 'a', 'b')) {

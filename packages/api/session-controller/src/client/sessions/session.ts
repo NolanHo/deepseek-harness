@@ -701,7 +701,11 @@ export class Session implements SessionFace {
       this.notifier.markDirty()
     } else if (result?.type === 'transient') {
       this.eventSource.append(result.entry)
-      this.notifier.markDirty()
+      // Fork patch (FORK_SURFACE.md): a live chunk presentation is visible
+      // stream state, so the session snapshot publishes at frame cadence
+      // (markFrameDirty); per-chunk microtasks re-rendered every `useSession`
+      // consumer for each streaming frame.
+      this.notifier.markFrameDirty()
     }
   }
 
