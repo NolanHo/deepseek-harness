@@ -12,6 +12,24 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 
 凡超过一行的 fork 逻辑都住在 `<pkg>/src/fork/`（client 面：`<pkg>/src/client/<area>/fork/`）的 fork 自有模块里。上游文件只带一个标记注入点——一个 import 加一个调用——前面配 `// Fork patch (FORK_SURFACE.md): ...` 注释。同步操作 = 原样搬移所有 `fork/` 目录 + 重放下方登记的注入点。内在一行式改动（常量、单 hook 互换、CSS 块、配置字段）按政策保持内联；抽取它们只会增加间接层而不会缩小合并面。
 
+## 双路径
+
+双路径指同一行为两边都改了——同一文件、同一算法，或同一结果的两套实现。双路径一律归上游：删除 fork 版本、采用上游实现，并在 `FORK_CHANGES.md` 记录退役，即使 fork 版本略优。保留的 fork 版本必须写明上游无法服务的生产消费者或未修复的已复现缺陷。
+
+### 已解决与保留的双路径
+
+| 双路径 | fork 侧 | 结论 |
+| --- | --- | --- |
+| TurnProcess 折叠标签 | `ui-chat/src/client/chat/fork/turn-process-summary.ts` + 视图 import | **已退役** —— 上游在同一视图内联构建同样的折叠标签；模块及其 `message.turnProcess.collapsed` 键删除，视图恢复上游实现 |
+| 历史分页 | `session-controller/src/fork/page-boundary.ts` + `history.ts` 注入 | **保留** —— 上游 `paginate` 没有轮次对齐切点，页窗口可能从轮次中间打开并渲染半个轮次头；fork 把切点扩到所属轮次的开场事件 |
+| 冷开窗口 | `session-controller/src/fork/open-window.ts` + `history.ts` 分支 | **保留** —— 上游折叠整段日志再裁剪（最大会话要数秒 CPU 与数百 MB 堆）；fork 通过自有 seek 面只读一个索引窗口 |
+| 回流稳定滚动锚点 | `ui-chat/src/client/chat/fork/scroll-anchor.ts` + 6 处 ChatView 注入 + `overflow-anchor: none` | **保留** —— 上游的 ResizeObserver 只重跟尾部、结算 effect 清空锚点，且其台账把原生锚定的写入误判为读者移动；fork 实测阅读行上方展开 8,460 px 而补偿为零 |
+| 移动端 frame 组合 | `ui-layout/src/client/fork/mobile-shell.tsx` + AppFrame 与 store 字段 | **保留** —— 上游 frame 在 1024 px 以下只折叠成窄轨且没有手机形态，手机宽度无法重新展开左栏 |
+| 沙箱组合 | `bundle/base/cordis.patch.yml` 执行器替换 + `permission` 禁用 | **保留** —— 上游的约束型执行器需要 bwrap 或 Landlock；本容器内核早于 Landlock 且 `bwrap` 探测失败，采用上游组合会让每条 bash 调用 fail-close。在支持 Landlock 的内核上需重新评估 |
+| 活动与重建抖动 | `sessions/fork/coalesced-refresh.ts`、`snapshot-identity.ts`、`ui-workspace/src/client/fork/order-stability.ts`、`session-query-sqlite/src/fork/live-observation-memo.ts`、空转 identity 契约 | **保留** —— 上游对每个活动事件立即应用、每次重建都新造 subagent/job 投影与快照对象、每次同步重排提升集合、每次搜索克隆并哈希全部挂载会话；每个 fork 模块都修复了已复现缺陷。局部重叠（entry/items identity、reconcile/recency 辅助函数）是下一步采用上游辅助函数的方向 |
+| 打开文件路由 | `ui-chat/src/client/chat/fork/open-file-routing.ts` | **保留** —— 路由优先已安装的 `dsh-better-sidebar`，再回落上游右侧栏 |
+| 通用品牌 `DSH` | 语言字典 + `apps/web` 默认值 | **保留** —— 本部署的品牌选择；上游为 `DSH Local Build` |
+
 ## 隔离层级
 
 - **A 层 — fork 自有包**：上游永远不会有的文件。零合并成本。
