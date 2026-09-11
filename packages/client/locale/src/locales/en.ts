@@ -32,7 +32,8 @@ export const en = {
   // Fork patch (FORK_SURFACE.md): the mobile drawer's frame-owned opener.
   'sidebar.open': 'Open sidebar',
   'back': 'Back',
-  'brand.localBuild': 'DSH Local Build',
+  // Fork patch (FORK_SURFACE.md): the generic brand reads plain DSH.
+  'brand.localBuild': 'DSH',
   'unknown': 'Unknown',
   'none': 'None',
   'truncated': 'Truncated',

@@ -30,7 +30,8 @@ export const zh = {
   // Fork patch (FORK_SURFACE.md): the mobile drawer's frame-owned opener.
   'sidebar.open': '打开侧栏',
   'back': '返回',
-  'brand.localBuild': 'DSH 本地构建',
+  // Fork patch (FORK_SURFACE.md): the generic brand reads plain DSH.
+  'brand.localBuild': 'DSH',
   'unknown': '未知',
   'none': '无',
   'truncated': '已截断',
