@@ -77,7 +77,7 @@ async function setup(): Promise<{ ctx: Context; transport: SessionHistoryControl
   await ctx.plugin(SessionStore)
   installSessionReadTestServices(ctx)
   ctx.sessionProjections.register(subagentIdentityProjectionDefinition)
-  const transport = new SessionHistoryController(ctx, (observation) => { observation[Symbol.dispose]() })
+  const transport = new SessionHistoryController(ctx, (observation) => { observation[Symbol.dispose]() }, () => {})
   return { ctx, transport }
 }
 
@@ -116,7 +116,7 @@ describe('SessionHistoryController', () => {
     let transport!: SessionHistoryController
     const owner = ctx.plugin(Object.assign(
       (inner: Context) => {
-        transport = new SessionHistoryController(inner, (observation) => { observation[Symbol.dispose]() })
+        transport = new SessionHistoryController(inner, (observation) => { observation[Symbol.dispose]() }, () => {})
       },
       { inject: ['sessions', 'sessionQuery'] },
     ))
@@ -220,7 +220,7 @@ describe('SessionHistoryController', () => {
     }
     const observed = deferred<SessionObservation>()
     ctx.provide('sessionQuery', { observeSession: () => observed.promise } as never)
-    const transport = new SessionHistoryController(ctx, vi.fn())
+    const transport = new SessionHistoryController(ctx, vi.fn(), () => {})
     const abort = new AbortController()
     const iterator = transport.follow({ address: { kind: 'session', sessionId } }, abort.signal)
       [Symbol.asyncIterator]()
@@ -260,7 +260,7 @@ describe('SessionHistoryController', () => {
     let agentCtx!: Context
     await ctx.plugin(Object.assign(
       (inner: Context) => {
-        transport = new SessionHistoryController(inner, (observation) => { observation[Symbol.dispose]() })
+        transport = new SessionHistoryController(inner, (observation) => { observation[Symbol.dispose]() }, () => {})
       },
       { inject: ['sessions', 'sessionQuery'] },
     ))
@@ -383,7 +383,7 @@ describe('SessionHistoryController', () => {
         retain: vi.fn(), [Symbol.dispose]: vi.fn(),
       } satisfies SessionObservation),
     } as never)
-    const history = new SessionHistoryController(ctx, vi.fn())
+    const history = new SessionHistoryController(ctx, vi.fn(), () => {})
     const abort = new AbortController()
     const iterator = history.follow({ address: { kind: 'session', sessionId } }, abort.signal)
       [Symbol.asyncIterator]()
@@ -415,7 +415,7 @@ describe('SessionHistoryController', () => {
     ctx.provide('sessionQuery', {
       observeSession: () => Promise.resolve(source),
     } as never)
-    const history = new SessionHistoryController(ctx, () => { throw new Error('activation failed') })
+    const history = new SessionHistoryController(ctx, () => { throw new Error('activation failed') }, () => {})
     const iterator = history.follow({ address: { kind: 'session', sessionId } }, signal())
       [Symbol.asyncIterator]()
 
@@ -656,7 +656,7 @@ describe('SessionHistoryController', () => {
         retain: vi.fn(), [Symbol.dispose]: vi.fn(),
       } as unknown as SessionObservation),
     } as never)
-    const history = new SessionHistoryController(ctx, vi.fn())
+    const history = new SessionHistoryController(ctx, vi.fn(), () => {})
 
     await expect(history.page({
       address: { kind: 'subagent', parentSessionId, childSessionId, mode: 'continuable' },

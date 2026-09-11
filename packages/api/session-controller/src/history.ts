@@ -10,6 +10,9 @@ import {
 // Fork patch (FORK_SURFACE.md): user-aligned turn-complete paging lives in the
 // fork-owned page-boundary module; this file keeps only the injection.
 import { nthMessageCut, readIndexedPage, type SeekablePersistence } from './fork/page-boundary.ts'
+// Fork patch (FORK_SURFACE.md): the cold opening snapshot's windowed read lives
+// in the fork-owned open-window module; this file keeps the try and its fallback.
+import { readOpeningWindow, type OpeningWindow, type OpeningWindowServices } from './fork/open-window.ts'
 import type {
   SessionEvent,
   SessionHeader,
@@ -23,6 +26,7 @@ import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {
   SessionAddress,
+  SessionAssistantStreamBaseline,
   SessionAssistantStreamFrame,
   SessionEventEntry,
   SessionFollowRequest,
@@ -46,10 +50,13 @@ export class SessionHistoryController {
   /**
    * @param ctx - Host context carrying Session query and projection services.
    * @param promote - starts ordinary Session activation after snapshot delivery.
+   * @param activate - starts ordinary Session activation from a session id when
+   *   the opening snapshot was read without an observation.
    */
   constructor(
     private readonly ctx: Context,
     private readonly promote: (observation: SessionObservation) => void,
+    private readonly activate: (sessionId: SessionId) => void,
   ) {
     ctx.on('agent/assistant-stream', ({ agent, frame }) => {
       let stream = this.assistantStreams.get(agent.session.id)
@@ -176,38 +183,68 @@ export class SessionHistoryController {
     const onAbort = (): void => { notify() }
     signal.addEventListener('abort', onAbort, { once: true })
     try {
-      using source = await this.sourceFor(address, signal, true)
-      const events = source.events
-      signal.throwIfAborted()
-      const cursor = source.cursor
-      snapshotCursor = cursor
-      const page = paginate(events, undefined, request.maxMessages ?? DEFAULT_MAX_MESSAGES)
-      const assistantStream = request.assistantStream === true
-        ? this.assistantStreams.get(target)?.snapshot() ?? { revision: 0 }
-        : undefined
-      // The accumulator snapshot and this watermark are synchronous. Frames
-      // through the cut are represented or superseded by that baseline,
-      // including larger revisions from a retired Agent; later revision
-      // resets reach Client continuity validation.
-      const assistantStreamOrdinalCut = assistantStreamOrdinal
-      yield {
-        type: 'snapshot',
-        header: wireHeader(source.header),
-        cursor,
-        records: pageRecords(page.events),
-        hasMore: page.hasMore,
-        projections: source.projections === undefined
-          ? { asOfSeq: cursor, values: {} }
-          : projectionBlock(source.projections),
-        ...assistantStream === undefined ? {} : { assistantStream },
-      }
-      if (address.kind === 'session' && source.source === 'prepared') {
-        const promotion = source.retain()
-        try {
-          this.promote(promotion)
-        } catch (error: unknown) {
-          promotion[Symbol.dispose]()
-          throw error
+      // Fork patch (FORK_SURFACE.md): a cold open reads one seekable suffix
+      // window instead of the whole log (see src/fork/open-window.ts). The
+      // synchronous service check keeps the observation sequence below
+      // unchanged for every deployment without the fork seek surface.
+      const windowServices = this.windowServices(address, target)
+      const windowed = windowServices === undefined
+        ? undefined
+        : await this.tryWindowedOpen(request, windowServices, signal)
+      let cursor: SessionSeqCursor
+      let assistantStreamOrdinalCut: number
+      if (windowed !== undefined) {
+        cursor = windowed.cursor
+        snapshotCursor = cursor
+        // The accumulator snapshot and this watermark are synchronous. Frames
+        // through the cut are represented or superseded by that baseline,
+        // including larger revisions from a retired Agent; later revision
+        // resets reach Client continuity validation.
+        const assistantStream = this.assistantStreamBaseline(target, request.assistantStream === true)
+        assistantStreamOrdinalCut = assistantStreamOrdinal
+        yield {
+          type: 'snapshot',
+          header: wireHeader(windowed.header),
+          cursor,
+          records: pageRecords(windowed.events),
+          hasMore: windowed.hasMore,
+          projections: projectionBlock(windowed.projections),
+          ...assistantStream === undefined ? {} : { assistantStream },
+        }
+        // The window read persistence only, so no observation exists to hand
+        // over: the Agent activates from the id, off this request path.
+        // (`windowServices` already gated this branch to ordinary addresses.)
+        this.activate(target)
+      } else {
+        using source = await this.sourceFor(address, signal, true)
+        const events = source.events
+        signal.throwIfAborted()
+        cursor = source.cursor
+        snapshotCursor = cursor
+        const page = paginate(events, undefined, request.maxMessages ?? DEFAULT_MAX_MESSAGES)
+        // See the windowed branch: the baseline and its watermark are one
+        // synchronous read after the source settles.
+        const assistantStream = this.assistantStreamBaseline(target, request.assistantStream === true)
+        assistantStreamOrdinalCut = assistantStreamOrdinal
+        yield {
+          type: 'snapshot',
+          header: wireHeader(source.header),
+          cursor,
+          records: pageRecords(page.events),
+          hasMore: page.hasMore,
+          projections: source.projections === undefined
+            ? { asOfSeq: cursor, values: {} }
+            : projectionBlock(source.projections),
+          ...assistantStream === undefined ? {} : { assistantStream },
+        }
+        if (address.kind === 'session' && source.source === 'prepared') {
+          const promotion = source.retain()
+          try {
+            this.promote(promotion)
+          } catch (error: unknown) {
+            promotion[Symbol.dispose]()
+            throw error
+          }
         }
       }
       let nextOffset = SessionLogOffset(cursor + 1)
@@ -289,6 +326,91 @@ export class SessionHistoryController {
       if (error instanceof RemoteError) throw error
       return undefined
     }
+  }
+
+  /**
+   * Fork patch (FORK_SURFACE.md): the opening-snapshot fast path — one
+   * seekable suffix window when the mounted persistence exposes the indexed
+   * seek surface and the projection cache holds a fold shortcut for the
+   * Session (see src/fork/open-window.ts). Subagent addresses, an attached
+   * Session, a missing seek surface or checkpoint, and every window the fast
+   * path cannot prove return undefined for the observation fallback below.
+   * @param request - the addressed opening request.
+   * @param services - the resolved seekable persistence, cache, and registry.
+   * @param signal - stream cancellation owned by the Remote carrier.
+   * @returns the windowed opening snapshot, or undefined for the fallback.
+   */
+  private async tryWindowedOpen(
+    request: SessionFollowRequest,
+    services: OpeningWindowServices,
+    signal: AbortSignal,
+  ): Promise<OpeningWindow | undefined> {
+    const { address } = request
+    const sessionId = addressId(address)
+    try {
+      const windowed = await readOpeningWindow(
+        services,
+        { sessionId, maxMessages: request.maxMessages ?? DEFAULT_MAX_MESSAGES },
+        (meta, _events) => {
+          if (meta.cwd === undefined) rejectNotFound(address)
+          validateAddress(address, meta, SessionLogOffset(0), undefined)
+        },
+        signal,
+      )
+      // An attach raced the window read: the store is authoritative now, and
+      // the observation path picks it up.
+      if (windowed !== undefined && this.ctx.sessions.get(sessionId) !== undefined) return undefined
+      return windowed
+    } catch (error: unknown) {
+      // The fast path is an optimization: any failure — including a generic
+      // not-found from readFrom — re-runs through the observation path, which
+      // owns the request's error mapping and subagent validation.
+      if (error instanceof RemoteError) throw error
+      return undefined
+    }
+  }
+
+  /**
+   * The opted-in Assistant-stream baseline for one opening snapshot.
+   * @param target - the addressed Session identity.
+   * @param opted - whether the request opted into Assistant frames.
+   * @returns the accumulator snapshot, or undefined when not opted in.
+   */
+  private assistantStreamBaseline(
+    target: SessionId,
+    opted: boolean,
+  ): SessionAssistantStreamBaseline | undefined {
+    return opted ? this.assistantStreams.get(target)?.snapshot() ?? { revision: 0 } : undefined
+  }
+
+  /**
+   * Fork patch (FORK_SURFACE.md): resolve the services the windowed open
+   * reads through, or undefined when this request cannot take it. Kept
+   * synchronous so an unserviceable request never pays an extra async hop
+   * before the observation.
+   * @param address - durable address of the request.
+   * @param sessionId - the addressed Session identity.
+   * @returns the window services, or undefined for the observation fallback.
+   */
+  private windowServices(
+    address: SessionAddress,
+    sessionId: SessionId,
+  ): OpeningWindowServices | undefined {
+    if (address.kind !== 'session') return undefined
+    // An attached Session's authoritative read is the store's own log.
+    if (this.ctx.sessions.get(sessionId) !== undefined) return undefined
+    const candidate = this.ctx.get('sessionPersistence') as Partial<SeekablePersistence> | undefined
+    const messageCut = candidate?.messageCut
+    const readFrom = candidate?.readFrom
+    const cache = this.ctx.get('sessionProjectionCache')
+    const projections = this.ctx.get('sessionProjections')
+    if (messageCut === undefined
+      || readFrom === undefined
+      || cache === undefined
+      || projections === undefined) {
+      return undefined
+    }
+    return { persistence: { messageCut, readFrom }, cache, projections }
   }
 
   private async sourceFor(

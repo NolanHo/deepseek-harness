@@ -13,6 +13,14 @@ export interface ColdSessionLog {
   readonly header: SessionHeader
   /** Exact fork-inherited event count paired with {@link header}. */
   readonly inheritedEventCount: SessionLogOffset
+  // Fork patch (FORK_SURFACE.md): callers that persist derived state
+  // (the projection cache's prepared write-back) must bound it by this cut.
+  /**
+   * Count of {@link events} the stored log actually holds. The rest are
+   * synthetic closers: callers that persist derived state must not place it
+   * past this cut, because the stored log does not reach it.
+   */
+  readonly durableEventCount: number
   /** Stored events plus deterministic in-memory closers for an interrupted final turn; nothing is written back. */
   readonly events: SessionEvent[]
 }
@@ -52,6 +60,8 @@ export async function readColdSessionLog(
     eventState: read.eventState,
     header: handle.header,
     inheritedEventCount: handle.inheritedEventCount,
+    // Fork patch (FORK_SURFACE.md): the durable prefix length.
+    durableEventCount: events.length,
     events: [...events, ...interruptedTurnClosers(events)],
   }
 }

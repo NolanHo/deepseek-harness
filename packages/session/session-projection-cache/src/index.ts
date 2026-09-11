@@ -34,6 +34,9 @@ import type {
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { projectionCacheDomainSpec } from './spec.ts'
 import type { CheckpointIdentity, CheckpointRecord } from './spec.ts'
+// Fork patch (FORK_SURFACE.md): the checkpoint read surface the windowed
+// session-open fast path reads through (see src/fork/checkpoint-read.ts).
+import { registerCheckpointCache } from './fork/checkpoint-read.ts'
 
 /** Complete identity written by the current cache generation. */
 type CurrentCheckpointIdentity = CheckpointIdentity & {
@@ -99,6 +102,12 @@ export class SessionProjectionCache extends Service {
 
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'sessionProjectionCache')
+    // Fork patch (FORK_SURFACE.md): the windowed open reads these rows by
+    // session id instead of folding the log through the public read face.
+    registerCheckpointCache(this, {
+      recordFor: (meta, inheritedEventCount) => this.recordFor(meta.id, identityOf(meta, inheritedEventCount)),
+      restoreFloor: rows => this.ctx.sessionProjections.restoreFloor(rows),
+    })
   }
 
   /** Open the domain and install the write-behind listeners. */
@@ -203,22 +212,47 @@ export class SessionProjectionCache extends Service {
   /**
    * Hydrate projection cells for an already-prepared Session without another
    * persistence read. The cache seeds matching rows; the supplied exact log
-   * advances every unit to the observation cut. No checkpoint is written
-   * because the logical observation may contain recovery events not yet durable.
+   * advances every unit to the observation cut. An uncached read installs the
+   * checkpoint of the log's durable prefix, so no written row ever passes the
+   * stored log end: the supplied log may carry synthetic recovery closers the
+   * stored log does not hold, and a row beyond that end would reject every
+   * later tail restore that seeds from it.
    * @param session - exact unpublished Session retained by persistence.
    * @param events - exact logical event prefix represented by the observation.
+   * @param durableEventCount - count of {@link events} the stored log holds; the
+   *   remainder are the synthetic recovery closers the observation balanced with.
    * @returns all projection values at the event cut.
    */
   hydratePrepared(
     session: Session,
     events: readonly SessionEvent[],
+    durableEventCount: number,
   ): ProjectionSnapshot {
     const record = this.recordFor(
       session.id,
       identityOf(session.header, session.inheritedEventCount),
     )
     if (record === undefined) {
-      return this.ctx.sessionProjections.hydrate(session, {}, events, SessionLogOffset(0))
+      // One restore over the durable prefix supplies the record a later
+      // windowed open folds from; hydrating the cells from those rows then
+      // folds only the recovery closers, so the served block still sits at the
+      // observation cut. `checkpoint(session)` cannot serve the write-back: a
+      // restored Session appends its own resume marker past the supplied log.
+      const durableEvents = events.slice(0, durableEventCount)
+      const durable = this.ctx.sessionProjections.restore(
+        {},
+        durableEvents,
+        SessionLogOffset(0),
+        session.header,
+        session.inheritedEventCount,
+      )
+      this.installPreparedRecord(session, durable.checkpoint)
+      return this.ctx.sessionProjections.hydrate(
+        session,
+        durable.checkpoint,
+        events,
+        SessionLogOffset(0),
+      )
     }
     try {
       return this.ctx.sessionProjections.hydrate(
@@ -295,6 +329,24 @@ export class SessionProjectionCache extends Service {
     return restored.snapshot
   }
 
+
+  /**
+   * Fork patch (FORK_SURFACE.md): replace one prepared Session's record with
+   * the checkpoint of the hydrate above, so its next windowed open reads only
+   * the tail. Fail-soft and fire-and-forget — a lost write costs a longer
+   * replay.
+   * @param session - exact unpublished Session the rows belong to.
+   * @param rows - the registry checkpoint at the durable cut.
+   */
+  private installPreparedRecord(session: Session, rows: ProjectionCheckpoint): void {
+    void this.put(
+      session.id,
+      identityOf(session.header, session.inheritedEventCount),
+      rows,
+    ).catch((error: unknown) => {
+      this.ctx.logger.warn(`session projection cache: prepared-read write-back for "${session.id}" failed (cache stays stale): ${String(error)}`)
+    })
+  }
 
   // --- write-behind (throttle + mandatory points) ---
 
@@ -441,5 +493,8 @@ function lifecycleIdentityMatches(
     && (stored.isSeeded ?? false) === expected.isSeeded
     && (stored.inheritedEventCount ?? 0) === expected.inheritedEventCount
 }
+
+// Fork patch (FORK_SURFACE.md): the windowed session-open checkpoint read.
+export { readCheckpoint, type CheckpointRead } from './fork/checkpoint-read.ts'
 
 export default SessionProjectionCache

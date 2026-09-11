@@ -22,6 +22,7 @@ import SessionStore, {
   SessionId,
   SessionLogOffset,
   SessionSeq,
+  interruptedTurnClosers,
 } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -628,7 +629,7 @@ describe('SessionProjectionCache cold-read seeding', () => {
     // A matching row hydrates the prepared Session without a persistence read.
     const seeded = headerOf(SessionId('prepared-seeded'))
     const seededSession = Session.create(seeded.id, events, seeded)
-    expect(cache.hydratePrepared(seededSession, events)).toEqual({
+    expect(cache.hydratePrepared(seededSession, events, events.length)).toEqual({
       asOfSeq: 2,
       values: { 'cache-test/marks': { marks: ['cached'] } },
     })
@@ -637,7 +638,7 @@ describe('SessionProjectionCache cold-read seeding', () => {
     // exact log so a valid Session stays readable.
     const fallback = headerOf(SessionId('prepared-fallback'))
     const fallbackSession = Session.create(fallback.id, events, fallback)
-    expect(cache.hydratePrepared(fallbackSession, events)).toEqual({
+    expect(cache.hydratePrepared(fallbackSession, events, events.length)).toEqual({
       asOfSeq: 2,
       values: { 'cache-test/marks': { marks: ['fresh'] } },
     })
@@ -645,10 +646,99 @@ describe('SessionProjectionCache cold-read seeding', () => {
     // No row at all: hydrate from init over the exact log.
     const bare = headerOf(SessionId('prepared-bare'))
     const bareSession = Session.create(bare.id, events, bare)
-    expect(cache.hydratePrepared(bareSession, events)).toEqual({
+    expect(cache.hydratePrepared(bareSession, events, events.length)).toEqual({
       asOfSeq: 2,
       values: { 'cache-test/marks': { marks: ['fresh'] } },
     })
+  })
+
+  it('installPreparedRecord write-back lands at the durable cut, never past the resume marker', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-projcache-'))
+    roots.push(root)
+    const { cache } = await harness({ root })
+    const meta = headerOf(SessionId('prepared-writeback'))
+    const events = storedLog([['fresh']])
+    // A restored Session appends its own resume marker past the stored log; the
+    // record must stay at the durable cut or every later tail restore rejects it.
+    const session = Session.create(meta.id, events, meta)
+    expect(session.seq - 1).toBeGreaterThan(events.at(-1)?.seq ?? -1)
+
+    expect(cache.hydratePrepared(session, events, events.length)).toEqual({
+      asOfSeq: 2,
+      values: { 'cache-test/marks': { marks: ['fresh'] } },
+    })
+
+    await vi.waitFor(async () => {
+      expect((await storedRows(root, meta.id))?.['cache-test/marks'])
+        .toEqual({ ver: 1, seq: 2, val: { marks: ['fresh'] } })
+    }, { timeout: 5_000 })
+    // The written record is what the windowed open seeds from.
+    expect(cache.cachedSnapshot(meta, SessionLogOffset(0))?.values['cache-test/marks'])
+      .toEqual({ marks: ['fresh'] })
+  })
+
+  it('writes the durable cut for a recovered log and still serves the balanced block', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-projcache-'))
+    roots.push(root)
+    const { cache, ctx } = await harness({ root })
+    const meta = headerOf(SessionId('prepared-recovered'))
+    // A crash-interrupted log: the observation balances it with synthetic
+    // closers the stored log does not hold.
+    const durable = [
+      { type: 'turn/start', seq: SessionSeq(0), time: 0, data: { turn: 1 } },
+      { type: 'cache-test/mark', seq: SessionSeq(1), time: 1, data: { marks: ['durable'] } },
+    ] as SessionEvent[]
+    const closers = interruptedTurnClosers(durable)
+    expect(closers.length).toBeGreaterThan(0)
+    const events = [...durable, ...closers]
+    const session = Session.create(meta.id, events, meta)
+
+    // The served block is the balanced observation cut ...
+    expect(cache.hydratePrepared(session, events, durable.length)).toEqual({
+      asOfSeq: events.length - 1,
+      values: { 'cache-test/marks': { marks: ['durable'] } },
+    })
+
+    // ... while the written rows stop at the durable end.
+    await vi.waitFor(async () => {
+      expect((await storedRows(root, meta.id))?.['cache-test/marks'])
+        .toEqual({ ver: 1, seq: durable.length - 1, val: { marks: ['durable'] } })
+    }, { timeout: 5_000 })
+
+    // Those rows seed a windowed restore over the stored log without throwing.
+    const rows = await storedRows(root, meta.id)
+    if (rows === undefined) throw new Error('the write-back did not land')
+    const floor = ctx.sessionProjections.restoreFloor(rows)
+    if (floor === undefined) throw new Error('the unit registry is empty')
+    expect(floor).toBe(durable.length - 1)
+    expect(ctx.sessionProjections.restore(
+      rows,
+      durable.filter(event => event.seq >= floor),
+      SessionLogOffset(floor),
+      meta,
+      SessionLogOffset(0),
+    ).snapshot).toEqual({
+      asOfSeq: durable.length - 1,
+      values: { 'cache-test/marks': { marks: ['durable'] } },
+    })
+  })
+
+  it('prepared write-back is fail-soft: a failed durable write logs and never throws', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-projcache-'))
+    roots.push(root)
+    const { ctx } = await harness({ root })
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => {})
+    const meta = headerOf(SessionId('prepared-fail'))
+    const events = storedLog([['fresh']])
+    const session = Session.create(meta.id, events, meta)
+    // A directory where the record document must land makes the write-back fail.
+    await mkdir(recordPath(root, meta.id), { recursive: true })
+
+    expect(ctx.sessionProjectionCache.hydratePrepared(session, events, events.length)).toBeDefined()
+
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('prepared-read write-back for "prepared-fail" failed'))
+    }, { timeout: 5_000 })
   })
 
   it('coldSnapshot traverses the full log but applies only the events after each cached watermark', async () => {

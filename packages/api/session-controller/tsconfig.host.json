@@ -6,6 +6,7 @@
     "tsBuildInfoFile": "lib/tsconfig.host.tsbuildinfo"
   },
   "files": [
+    "src/fork/open-window.ts",
     "src/fork/page-boundary.ts",
     "src/index.ts",
     "src/types.ts",

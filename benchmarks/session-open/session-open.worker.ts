@@ -173,7 +173,7 @@ class SessionBenchmarkHost {
       history = new SessionHistoryController(ctx, (observation) => {
         // First-history ends at snapshot delivery; Agent-resume owns live activation and retention.
         observation[Symbol.dispose]()
-      })
+      }, () => {})
     }
     if (agentScenario) await ctx.plugin(AgentLoop, { agents: [] })
     return new SessionBenchmarkHost(ctx, scenario, history)

@@ -60,6 +60,10 @@ interface PreparedEntry {
   readonly revision: SessionPersistenceRevision
   /** Unpublished Session restored from the balanced log; never entered into the store. */
   readonly session: Session
+  // Fork patch (FORK_SURFACE.md): the durable-event count the projection cache
+  // needs to bound its prepared write-back (see hydratePrepared).
+  /** Count of {@link events} the stored log holds; the rest are synthetic recovery closers. */
+  readonly durableEventCount: number
   /** Immutable balanced log (stored events plus in-memory interrupted-turn closers). */
   readonly events: readonly SessionEvent[]
   /** Active observation leases; a pinned entry (`refs > 0`) is never evicted. */
@@ -142,6 +146,8 @@ export class SessionObservationReader {
           revision: snapshot.revision,
           session,
           events: Object.freeze(seed),
+          // Fork patch (FORK_SURFACE.md): carried into the cache's write-back.
+          durableEventCount: loaded.durableEventCount,
           refs: 0,
         }
         this.store(sessionId, entry)
@@ -310,7 +316,7 @@ export class SessionObservationReader {
     const cache = this.ctx.get('sessionProjectionCache')
     return cache === undefined
       ? registry.hydrate(entry.session, {}, entry.events, SessionLogOffset(0))
-      : cache.hydratePrepared(entry.session, entry.events)
+      : cache.hydratePrepared(entry.session, entry.events, entry.durableEventCount)
   }
 }
 

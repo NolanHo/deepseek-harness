@@ -604,6 +604,7 @@ describe('subagent ownership fence', () => {
     const history = await new SessionHistoryController(
       ctx,
       (observation) => { observation[Symbol.dispose]() },
+      () => {},
     ).page({
       address: {
         kind: 'subagent',

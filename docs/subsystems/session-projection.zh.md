@@ -159,13 +159,18 @@ cachedPredecessorTitle( meta: SessionHeader, inheritedEventCount: SessionLogOffs
 /**
  * Hydrate projection cells for an already-prepared Session without another
  * persistence read. The cache seeds matching rows; the supplied exact log
- * advances every unit to the observation cut. No checkpoint is written
- * because the logical observation may contain recovery events not yet durable.
+ * advances every unit to the observation cut. An uncached read installs the
+ * checkpoint of the log's durable prefix, so no written row ever passes the
+ * stored log end: the supplied log may carry synthetic recovery closers the
+ * stored log does not hold, and a row beyond that end would reject every
+ * later tail restore that seeds from it.
  * @param session - exact unpublished Session retained by persistence.
  * @param events - exact logical event prefix represented by the observation.
+ * @param durableEventCount - count of {@link events} the stored log holds; the
+ *   remainder are the synthetic recovery closers the observation balanced with.
  * @returns all projection values at the event cut.
  */
-hydratePrepared( session: Session, events: readonly SessionEvent[], ): ProjectionSnapshot
+hydratePrepared( session: Session, events: readonly SessionEvent[], durableEventCount: number, ): ProjectionSnapshot
 
 /**
  * Durably checkpoint one live session NOW (all mandatory points call

@@ -133,7 +133,13 @@ export class SessionController extends TypertRemoteService {
     ctx.effect(() => async () => {
       await Promise.allSettled([...this.promotions])
     }, 'session-controller.promotions')
-    this.history = new SessionHistoryController(ctx, (observation) => { this.promote(observation) })
+    // Fork patch (FORK_SURFACE.md): the windowed opening snapshot has no
+    // observation to promote, so it hands its Session id to this activation.
+    this.history = new SessionHistoryController(
+      ctx,
+      (observation) => { this.promote(observation) },
+      (sessionId) => { this.activate(sessionId) },
+    )
     this.listState = new ApiSessionList(ctx)
     this.openPath = internals.openPath ?? openNativePath
     this.revealPath = internals.revealPath ?? revealNativePath
@@ -179,6 +185,27 @@ export class SessionController extends TypertRemoteService {
     })().catch((error: unknown) => {
       this.ctx.logger.error(`session-controller: background activation for "${sessionId}" failed: ${errorChain(error)}`)
     })
+    this.promotions.add(task)
+    void task.finally(() => { this.promotions.delete(task) })
+  }
+
+  // Fork patch (FORK_SURFACE.md): the id-based activation entry the windowed
+  // opening uses; `promote` above serves the observation path.
+  /**
+   * Activate one Session in the background without an exact observation. The
+   * windowed opening snapshot reads persistence only, so its holder has no
+   * prepared Session to hand over; the agents facade resolves the id and
+   * reads the log itself, once per activation and off the request path.
+   * @param sessionId - Session identity to activate.
+   */
+  private activate(sessionId: SessionId): void {
+    const task = this.agents.resolveAgent(sessionId)
+      .then((result) => {
+        if ('error' in result) this.ctx.emit('api-session/error', sessionId, result.error.message)
+      })
+      .catch((error: unknown) => {
+        this.ctx.logger.error(`session-controller: background activation for "${sessionId}" failed: ${errorChain(error)}`)
+      })
     this.promotions.add(task)
     void task.finally(() => { this.promotions.delete(task) })
   }

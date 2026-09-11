@@ -1646,9 +1646,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a title-only checkpoint view with `asOfSeq: -1`, or `undefined` when the record is current, newer, unrelated, missing, or incompatible with the title unit. The sentinel avoids reusing a sequence that a cardinality-changing Session migration may have remapped.',
       },
       {
-        signature: 'hydratePrepared( session: Session, events: readonly SessionEvent[], ): ProjectionSnapshot',
-        description: 'Hydrate projection cells for an already-prepared Session without another persistence read. The cache seeds matching rows; the supplied exact log advances every unit to the observation cut. No checkpoint is written because the logical observation may contain recovery events not yet durable.',
-        parameters: [{ name: 'session', description: 'exact unpublished Session retained by persistence.' }, { name: 'events', description: 'exact logical event prefix represented by the observation.' }],
+        signature: 'hydratePrepared( session: Session, events: readonly SessionEvent[], durableEventCount: number, ): ProjectionSnapshot',
+        description: 'Hydrate projection cells for an already-prepared Session without another persistence read. The cache seeds matching rows; the supplied exact log advances every unit to the observation cut. An uncached read installs the checkpoint of the log\'s durable prefix, so no written row ever passes the stored log end: the supplied log may carry synthetic recovery closers the stored log does not hold, and a row beyond that end would reject every later tail restore that seeds from it.',
+        parameters: [{ name: 'session', description: 'exact unpublished Session retained by persistence.' }, { name: 'events', description: 'exact logical event prefix represented by the observation.' }, { name: 'durableEventCount', description: 'count of {@link events} the stored log holds; the remainder are the synthetic recovery closers the observation balanced with.' }],
         returns: 'all projection values at the event cut.',
       },
       {
