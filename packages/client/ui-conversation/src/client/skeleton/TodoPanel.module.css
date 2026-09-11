@@ -126,6 +126,12 @@
   animation: todo-progress-spin 1s linear infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .glyphProgress {
+    animation: none;
+  }
+}
+
 @keyframes todo-progress-spin {
   to {
     transform: rotate(360deg);

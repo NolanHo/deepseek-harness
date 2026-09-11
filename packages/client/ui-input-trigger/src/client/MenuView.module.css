@@ -179,6 +179,12 @@
   animation: dsh-menu-skeleton 2s cubic-bezier(0.36, 0, 0.64, 1) infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .skeletonBar {
+    animation: none;
+  }
+}
+
 @keyframes dsh-menu-skeleton {
   0% { opacity: 1; }
   40% { opacity: 0.6; }

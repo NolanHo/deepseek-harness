@@ -65,6 +65,15 @@
   animation: dsh-state-dot-chase 1s infinite;
 }
 
+/* Reduced motion keeps the ongoing state readable with a static mid-phase
+   value instead of the chase. */
+@media (prefers-reduced-motion: reduce) {
+  .cell {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 @keyframes dsh-state-dot-chase {
   0%, 12.4% { opacity: 1; }
   12.5%, 24.9% { opacity: 0.6; }

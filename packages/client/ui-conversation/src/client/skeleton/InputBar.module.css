@@ -154,6 +154,12 @@
   animation: input-pending 1s ease-in-out infinite alternate;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .pending {
+    animation: none;
+  }
+}
+
 @keyframes input-pending {
   from { opacity: 0.35; }
   to { opacity: 1; }
