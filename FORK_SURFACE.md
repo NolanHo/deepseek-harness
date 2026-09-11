@@ -12,6 +12,10 @@ The 0.1.2-alpha.1 sync (1079 upstream commits) resolved 123 conflicts. The pain 
 
 Every piece of fork logic that is more than a one-liner lives in a fork-owned module under `<pkg>/src/fork/` (client faces: `<pkg>/src/client/<area>/fork/`). Upstream-owned files carry only a marked injection — one import plus one call — each preceded by a `// Fork patch (FORK_SURFACE.md): ...` comment. Syncing means: copy every `fork/` directory verbatim, then re-apply the registered injections below. Inherent one-liners (constants, single-hook swaps, CSS blocks, config fields) stay inline by policy; extracting them would add indirection without shrinking the merge surface.
 
+## Dual paths
+
+A dual path is one behavior changed on both sides — the same file, the same algorithm, or two implementations of one outcome. Dual paths resolve to upstream: delete the fork copy, adopt upstream's, and record the retirement in `FORK_CHANGES.md`, even where the fork's version measures slightly better. A retained fork copy names the production consumer or reproduced defect upstream's version cannot serve. The inventory below marks each current dual path and its resolution.
+
 ## Isolation tiers
 
 - **Tier A — fork-owned packages**: files upstream will never have. Zero merge cost.
