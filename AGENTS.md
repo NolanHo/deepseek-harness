@@ -9,13 +9,21 @@ This checkout is a **personal fork** of [deepseek-ai/deepseek-harness](https://g
 - **Sync before every change**: `git fetch upstream` and rebase (or merge) `upstream/master` into the fork at the start of every change session, so fork `master` stays mergeable with upstream. Upstream is the authority; the fork only absorbs updates from it.
 - **Never contribute back**: do not push to `upstream`, do not open PRs against `upstream`, do not merge fork work into upstream. All changes stay in the fork.
 - **Record every change**: append one entry to `FORK_CHANGES.md` (bilingual, append-only) per change: date, what changed, why. Keep personal changes small and reviewable.
-- **Pick up upstream on a cadence**: merge every `dsh-vX.Y-rc*`/stable tag (skip master's alpha churn); each sync refreshes `FORK_SURFACE.md`.
+- **Pick up upstream on a cadence**: merge every `dsh-vX.Y-rc*`/stable tag (skip master's alpha churn); each sync refreshes `FORK_SURFACE.md`. Before merging, read every release note between the fork's base tag and the target tag: they name the protocol, session-format, and API breaks a diff hides (session format V3, the persistence handle seam, the panel API move). Plan each adaptation they imply.
+- **Retirement deletes the code**: when a fork surface retires because upstream serves it, the same change deletes its module, injections, locale keys, config rows, and tests, and appends the retirement to `FORK_CHANGES.md`. `FORK_SURFACE.md` keeps one `retired` line per surface as runbook history; no dead `fork/` module, forwarding shim, or feature flag survives, and no behavior keeps a fork path beside an upstream path. Prefer the upstream extension point (`Config` field, service, slot) over a copied implementation in the first place.
 - **Dual-path changes resolve to upstream**: when the fork and upstream changed one behavior — the same file, the same algorithm, or two implementations of one user-visible outcome — the fork deletes its copy and adopts upstream's, even where the fork's version measures better: one implementation to maintain and re-apply at every sync beats a marginal local edge. Keep the fork's version only when upstream's cannot serve a current production consumer or leaves a reproduced defect, and record that reason beside the retained row in `FORK_SURFACE.md`.
 - **Prefer upstream on parity; keep the fork minimal**: at every sync, walk `FORK_SURFACE.md` against the new tag — when upstream ships an equivalent, drop the fork row and adopt upstream's (record the retirement in `FORK_CHANGES.md`); every retained divergence states why upstream cannot serve it. New divergences justify themselves the same way, prefer `Config` fields over patches and `src/fork/` modules over upstream-file edits ([convention](FORK_SURFACE.md#the-fork-module-convention)).
 
 ## Working tree: branches, never a dirty main checkout
 
 The main checkout serves the running dsh and hosts concurrent agent sessions. Develop on a git worktree under `.worktrees/<slug>` (git-ignored) on its own branch, and land through a PR against `origin/master` (or a clean fast-forward merge when the branch stays local). Never develop on, or leave uncommitted changes in, the main checkout: uncommitted fork docs or sources there block other sessions' merges. Commit or stash before ending a session; a branch keeps the work recoverable and mergeable.
+
+## Landing changes in the running deployment
+
+The running dsh serves the deployment clone (for example `/root/dsh-web/app`); its supervisor program must stay up while agents work.
+
+- **Exercise the change on another port first**: every product-visible change runs end-to-end on a second `dsh web` instance (its own `DSH_HOME` and bind patch, e.g. port 3097+) against the built artifacts before the production instance is touched. Never restart production to find out whether a change works.
+- **Restart behind a detached delayed script**: schedule the production restart from a detached script (for example `setsid bash -c 'sleep 90; exec /root/dsh-web/restart-and-check.sh'`) so it outlives the agent turn that scheduled it and survives the restart killing that agent. The script probes health after the restart and rolls back on failure; report the probe result before calling the deployment done.
 
 ## Pre-stable APIs and released Session data
 

@@ -90,11 +90,12 @@ A dual path is one behavior changed on both sides — the same file, the same al
 
 ## Sync procedure (runbook)
 
-1. `git fetch upstream && git merge upstream/master` in a worktree.
-2. **Parity review (AGENTS.md policy)**: walk every inventory row against the new tag; when upstream ships an equivalent, drop the fork row and adopt upstream's (record the retirement in FORK_CHANGES.md); update each retained row's why-upstream-cannot-serve note.
-3. Tier A: no action (upstream has no such files); resolve only `pnpm-workspace`/tsconfig aggregates and `cordis.patch.yml`.
-4. Tier B: re-apply the flag/constant; expect trivial context conflicts.
-5. Tier C: re-apply each localized block per this file's inventory; run the owning package's suite.
-6. Tier D: re-apply the injection points (after step 1–2 above they are the only remaining history.ts/persistence diffs), then copy the fork-owned modules verbatim.
-7. Run `pnpm run test:gui`, the session-controller suite, and `DSH_SNAPSHOT=replay pnpm run test:web`; refresh goldens only for intentional output changes.
-8. Record the sync in `FORK_CHANGES.md`.
+1. Read every release note between the fork's base tag and the target tag, and list the protocol, session-format, and API breaks they name; plan each adaptation they imply.
+2. `git fetch upstream && git merge upstream/master` in a worktree.
+3. **Parity review (AGENTS.md policy)**: walk every inventory row against the new tag; when upstream ships an equivalent, drop the fork row and adopt upstream's (record the retirement in FORK_CHANGES.md); update each retained row's why-upstream-cannot-serve note.
+4. Tier A: no action (upstream has no such files); resolve only `pnpm-workspace`/tsconfig aggregates and `cordis.patch.yml`.
+5. Tier B: re-apply the flag/constant; expect trivial context conflicts.
+6. Tier C: re-apply each localized block per this file's inventory; run the owning package's suite.
+7. Tier D: re-apply the injection points (after step 3 above they are the only remaining history.ts/persistence diffs), then copy the fork-owned modules verbatim.
+8. Run `pnpm run test:gui`, the session-controller suite, and `DSH_SNAPSHOT=replay pnpm run test:web`; refresh goldens only for intentional output changes.
+9. Record the sync in `FORK_CHANGES.md`.
