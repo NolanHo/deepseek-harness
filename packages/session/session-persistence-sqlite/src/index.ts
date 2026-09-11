@@ -252,7 +252,20 @@ export class SqliteSessionPersistence extends SessionPersistence {
   }
 
   /**
-   * Fork-owned seek surface (see FORK_SURFACE.md row 34): the indexed Nth
+   * Fork-owned seek surface (see FORK_SURFACE.md row 36): whether this stored
+   * session can answer a bounded seq window at all. Historical rows cannot —
+   * their log restores into a re-based sequence space — so the gated fast
+   * paths bail before paying a window read for them.
+   * @param id - the stored session to probe.
+   * @param signal - optional cancellation for backend read work.
+   * @returns true when a direct suffix read is addressable for this session.
+   */
+  seekable(id: SessionId, signal?: AbortSignal): Promise<boolean> {
+    return this.store.seekable(id, signal)
+  }
+
+  /**
+   * Fork-owned seek surface (see FORK_SURFACE.md row 36): the indexed Nth
    * append-origin user-message cut behind the session-controller's page
    * boundary. The store answers in one scan; sequential media answers nothing.
    * @param id - the stored session to seek.
@@ -266,10 +279,11 @@ export class SqliteSessionPersistence extends SessionPersistence {
   }
 
   /**
-   * Fork-owned seek surface (see FORK_SURFACE.md row 34): read the stored
+   * Fork-owned seek surface (see FORK_SURFACE.md row 36): read the stored
    * events from `fromSeq` onward for the session-controller's paged cold
    * history reads. Current-format sessions seek by seq; historical sessions
-   * restore the whole log once and slice.
+   * restore the whole log once and slice, which cannot address an indexed cut
+   * (see the store's `seekable`).
    * @param id - the stored session to read.
    * @param fromSeq - first event offset to include.
    * @param signal - optional cancellation for backend read work.

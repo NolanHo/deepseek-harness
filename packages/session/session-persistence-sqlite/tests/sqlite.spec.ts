@@ -562,6 +562,45 @@ describe('SessionPersistenceSqlite physical packing', () => {
       .rejects.toThrow(/schema version 17.*incompatible/)
   })
 
+  it('reports a historical row unaddressable and its physical cut selecting nothing', async () => {
+    // The deployed store holds mostly pre-format-change rows. Their log restores
+    // into a re-based seq space while the events table (and therefore every cut
+    // the index answers) stays in the stored physical space, so a window plan
+    // reading `userMessageCut` first pays a full log read and gets nothing back.
+    const path = await writeLegacyV0Fixture()
+    const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
+
+    expect(await store.seekable(LEGACY_ID)).toBe(false)
+
+    const physical = new DatabaseSync(path)
+    const physicalSeqs = (physical.prepare(testSql('select-event-rows')).all(LEGACY_ID) as unknown as PhysicalRow[])
+      .map(row => row.seq)
+    physical.close()
+    const restored = await store.loadStoredLog(LEGACY_ID)
+    // The two spaces really differ: the stored rows run past the restored end.
+    expect(physicalSeqs).toEqual([0, 1, 2, 5, 6])
+    expect(restored?.events.map(event => event.seq)).toEqual([0, 1, 2, 3, 4, 5])
+    expect(Math.max(...physicalSeqs)).toBeGreaterThan(Math.max(...restored!.events.map(event => event.seq)))
+    // A window read at the last physical seq is the production shape: 0 events.
+    expect((await store.loadStoredFrom(LEGACY_ID, SessionLogOffset(6)))?.events).toEqual([])
+
+    // Publishing the restored log rewrites the row to the current format, and
+    // only then does the store answer that a window is addressable.
+    const storageMetadata = { meta: restored!.meta, inheritedEventCount: restored!.inheritedEventCount }
+    await store.publishStoredLog(storageMetadata, restored!.events)
+    expect(await store.seekable(LEGACY_ID)).toBe(true)
+    await store.close()
+
+    const mounted = await mountSqlite(path)
+    try {
+      await expect((mounted.persistence as SessionPersistenceSqlite).seekable(LEGACY_ID)).resolves.toBe(true)
+      await expect((mounted.persistence as SessionPersistenceSqlite).seekable(SessionId('absent')))
+        .resolves.toBe(false)
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
   it('migrates an established schema-19 database in place', async () => {
     const path = await writeLegacyV0Fixture()
 

@@ -114,6 +114,7 @@ interface Mounted {
     events: readonly SessionEvent[]
   }>>
   readonly messageCut: Mock<(id: SessionId, limit: number, beforeSeq?: number) => Promise<number | undefined>>
+  readonly seekable: Mock<(id: SessionId) => Promise<boolean>>
   /** Re-provide the persistence double, with or without the fork seek surface. */
   readonly providePersistence: (seekable: boolean) => void
   /** The mounted persistence double, for a provider that delegates to it. */
@@ -167,6 +168,11 @@ class TrackerVisiblePersistence extends SessionPersistence {
     return (this.base.list as SessionPersistence['list'])(...args)
   }
 
+  seekable(id: SessionId): Promise<boolean> {
+    if (id !== this.storedHeader.id) return Promise.reject(new Error(`unknown session "${id}"`))
+    return Promise.resolve(true)
+  }
+
   messageCut(id: SessionId, limit: number, beforeSeq?: number): Promise<number | undefined> {
     if (id !== this.storedHeader.id) return Promise.reject(new Error(`unknown session "${id}"`))
     const window = beforeSeq === undefined
@@ -207,7 +213,16 @@ interface MountOptions {
   readonly bumpMarkerUnit?: boolean
   /** Register the persistence as a real Service instead of a plain provided value. */
   readonly trackerService?: boolean
+  /**
+   * Answer the capability probe false while keeping both seek methods mounted:
+   * the stored rows are a historical format whose seq space is re-based, so a
+   * window read cannot address them.
+   */
+  readonly legacy?: boolean
 }
+
+/** A seek surface whose window is addressable, for the windowed read cases. */
+const canSeek = { seekable: () => Promise.resolve(true) } as const
 
 /** The projection key the fixture's marker unit owns. */
 const MARKER_KEY = 'open-window/marker' as const
@@ -308,21 +323,27 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
     const prompts = window.filter(event => event.type === 'user/message' && event.surfaceOp === 'append')
     return prompts.slice(-limit)[0]?.seq
   })
+  const seekable = vi.fn(async (id: SessionId) => {
+    if (id !== sessionId) throw new Error(`unknown session "${id}"`)
+    return options.legacy !== true
+  })
   const adapted = testSessionPersistence(ctx, {
     list: () => Promise.resolve([meta]),
     inspect,
     stat,
-    ...options.seekable === false ? {} : { messageCut, readFrom },
+    ...options.seekable === false ? {} : { seekable, messageCut, readFrom },
   })
   if (options.trackerService === true) new TrackerVisiblePersistence(ctx, adapted, meta, events)
   else ctx.provide('sessionPersistence', adapted as never)
   /** Toggle the fork seek surface on the mounted double, so one Session can be
    * opened through both the windowed and the observation path in one test. */
-  const providePersistence = (seekable: boolean): void => {
-    if (seekable) {
+  const providePersistence = (windowed: boolean): void => {
+    if (windowed) {
+      adapted.seekable = seekable
       adapted.messageCut = messageCut
       adapted.readFrom = readFrom
     } else {
+      delete adapted.seekable
       delete adapted.messageCut
       delete adapted.readFrom
     }
@@ -352,6 +373,7 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
     stat,
     readFrom,
     messageCut,
+    seekable,
     providePersistence,
     persistence: adapted,
   }
@@ -735,6 +757,40 @@ describe('windowed session open', () => {
     resume.mockRestore()
   })
 
+  it('never seeks a window for a historical session through the opening path', async () => {
+    // 932 of the deployed store's 938 sessions are pre-format-change rows whose
+    // log restores into a re-based seq space: the cut the index answers does not
+    // address the restored events, so a window read costs a full log read and
+    // yields nothing. The probe must answer before either method is called.
+    const mount = await mountSession({ turns: 12, maxMessages: 4, legacy: true })
+
+    const frame = await opening(mount.history, mount.sessionId, mount.maxMessages)
+
+    expect(frame.records).toEqual(mount.records)
+    expect(frame.hasMore).toBe(mount.hasMore)
+    expect(mount.seekable).toHaveBeenCalledWith(mount.sessionId, expect.anything())
+    expect(mount.messageCut).not.toHaveBeenCalled()
+    expect(mount.readFrom).not.toHaveBeenCalled()
+    // The observation path served it.
+    expect(mount.stat).toHaveBeenCalled()
+  })
+
+  it('never seeks a window for a historical session through page()', async () => {
+    const mount = await mountSession({ turns: 12, maxMessages: 4, legacy: true })
+
+    const page = await mount.history.page({
+      address: { kind: 'session', sessionId: mount.sessionId },
+      throughSeq: mount.cursor,
+      maxMessages: mount.maxMessages,
+    }, new AbortController().signal)
+
+    expect(page.records).toEqual(mount.records)
+    expect(page.hasMore).toBe(mount.hasMore)
+    expect(mount.messageCut).not.toHaveBeenCalled()
+    expect(mount.readFrom).not.toHaveBeenCalled()
+    expect(mount.stat).toHaveBeenCalled()
+  })
+
   it('drives the seek surface of a provider read through its tracker proxy', async () => {
     // Production composition: the persistence is a Service, so `ctx.get`
     // answers a tracker proxy and a method taken off it must be called on that
@@ -977,6 +1033,7 @@ describe('indexed suffix window', () => {
     const cursor = events.at(-1)?.seq ?? -1
     const meta: SessionHeader = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/proj', isSeeded: false }
     const persisted: SeekablePersistence = {
+      ...canSeek,
       messageCut: (_id, maxMessages) => {
         const prompts = events.filter(event => event.type === 'user/message')
         return Promise.resolve(prompts.slice(-maxMessages)[0]?.seq)
@@ -1028,6 +1085,7 @@ describe('indexed suffix window', () => {
       { type: 'turn/end', seq: SessionSeq(fill + 2), time: fill + 2, data: { turn: 1, reason: { kind: 'completed' } } },
     ]
     const seek = (events: SessionEvent[], reads: number[], cut: number): SeekablePersistence => ({
+      ...canSeek,
       messageCut: () => Promise.resolve(cut),
       readFrom: (_id, fromSeq) => {
         reads.push(fromSeq)
@@ -1099,6 +1157,7 @@ describe('indexed suffix window', () => {
     const reads: number[] = []
     const meta: SessionHeader = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/proj', isSeeded: false }
     const persisted: SeekablePersistence = {
+      ...canSeek,
       messageCut: () => Promise.resolve(4300),
       readFrom: (_id, fromSeq) => {
         reads.push(fromSeq)
@@ -1129,6 +1188,34 @@ describe('indexed suffix window', () => {
     expect(reads[0]).toBeGreaterThan(100)
     expect(reads[1]).toBe(100)
     expect(reads[2]).toBe(100)
+  })
+
+  it('probes the window capability before any cut or read', async () => {
+    // The gate runs first: a backend that cannot address a bounded window must
+    // not pay a cut query or a suffix read at all.
+    const sessionId = sid('indexed-unaddressable')
+    const messageCut = vi.fn(() => Promise.resolve(0))
+    const readFrom: Mock<(id: SessionId, fromSeq: number) => Promise<{
+      meta: SessionHeader
+      inheritedEventCount: SessionLogOffset
+      events: SessionEvent[]
+    }>> = vi.fn(() => Promise.resolve({
+      meta: { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/proj', isSeeded: false },
+      inheritedEventCount: SessionLogOffset(0),
+      events: [] as SessionEvent[],
+    }))
+
+    await expect(readIndexedSuffix({
+      seekable: () => Promise.resolve(false),
+      messageCut,
+      readFrom,
+    }, {
+      id: sessionId,
+      maxMessages: 4,
+      beforeSeq: undefined,
+    }, () => {}, new AbortController().signal)).resolves.toBeUndefined()
+    expect(messageCut).not.toHaveBeenCalled()
+    expect(readFrom).not.toHaveBeenCalled()
   })
 
   it('gives up after one deep retry when the window can never hold a page', async () => {
@@ -1172,7 +1259,7 @@ describe('indexed suffix window', () => {
       }))
 
     await expect(readIndexedSuffix(
-      { messageCut: () => Promise.resolve(5000), readFrom },
+      { ...canSeek, messageCut: () => Promise.resolve(5000), readFrom },
       { id: sessionId, maxMessages: 4, beforeSeq: undefined },
       () => {},
       new AbortController().signal,
@@ -1190,6 +1277,7 @@ describe('indexed suffix window', () => {
     const meta: SessionHeader = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/proj', isSeeded: false }
     const reads: number[] = []
     const persisted: SeekablePersistence = {
+      ...canSeek,
       messageCut: (_id, maxMessages) => {
         const prompts = events.filter(event => event.type === 'user/message')
         return Promise.resolve(prompts.slice(-maxMessages)[0]?.seq)
@@ -1217,6 +1305,7 @@ describe('indexed suffix window', () => {
     reads.length = 0
     const shortWindow = { meta, inheritedEventCount: SessionLogOffset(0), events: [] as SessionEvent[] }
     const deepPersisted: SeekablePersistence = {
+      ...canSeek,
       messageCut: () => Promise.resolve(promptsCut(events, 4)),
       readFrom: (_id, fromSeq) => {
         reads.push(fromSeq)

@@ -199,9 +199,15 @@ export class SqliteStore {
   /**
    * Read the stored events from `fromSeq` onward. Current-format sessions use
    * the physical suffix seek; historical sessions restore the whole log once
-   * and slice, because a suffix alone cannot fold legacy chunk runs.
+   * and slice it.
+   *
+   * The historical arm cannot serve an indexed page cut: it filters the
+   * restored, re-based log by a `fromSeq` taken from the stored physical
+   * sequence, so any cut the index reports past the re-based end selects
+   * nothing. Callers that plan a window from {@link userMessageCut} must gate
+   * on {@link seekable} instead of relying on this arm.
    * @param id - the stored session to read.
-   * @param fromSeq - first event offset to include.
+   * @param fromSeq - first event offset to include, in the retired log's own seq space.
    * @param signal - optional cancellation for backend read work.
    * @returns the validated suffix, or `undefined` when the session is absent.
    */
@@ -239,12 +245,40 @@ export class SqliteStore {
     }
   }
 
-  /** Whether a stored session row exists; opens the database on first use. */
+  /**
+   * Whether a stored session row exists; opens the database on first use.
+   * @param id - the stored session to probe.
+   * @param signal - optional cancellation before or after the metadata query.
+   * @returns true when the session exists in this store.
+   */
   async hasSession(id: SessionId, signal?: AbortSignal): Promise<boolean> {
     await this.observe(signal)
     const exists = this.rowFor(id) !== undefined
     signal?.throwIfAborted()
     return exists
+  }
+
+  /**
+   * Whether this session's stored rows can answer a bounded seq window.
+   *
+   * Only current-format rows can: {@link loadStoredFrom} restores a historical
+   * row's whole log through the format catalog, whose sequence numbers are
+   * re-based over the restored events, so the physical `seq` values in the
+   * `events` table — and the cuts `userMessageCut` answers, which select on
+   * that column — address a different space than the restored suffix. A caller
+   * that plans window reads from a cut must therefore probe this first; it
+   * reads session metadata only and never touches event rows.
+   * @param id - the stored session to probe.
+   * @param signal - optional cancellation before or after the metadata query.
+   * @returns true when a direct suffix read is addressable for this session.
+   */
+  // Fork patch (FORK_SURFACE.md): the fork fast paths' cheap gate; the fork
+  // page-boundary reads a window only when this answers true.
+  async seekable(id: SessionId, signal?: AbortSignal): Promise<boolean> {
+    await this.observe(signal)
+    const row = this.rowFor(id)
+    signal?.throwIfAborted()
+    return row?.version === SESSION_FORMAT_VERSION
   }
 
   /**

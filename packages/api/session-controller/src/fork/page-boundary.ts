@@ -29,6 +29,16 @@ const PAGE_CUT_DEEP_MARGIN = 4096
 
 /** The optional indexed-seek persistence surface behind the page fast path. */
 export interface SeekablePersistence {
+  /**
+   * Whether this session can answer a bounded seq window at all. Called before
+   * any other member, so a backend whose stored rows are not addressable by the
+   * cuts `messageCut` answers (a re-based historical log, for instance) pays
+   * nothing and both fast paths fall through to the observation path.
+   * @param id - the stored session to probe.
+   * @param signal - optional cancellation for backend read work.
+   * @returns true when `messageCut` and `readFrom` share one seq space.
+   */
+  seekable(id: SessionId, signal?: AbortSignal): Promise<boolean>
   messageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined>
   readFrom(id: SessionId, fromSeq: number, signal?: AbortSignal): Promise<{
     meta: SessionHeader
@@ -211,6 +221,11 @@ export async function readIndexedSuffix(
   validateSuffix: (meta: SessionHeader, events: readonly SessionEvent[]) => void,
   signal: AbortSignal,
 ): Promise<IndexedRead | undefined> {
+  // The capability probe comes first: a backend that cannot address a bounded
+  // window must cost nothing, not one full read per attempted margin.
+  const addressable = await source.seekable(plan.id, signal)
+  signal.throwIfAborted()
+  if (!addressable) return undefined
   const end = plan.throughSeq !== undefined && plan.throughSeq >= 0
     ? Math.min(plan.throughSeq + 1, plan.beforeSeq ?? plan.throughSeq + 1)
     : plan.beforeSeq

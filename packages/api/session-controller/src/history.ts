@@ -60,14 +60,16 @@ const DEFAULT_MAX_MESSAGES = 50
  *
  * @param ctx - the context holding the mounted persistence.
  * @returns the bound surface, or undefined when the mounted persistence does
- *   not expose one.
+ *   not expose one (including a backend without the `seekable` gate, which the
+ *   read plan calls before anything else).
  */
 function seekSurface(ctx: Context): SeekablePersistence | undefined {
   const candidate = ctx.get('sessionPersistence') as Partial<SeekablePersistence> | undefined
   if (candidate === undefined) return undefined
-  const { messageCut, readFrom } = candidate
-  if (messageCut === undefined || readFrom === undefined) return undefined
+  const { seekable, messageCut, readFrom } = candidate
+  if (seekable === undefined || messageCut === undefined || readFrom === undefined) return undefined
   return {
+    seekable: seekable.bind(candidate),
     messageCut: messageCut.bind(candidate),
     readFrom: readFrom.bind(candidate),
   }
