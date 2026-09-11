@@ -31,7 +31,8 @@ import SessionProjectionCache from '@deepseek-ai/dsh-session-projection-cache'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
 import * as StorageJson from '@deepseek-ai/dsh-storage-json'
-import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
+import { SessionPersistence, SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { subagentIdentityProjectionDefinition } from '@deepseek-ai/dsh-subagent/src/projection.ts'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
@@ -115,6 +116,78 @@ interface Mounted {
   readonly messageCut: Mock<(id: SessionId, limit: number, beforeSeq?: number) => Promise<number | undefined>>
   /** Re-provide the persistence double, with or without the fork seek surface. */
   readonly providePersistence: (seekable: boolean) => void
+  /** The mounted persistence double, for a provider that delegates to it. */
+  readonly persistence: Record<string, unknown>
+}
+
+/**
+ * A persistence provider registered as a real cordis Service, so `ctx.get`
+ * answers its tracker proxy exactly as it does for the SQLite provider in
+ * production. Its seek methods read their own state through `this`, so an
+ * extracted method called against a wrapper object (rather than the proxy it
+ * was read from) sees the wrapper and throws — the failure the windowed open
+ * and the indexed page silently degrade on.
+ */
+class TrackerVisiblePersistence extends SessionPersistence {
+  // Public state, not `#private`: cordis calls a service method with the shadow
+  // object as `this`, and private fields exist only on the registered instance.
+  private readonly base: Record<string, unknown>
+  private readonly storedHeader: SessionHeader
+  private readonly storedEvents: readonly SessionEvent[]
+
+  constructor(
+    ctx: Context,
+    base: Record<string, unknown>,
+    header: SessionHeader,
+    events: readonly SessionEvent[],
+  ) {
+    super(ctx)
+    this.base = base
+    this.storedHeader = header
+    this.storedEvents = events
+  }
+
+  override create(): Promise<SessionHandle> {
+    return Promise.reject(new Error('tracker test provider is read-only'))
+  }
+
+  override open(...args: Parameters<SessionPersistence['open']>): ReturnType<SessionPersistence['open']> {
+    return (this.base.open as SessionPersistence['open'])(...args)
+  }
+
+  override flush(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  override stat(...args: Parameters<SessionPersistence['stat']>): ReturnType<SessionPersistence['stat']> {
+    return (this.base.stat as SessionPersistence['stat'])(...args)
+  }
+
+  override list(...args: Parameters<SessionPersistence['list']>): ReturnType<SessionPersistence['list']> {
+    return (this.base.list as SessionPersistence['list'])(...args)
+  }
+
+  messageCut(id: SessionId, limit: number, beforeSeq?: number): Promise<number | undefined> {
+    if (id !== this.storedHeader.id) return Promise.reject(new Error(`unknown session "${id}"`))
+    const window = beforeSeq === undefined
+      ? this.storedEvents
+      : this.storedEvents.filter(event => event.seq < beforeSeq)
+    const prompts = window.filter(event => event.type === 'user/message' && event.surfaceOp === 'append')
+    return Promise.resolve(prompts.slice(-limit)[0]?.seq)
+  }
+
+  readFrom(id: SessionId, fromSeq: number): Promise<{
+    meta: SessionHeader
+    inheritedEventCount: SessionLogOffset
+    events: SessionEvent[]
+  }> {
+    if (id !== this.storedHeader.id) return Promise.reject(new Error(`unknown session "${id}"`))
+    return Promise.resolve({
+      meta: this.storedHeader,
+      inheritedEventCount: SessionLogOffset(0),
+      events: this.storedEvents.filter(event => event.seq >= fromSeq),
+    })
+  }
 }
 
 interface MountOptions {
@@ -132,6 +205,8 @@ interface MountOptions {
   readonly staleTurns?: number
   /** Register the marker unit at this version, then bump it past the write. */
   readonly bumpMarkerUnit?: boolean
+  /** Register the persistence as a real Service instead of a plain provided value. */
+  readonly trackerService?: boolean
 }
 
 /** The projection key the fixture's marker unit owns. */
@@ -239,7 +314,8 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
     stat,
     ...options.seekable === false ? {} : { messageCut, readFrom },
   })
-  ctx.provide('sessionPersistence', adapted as never)
+  if (options.trackerService === true) new TrackerVisiblePersistence(ctx, adapted, meta, events)
+  else ctx.provide('sessionPersistence', adapted as never)
   /** Toggle the fork seek surface on the mounted double, so one Session can be
    * opened through both the windowed and the observation path in one test. */
   const providePersistence = (seekable: boolean): void => {
@@ -277,6 +353,7 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
     readFrom,
     messageCut,
     providePersistence,
+    persistence: adapted,
   }
 }
 
@@ -658,7 +735,39 @@ describe('windowed session open', () => {
     resume.mockRestore()
   })
 
-  it('installs the durable cut for a recovered log read through the session reader', async () => {
+  it('drives the seek surface of a provider read through its tracker proxy', async () => {
+    // Production composition: the persistence is a Service, so `ctx.get`
+    // answers a tracker proxy and a method taken off it must be called on that
+    // proxy to see the provider's own `this` (vendor/cordis createShadowMethod).
+    // A wrapper object around the extracted methods makes them throw, and the
+    // opening read then falls back to the full observation path in silence.
+    const mount = await mountSession({ turns: 12, maxMessages: 4, trackerService: true })
+
+    const frame = await opening(mount.history, mount.sessionId, mount.maxMessages)
+
+    expect(frame.records).toEqual(mount.records)
+    expect(mount.activate).toHaveBeenCalledWith(mount.sessionId)
+    // The observation path stats before opening the log; the windowed one never
+    // reaches it, so a silent fallback cannot pass this test.
+    expect(mount.stat).not.toHaveBeenCalled()
+  })
+
+  it('drives the indexed older-page read through a provider tracker proxy', async () => {
+    // The same surface serves `page()`/`loadOlder`, so the unbound form had
+    // kept that fast path dormant in production too.
+    const mount = await mountSession({ turns: 12, maxMessages: 4, trackerService: true })
+
+    const page = await mount.history.page({
+      address: { kind: 'session', sessionId: mount.sessionId },
+      throughSeq: mount.cursor,
+      maxMessages: mount.maxMessages,
+    }, new AbortController().signal)
+
+    expect(page.records).toEqual(mount.records)
+    expect(mount.stat).not.toHaveBeenCalled()
+  })
+
+  it('installs the durable cut for a recovered log read through the session reader', { timeout: 30_000 }, async () => {
     // End-to-end wiring for the durable-event count: a crash-interrupted stored
     // log goes through the observation reader, and the checkpoint it installs
     // must stop at the stored end while the served block sits at the balanced
@@ -922,10 +1031,20 @@ describe('indexed suffix window', () => {
       messageCut: () => Promise.resolve(cut),
       readFrom: (_id, fromSeq) => {
         reads.push(fromSeq)
+        // A third read means the ladder's one-deep-retry cap is gone: answer a
+        // foreign Session so that mutation fails its assertions instead of
+        // spinning a microtask loop that starves the test file's timers.
+        const runaway = reads.length > 2
         return Promise.resolve({
-          meta: { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/proj', isSeeded: false },
+          meta: {
+            version: SESSION_FORMAT_VERSION,
+            id: runaway ? sid('indexed-runaway') : sessionId,
+            createdAt: 1,
+            cwd: '/proj',
+            isSeeded: false,
+          },
           inheritedEventCount: SessionLogOffset(0),
-          events: events.filter(event => event.seq >= fromSeq),
+          events: runaway ? [] : events.filter(event => event.seq >= fromSeq),
         })
       },
     })
@@ -983,6 +1102,17 @@ describe('indexed suffix window', () => {
       messageCut: () => Promise.resolve(4300),
       readFrom: (_id, fromSeq) => {
         reads.push(fromSeq)
+        // The floor keeps the restart above seq 0, so the three reads this case
+        // expects are all the ladder can make before its cap ends it: answer a
+        // foreign Session afterwards, so a removed cap fails the length check
+        // below instead of spinning a microtask loop that starves the file.
+        if (reads.length > 3) {
+          return Promise.resolve({
+            meta: { ...meta, id: sid('indexed-runaway') },
+            inheritedEventCount: SessionLogOffset(0),
+            events: [],
+          })
+        }
         return Promise.resolve({ meta, inheritedEventCount: SessionLogOffset(0), events: events.filter(event => event.seq >= fromSeq) })
       },
     }

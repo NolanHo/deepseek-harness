@@ -42,6 +42,36 @@ import type {
 import { SessionAssistantStreamAccumulator } from './assistant-stream.ts'
 
 const DEFAULT_MAX_MESSAGES = 50
+
+// Fork patch (FORK_SURFACE.md): the seek surface both fork fast paths (the
+// `page()`/`loadOlder` indexed page and the windowed opening) extract;
+// binding it is what makes those paths reachable from a real provider.
+/**
+ * The mounted persistence's seek surface, with each method bound to the value
+ * `ctx.get` answers.
+ *
+ * Cordis hands a service read from another fiber to its caller as a tracker
+ * proxy, and a method taken off that proxy only restores the provider's own
+ * `this` when it is called on the proxy itself (`vendor/cordis/src/utils.ts`,
+ * `createShadowMethod`: the apply trap rebinds `thisArg` to the shadow only
+ * when `thisArg === outer`). A wrapper object carrying the extracted methods
+ * therefore calls them with the wrapper as `this`, which breaks every provider
+ * whose methods read their own state.
+ *
+ * @param ctx - the context holding the mounted persistence.
+ * @returns the bound surface, or undefined when the mounted persistence does
+ *   not expose one.
+ */
+function seekSurface(ctx: Context): SeekablePersistence | undefined {
+  const candidate = ctx.get('sessionPersistence') as Partial<SeekablePersistence> | undefined
+  if (candidate === undefined) return undefined
+  const { messageCut, readFrom } = candidate
+  if (messageCut === undefined || readFrom === undefined) return undefined
+  return {
+    messageCut: messageCut.bind(candidate),
+    readFrom: readFrom.bind(candidate),
+  }
+}
 /** Implements cold-safe history operations delegated by the Session Controller. */
 export class SessionHistoryController {
   private readonly closeFollowers = new Set<() => void>()
@@ -292,11 +322,8 @@ export class SessionHistoryController {
     signal: AbortSignal,
   ): Promise<SessionPage | undefined> {
     if (request.address.kind !== 'session') return undefined
-    const candidate = this.ctx.get('sessionPersistence') as Partial<SeekablePersistence> | undefined
-    const messageCut = candidate?.messageCut
-    const readFrom = candidate?.readFrom
-    if (messageCut === undefined || readFrom === undefined) return undefined
-    const persistence: SeekablePersistence = { messageCut, readFrom }
+    const persistence = seekSurface(this.ctx)
+    if (persistence === undefined) return undefined
     try {
       const page = await readIndexedPage(persistence, {
         id: addressId(request.address),
@@ -399,18 +426,13 @@ export class SessionHistoryController {
     if (address.kind !== 'session') return undefined
     // An attached Session's authoritative read is the store's own log.
     if (this.ctx.sessions.get(sessionId) !== undefined) return undefined
-    const candidate = this.ctx.get('sessionPersistence') as Partial<SeekablePersistence> | undefined
-    const messageCut = candidate?.messageCut
-    const readFrom = candidate?.readFrom
+    const persistence = seekSurface(this.ctx)
     const cache = this.ctx.get('sessionProjectionCache')
     const projections = this.ctx.get('sessionProjections')
-    if (messageCut === undefined
-      || readFrom === undefined
-      || cache === undefined
-      || projections === undefined) {
+    if (persistence === undefined || cache === undefined || projections === undefined) {
       return undefined
     }
-    return { persistence: { messageCut, readFrom }, cache, projections }
+    return { persistence, cache, projections }
   }
 
   private async sourceFor(

@@ -34,7 +34,7 @@ Web 客户端打开一个会话要走 `session.history.follow`，而它解析的
 
 ### 注入点
 
-Fork 自有模块：`src/fork/open-window.ts`（窗口计划与投影切面）与 `session-projection-cache/src/fork/checkpoint-read.ts`（打开路径所需的检查点读取）。上游自有文件只承载注入：`history.ts` 保留同步服务检查、窗口分支及其观测回落；`index.ts` 接线按 id 的激活；`session-projection-cache/src/index.ts` 为 fork 模块注册其私有检查点查找，并在 `hydratePrepared` 中写回刚恢复的检查点；`page-boundary.ts` 增加窗口化读取（`IndexedRead`、`readIndexedSuffix`，可选 `throughSeq` 与 `windowFloor`），`readIndexedPage` 仍委托给它。注册用的是 symbol 键属性而非实例上的 WeakMap：cordis 交给调用方的是 tracker 代理，调用方看到的服务对象并非构造函数注册的那个对象。`packages/api/session-controller/tsconfig.host.json` 列出了新源文件。
+Fork 自有模块：`src/fork/open-window.ts`（窗口计划与投影切面）与 `session-projection-cache/src/fork/checkpoint-read.ts`（打开路径所需的检查点读取）。上游自有文件只承载注入：`history.ts` 保留同步服务检查、窗口分支及其观测回落；`index.ts` 接线按 id 的激活；`session-projection-cache/src/index.ts` 为 fork 模块注册其私有检查点查找，并在 `hydratePrepared` 中写回刚恢复的检查点；`page-boundary.ts` 增加窗口化读取（`IndexedRead`、`readIndexedSuffix`，可选 `throughSeq` 与 `windowFloor`），`readIndexedPage` 仍委托给它。注册用的是 symbol 键属性而非实例上的 WeakMap：cordis 交给调用方的是 tracker 代理，调用方看到的服务对象并非构造函数注册的那个对象。同一个代理也是两条快速路径都通过 `history.ts` 的 `seekSurface` 辅助函数取出寻址面的原因：它把 `messageCut` 与 `readFrom` 绑定到 `ctx.get` 返回的那个值上。只有在该代理自身上调用时，服务方法才会拿到提供方自己的 `this`（`vendor/cordis/src/utils.ts` 的 `createShadowMethod`），而把取出的方法包进普通对象——两处站点在本轮之前的写法——会让它们以包装对象为 `this` 调用；凡是从自身状态读取的提供方都会抛错，并被回退逻辑静默吞掉。`session-open-window.host.spec.ts` 中的 tracker 提供方用例把持久化注册为真正的 `Service`，对这种包装对象会直接失败。修好这个共用表面也让既有的 `page()`/`loadOlder` 索引分页重新生效：它在生产中同样从未被触发过。`packages/api/session-controller/tsconfig.host.json` 列出了新源文件。
 
 ## 考虑过的替代方案
 
