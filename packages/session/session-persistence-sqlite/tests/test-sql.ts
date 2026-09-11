@@ -15,6 +15,8 @@ export type TestSqlName =
   | 'delete-session-events'
   | 'empty-store-id'
   | 'insert-corrupt-event'
+  | 'insert-schema-19-descriptor-events'
+  | 'insert-schema-19-descriptor-session'
   | 'insert-schema-19-events'
   | 'insert-schema-19-session'
   | 'measure-write-traffic'

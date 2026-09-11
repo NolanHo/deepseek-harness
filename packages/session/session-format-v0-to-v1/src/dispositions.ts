@@ -1,3 +1,6 @@
+// Fork patch (FORK_SURFACE.md): released descriptor member inventory.
+import { RELEASED_SUBAGENT_DESCRIPTOR_OPTIONAL_MEMBERS } from './fork/subagent-descriptor-compat.ts'
+
 /** Exact top-level payload disposition frozen for every released-v0 event type. */
 export interface ReleasedV0PayloadDisposition {
   readonly required: readonly string[]
@@ -91,7 +94,9 @@ export const RELEASED_V0_EVENT_DISPOSITIONS: Readonly<Record<string, ReleasedV0P
   'step/start': disposition(['turn', 'step']),
   'subagent/descriptor': disposition(
     ['mode', 'version', 'provider'],
-    ['label', 'agentProvider', 'agentModel', 'agentReasoningEffort', 'persona', 'toolFilter'],
+    // Fork patch (FORK_SURFACE.md): the installed descriptor's version 4 members
+    // are released payload members too; the fork module owns the inventory.
+    RELEASED_SUBAGENT_DESCRIPTOR_OPTIONAL_MEMBERS,
   ),
   'subagent/model-selection-policy': disposition(['allowedModels']),
   'team/member': disposition(['version', 'teamId', 'member']),

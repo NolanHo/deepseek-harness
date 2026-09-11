@@ -15,6 +15,8 @@ import type {
   SessionFormatMigrationStageInput,
 } from '@deepseek-ai/dsh-session-format'
 import { isReleasedAssistantChunkRun } from './codec.ts'
+// Fork patch (FORK_SURFACE.md): released descriptors reach the installed schema.
+import { upgradeReleasedSubagentDescriptor } from './fork/subagent-descriptor-compat.ts'
 import {
   assertReleasedEventPayload,
   assertReleasedV1Header,
@@ -93,7 +95,8 @@ function normalizeReleasedV0Event(
   const steering = normalizeLegacySteering(header, sessionId)
   const retry = normalizeLegacyRetry(steering, sessionId, state.retryIds)
   const compaction = normalizeLegacyCompaction(retry, sessionId, state)
-  const message = normalizeLegacyMessage(compaction, sessionId, state.messageIds)
+  const descriptor = upgradeReleasedSubagentDescriptor(compaction)
+  const message = normalizeLegacyMessage(descriptor, sessionId, state.messageIds)
   if (message.type !== 'assistant/chunk') assertReleasedEventPayload(message, 0)
   const messageId = eventMessageId(message)
   if (messageId !== undefined) state.messageIds.set(message.seq, messageId)

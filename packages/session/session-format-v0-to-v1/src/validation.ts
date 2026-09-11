@@ -13,6 +13,8 @@ import type {
   SessionFormatJsonValue,
 } from '@deepseek-ai/dsh-session-format'
 import { RELEASED_V0_EVENT_DISPOSITIONS } from './dispositions.ts'
+// Fork patch (FORK_SURFACE.md): the installed descriptor version is a released payload version too.
+import { CURRENT_SUBAGENT_DESCRIPTOR_VERSION } from './fork/subagent-descriptor-compat.ts'
 import { assertReleasedPayloadSemantics } from './payload-validation.ts'
 import { assertReleasedV0Keys, releasedV0Record } from './validation-helpers.ts'
 
@@ -195,7 +197,11 @@ export function assertReleasedEventPayload(event: SessionFormatEvent, version: 0
     )
   }
   const data = releasedV0Record(event.data, `${event.type} ${event.seq} data`)
-  if (event.type === 'subagent/descriptor' && data['version'] !== 3) {
+  // Fork patch (FORK_SURFACE.md): released v0 logs also carry the installed
+  // descriptor version, which the migration's normalizer admits beside version 3.
+  if (event.type === 'subagent/descriptor'
+    && data['version'] !== 3
+    && data['version'] !== CURRENT_SUBAGENT_DESCRIPTOR_VERSION) {
     const descriptorVersion = sessionFormatCount(data['version'], `${event.type} ${event.seq} version`)
     if (version === 0) {
       throw new SessionFormatUnsupportedMigrationError(

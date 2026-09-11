@@ -4,6 +4,7 @@ import {
   assertReleasedArtifactRelationships,
 } from '../src/index.ts'
 import { restoreV0ToV1, restoreV1 } from '../src/testing/restore.ts'
+import { CURRENT_SUBAGENT_DESCRIPTOR_VERSION } from '../src/fork/subagent-descriptor-compat.ts'
 
 const header = {
   type: 'session', version: 1, id: 'relationships', createdAt: 1, delegationDepth: 0,
@@ -390,7 +391,7 @@ describe('released v1 whole-artifact relationships', () => {
   it('validates versioned subagent descriptors by source/current policy', () => {
     const future = {
       type: 'subagent/descriptor', seq: 0, time: 1,
-      data: { version: 4, future: true },
+      data: { version: CURRENT_SUBAGENT_DESCRIPTOR_VERSION + 1, future: true },
     }
     expect(decode([future]).events).toEqual([future])
     const v0Header = { ...header, version: 0 }

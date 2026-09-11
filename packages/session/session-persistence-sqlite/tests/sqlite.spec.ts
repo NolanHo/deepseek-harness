@@ -164,6 +164,7 @@ function trafficLog(count: number): SessionEvent[] {
 }
 
 const LEGACY_ID = SessionId('v0-chunks')
+const DESCRIPTOR_ID = SessionId('v0-descriptor')
 
 /** Seed the schema-19 fixture: one v0 session whose packed text run predates v3. */
 async function writeLegacyV0Fixture(): Promise<string> {
@@ -172,6 +173,23 @@ async function writeLegacyV0Fixture(): Promise<string> {
   seed.exec(testSql('create-schema-19-db'))
   seed.exec(testSql('insert-schema-19-session'))
   seed.exec(testSql('insert-schema-19-events'))
+  seed.close()
+  await chmod(path, 0o600)
+  return path
+}
+
+/**
+ * Seed the schema-19 fixture with one v0 session whose child descriptor carries
+ * the version the deployed build wrote. The descriptor names the continuable
+ * composition inputs of that version, which the v0-to-v1 edge admits instead of
+ * refusing the Session its write access.
+ */
+async function writeLegacyV0DescriptorFixture(): Promise<string> {
+  const path = await freshDbPath('dsh-sqlite-legacy-descriptor-')
+  const seed = new DatabaseSync(path)
+  seed.exec(testSql('create-schema-19-db'))
+  seed.exec(testSql('insert-schema-19-descriptor-session'))
+  seed.exec(testSql('insert-schema-19-descriptor-events'))
   seed.close()
   await chmod(path, 0o600)
   return path
@@ -1267,6 +1285,30 @@ describe('SessionPersistenceSqlite edge behavior', () => {
     } finally {
       await reopened.dispose()
     }
+  })
+
+  it('publishes a historical session whose child descriptor carries the installed version', async () => {
+    const path = await writeLegacyV0DescriptorFixture()
+    const mounted = await mountSqlite(path)
+    try {
+      const writer = await mounted.persistence.open(DESCRIPTOR_ID, 'write')
+      const descriptor = (await writer.read()).events
+        .find(event => event.type === 'subagent/descriptor')
+      expect(descriptor?.data).toMatchObject({
+        mode: 'continuable',
+        provider: 'in-process',
+        label: 'child',
+        cwd: '/work/child',
+        skillFilter: { allow: ['review'] },
+      })
+      await writer.close()
+    } finally {
+      await mounted.dispose()
+    }
+
+    const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
+    expect((await store.loadStoredLog(DESCRIPTOR_ID))?.storedVersion).toBe(SESSION_FORMAT_VERSION)
+    await store.close()
   })
 
   it('rejects missing and empty store identities', async () => {

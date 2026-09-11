@@ -5,6 +5,8 @@ import type {
   SessionFormatJsonValue,
 } from '@deepseek-ai/dsh-session-format'
 import { assertReleasedV0Keys, releasedV0Record } from './validation-helpers.ts'
+// Fork patch (FORK_SURFACE.md): the installed descriptor version and its composition inputs.
+import { CURRENT_SUBAGENT_DESCRIPTOR_VERSION } from './fork/subagent-descriptor-compat.ts'
 
 type JsonRecord = Record<string, SessionFormatJsonValue>
 
@@ -953,7 +955,7 @@ function modelRouteValue(value: SessionFormatJsonValue | undefined, label: strin
 }
 
 function subagentDescriptorValue(data: JsonRecord, label: string): void {
-  literalValue(data['version'], [3], `${label} version`)
+  literalValue(data['version'], [3, CURRENT_SUBAGENT_DESCRIPTOR_VERSION], `${label} version`)
   nonEmptyString(data['provider'], `${label} provider`)
   if (data['mode'] === 'one-shot') {
     assertReleasedV0Keys(data, ['mode', 'version', 'provider'], ['label'], `${label} data`)
@@ -962,16 +964,19 @@ function subagentDescriptorValue(data: JsonRecord, label: string): void {
   }
   literalValue(data['mode'], ['continuable'], `${label} mode`)
   nonEmptyString(data['label'], `${label} label`)
-  for (const key of ['agentProvider', 'agentModel', 'agentReasoningEffort', 'persona'] as const) {
+  // Fork patch (FORK_SURFACE.md): `cwd` and `skillFilter` are the installed
+  // version's composition inputs.
+  for (const key of ['agentProvider', 'agentModel', 'agentReasoningEffort', 'persona', 'cwd'] as const) {
     if (data[key] !== undefined) nonEmptyString(data[key], `${label} ${key}`)
   }
   if ((data['agentProvider'] === undefined) !== (data['agentModel'] === undefined)) {
     throw new SessionFormatError(`${label} agentProvider and agentModel must be paired`)
   }
-  if (data['toolFilter'] !== undefined) {
-    const filter = exactRecord(data['toolFilter'], `${label} toolFilter`, [], ['allow', 'deny'])
+  for (const key of ['toolFilter', 'skillFilter'] as const) {
+    if (data[key] === undefined) continue
+    const filter = exactRecord(data[key], `${label} ${key}`, [], ['allow', 'deny'])
     if (filter['allow'] === undefined && filter['deny'] === undefined) {
-      throw new SessionFormatError(`${label} toolFilter requires allow or deny`)
+      throw new SessionFormatError(`${label} ${key} requires allow or deny`)
     }
     if (filter['allow'] !== undefined) arrayValue(filter['allow'], `${label} allow`, nonEmptyString)
     if (filter['deny'] !== undefined) arrayValue(filter['deny'], `${label} deny`, nonEmptyString)
