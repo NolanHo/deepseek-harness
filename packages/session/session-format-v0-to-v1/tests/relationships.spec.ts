@@ -4,6 +4,8 @@ import {
   assertReleasedArtifactRelationships,
 } from '../src/index.ts'
 import { restoreV0ToV1, restoreV1 } from '../src/testing/restore.ts'
+// Fork patch (FORK_SURFACE.md): the released-v0 artifact relationship reads the
+// current descriptor version from the fork's compatibility module.
 import { CURRENT_SUBAGENT_DESCRIPTOR_VERSION } from '../src/fork/subagent-descriptor-compat.ts'
 
 const header = {

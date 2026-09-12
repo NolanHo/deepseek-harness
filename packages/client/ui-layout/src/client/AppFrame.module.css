@@ -86,6 +86,10 @@
   overflow: visible;
 }
 
+/* Fork patch (FORK_SURFACE.md): the mobile-shell classes — the right column's
+   [data-mobile] anchor, the drawer scrim, the fixed drawer, and the floating
+   opener; upstream has none of them. (`.overlayLayer` inside this span is
+   upstream's.) */
 /* Mobile keeps the column out of the single-track grid: the occupant presents
    itself fullscreen below the phone breakpoint (its own rule), so this box only
    anchors the panel at the frame's right edge and must not take a grid row.

@@ -348,11 +348,12 @@
      the column's edge instead of flush against it. */
   margin-right: 2px;
   overflow-y: auto;
-  /* The conversation owns every scrollTop adjustment: prepends re-anchor rows
-     explicitly and the tail-follow re-asserts on ResizeObserver growth.
-     Native scroll anchoring would also adjust scrollTop when content above
-     grows, which the reader-input ledger misattributes as a user scroll —
-     killing the tail follow and double-shifting prepends. */
+  /* Fork patch (FORK_SURFACE.md): the conversation owns every scrollTop
+     adjustment — prepends re-anchor rows explicitly and the tail-follow
+     re-asserts on ResizeObserver growth. Native scroll anchoring would also
+     adjust scrollTop when content above grows, which the reader-input ledger
+     misattributes as a user scroll — killing the tail follow and
+     double-shifting prepends. */
   overflow-anchor: none;
   /* The column scrolls on ONE axis. Stating `hidden` rather than leaving the
      initial `visible` is what removes the horizontal bar: a box that scrolls in
@@ -489,25 +490,26 @@
   visibility: hidden;
 }
 
-/* Composer safe area: on notch/gesture-bar devices the sticky seat must
-   clear the system inset; a no-op max() where the inset is zero. */
+/* Fork patch (FORK_SURFACE.md): composer safe area — on notch/gesture-bar
+   devices the sticky seat must clear the system inset; a no-op max() where the
+   inset is zero. */
 .composerSeat {
   padding-bottom: max(8px, env(safe-area-inset-bottom));
 }
 
-/* Mobile regime (<768px, matching ui-layout's MOBILE_VIEWPORT): the frame's
-   fixed drawer opener occupies the header's top-left corner, so the session
-   header's leading edge clears it. */
+/* Fork patch (FORK_SURFACE.md): mobile regime (<768px, matching ui-layout's
+   MOBILE_VIEWPORT) — the frame's fixed drawer opener occupies the header's
+   top-left corner, so the session header's leading edge clears it. */
 @media (max-width: 767.98px) {
   .header {
     padding-left: 56px;
   }
 }
 
-/* Narrow viewports (~412px): tighten the header and tab rhythm so the
-   breadcrumb row and tab labels keep their single line. Fork: phone headers
-   keep the drawer opener and tabs; the session title (with its lineage chip)
-   lives in the drawer instead of crowding the row. */
+/* Fork patch (FORK_SURFACE.md): narrow viewports (~412px). Tighten the header
+   and tab rhythm so the breadcrumb row and tab labels keep their single line:
+   phone headers keep the drawer opener and tabs, and the session title (with
+   its lineage chip) lives in the drawer instead of crowding the row. */
 @media (max-width: 560px) {
   .header {
     padding: 8px 12px 0 56px;
