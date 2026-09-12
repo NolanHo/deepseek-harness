@@ -47,6 +47,7 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `client/connection` browserAuth 开关 | B | ~50 行 | 配置字段后的可选认证关闭 |
 | `ui-chat` TurnProcess 折叠标签 + 时长 | 已退役（双路径） | — | 上游 0.1.5-rc.2 在 `TurnProcessNodeView` 内联构建同一折叠标签；fork 的 `src/client/chat/fork/turn-process-summary.ts`（分类计数 + 墙钟时长 + 折叠前缀）已删除，视图恢复为上游实现，fork 自有的 `message.turnProcess.collapsed` 字典键随之移除。时长仍在轮次页脚的用量详情中可见。`TurnProcessNodeView.tsx` 与 `locale.ts` 现与上游完全一致。 |
 | `ui-chat` ChatView 读者输入归因 | 已退役 | — | 上游自己的修复已落地（observed-top 几何台账覆盖全部输入设备，无需监听器）；fork 的设备标记补丁在 0.1.2-rc.1 同步时移除 |
+| 部署级 reduced-motion 开关 | C | 1 个 shell 模块 + 1 处启动调用 + 1 段 CSS | `?reduce-motion=1`（`=0` 清除）写入本地存储，每次启动给 `<html data-reduce-motion>` 打标；`packages/client/web/src/base.css` 随后把动画与过渡压到一步完成。该选择只属于本部署，不改变浏览器全局的 `prefers-reduced-motion`，也不影响其他站点；未开启者渲染与从前完全一致 |
 | 无限动画的 reduced-motion 守卫 | C | 4 段 CSS 媒体块 | 上游在多数动画文件里已有 `@media (prefers-reduced-motion: reduce) { animation: none }`，但漏了四处无限动画：`ui-primitives/StateDot.cell`（运行态点阵追逐）、`ui-conversation/InputBar.pending`、`ui-conversation/TodoPanel.glyphProgress`、`ui-input-trigger/MenuView.skeletonBar`。守卫只在读者开启该偏好时生效，其余读者的渲染完全不变；StateDot 保留静态中间相 `opacity: 0.6`，让运行态仍然可读 |
 | `ui-conversation`/`ui-chat` CSS overflow-anchor + 安全区 | C | ~40 行 | 滚动容器锚定；局部规则 |
 | `api/session-controller/src/history.ts` 快路径注入 | C | `page()` 约 10 行，`follow` 约 60 行 | 分页注入委托给 fork 自有 `src/page-boundary.ts`（边界游走、梯子、快路径计划）：`page()` 一次调用加 `paginate` 的委托。打开注入增加同步服务检查、带观测回落的窗口快照分支，以及第二个构造器回调（按 id 激活窗口化 Session）。两条快速路径都通过 `seekSurface` 辅助函数取得持久化方法，并绑定到 `ctx.get` 返回的 tracker 代理：未绑定的提取方法会以包装对象为 `this` 运行，在任何读取自身状态的提供方里抛错 |

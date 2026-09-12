@@ -51,3 +51,15 @@ select,
 textarea {
   font-family: inherit;
 }
+
+/* Fork patch (FORK_SURFACE.md): the deployment's reduced-motion opt-in
+   (`?reduce-motion=1`, applied by the boot kernel). Animations complete in
+   one step instead of being removed, so transition-driven state machines
+   still settle; readers who never opt in render exactly as before. */
+:root[data-reduce-motion] *,
+:root[data-reduce-motion] *::before,
+:root[data-reduce-motion] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+}
