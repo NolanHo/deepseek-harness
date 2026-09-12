@@ -19,33 +19,35 @@ function blockedStorage(): Storage {
 }
 
 describe('resolveReduceMotion', () => {
-  it('defaults to motion on without a stored choice', () => {
-    expect(resolveReduceMotion('')).toBe(false)
-  })
-
-  it('stores an enabling query parameter and reapplies it later', () => {
-    expect(resolveReduceMotion('?reduce-motion=1')).toBe(true)
-    expect(globalThis.localStorage.getItem(REDUCE_MOTION_STORAGE_KEY)).toBe('1')
+  it('defaults to motion off without a stored choice', () => {
     expect(resolveReduceMotion('')).toBe(true)
   })
 
-  it('treats a valueless parameter as enabling and clears on an explicit no', () => {
-    expect(resolveReduceMotion('?reduce-motion')).toBe(true)
-    expect(resolveReduceMotion('?reduce-motion=false')).toBe(false)
-    expect(resolveReduceMotion('?reduce-motion=0')).toBe(false)
+  it('keeps a clean default page motionless across reloads', () => {
+    expect(resolveReduceMotion('')).toBe(true)
     expect(globalThis.localStorage.getItem(REDUCE_MOTION_STORAGE_KEY)).toBeNull()
+    expect(resolveReduceMotion('?token=abc')).toBe(true)
   })
 
-  it('ignores unrelated parameters and keeps the stored choice', () => {
-    globalThis.localStorage.setItem(REDUCE_MOTION_STORAGE_KEY, '1')
-    expect(resolveReduceMotion('?token=abc&panel=1')).toBe(true)
-  })
-
-  it('survives a blocked storage without persistence', () => {
-    vi.stubGlobal('localStorage', blockedStorage())
-    expect(resolveReduceMotion('')).toBe(false)
-    expect(resolveReduceMotion('?reduce-motion=1')).toBe(true)
+  it('stores an explicit opt-out and reapplies it later', () => {
     expect(resolveReduceMotion('?reduce-motion=0')).toBe(false)
+    expect(globalThis.localStorage.getItem(REDUCE_MOTION_STORAGE_KEY)).toBe('0')
+    expect(resolveReduceMotion('')).toBe(false)
+    expect(resolveReduceMotion('?reduce-motion=false')).toBe(false)
+  })
+
+  it('clears the opt-out on an enabling parameter', () => {
+    globalThis.localStorage.setItem(REDUCE_MOTION_STORAGE_KEY, '0')
+    expect(resolveReduceMotion('?reduce-motion=1')).toBe(true)
+    expect(globalThis.localStorage.getItem(REDUCE_MOTION_STORAGE_KEY)).toBeNull()
+    expect(resolveReduceMotion('?reduce-motion')).toBe(true)
+  })
+
+  it('survives a blocked storage with the deployment default', () => {
+    vi.stubGlobal('localStorage', blockedStorage())
+    expect(resolveReduceMotion('')).toBe(true)
+    expect(resolveReduceMotion('?reduce-motion=0')).toBe(false)
+    expect(resolveReduceMotion('?reduce-motion=1')).toBe(true)
   })
 })
 

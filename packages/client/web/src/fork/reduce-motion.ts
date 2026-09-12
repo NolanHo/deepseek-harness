@@ -1,9 +1,8 @@
-// Fork-owned reduced-motion opt-in (see FORK_SURFACE.md): the deployment can
-// pin the preference for its own GUI without changing the browser-wide
-// `prefers-reduced-motion` setting. `?reduce-motion=1` stores the choice,
-// `?reduce-motion=0` clears it, and each boot reapplies the stored value as
-// `<html data-reduce-motion>`; the shell stylesheet turns animations and
-// transitions off under that attribute only.
+// Fork-owned reduced-motion default (see FORK_SURFACE.md): this deployment
+// runs without motion by default, without changing the browser-wide
+// `prefers-reduced-motion` setting. Each boot marks `<html data-reduce-motion>`
+// (the shell stylesheet then completes animations and transitions in one step);
+// `?reduce-motion=0` stores an opt-out, `?reduce-motion=1` clears it.
 
 /** Storage key holding this deployment's reduced-motion choice. */
 export const REDUCE_MOTION_STORAGE_KEY = 'dsh:reduce-motion'
@@ -11,38 +10,43 @@ export const REDUCE_MOTION_STORAGE_KEY = 'dsh:reduce-motion'
 /** Query parameter that sets or clears the stored choice. */
 export const REDUCE_MOTION_QUERY_KEY = 'reduce-motion'
 
-/** Whether one stored value means "motion off". */
-function stored(): boolean {
+/**
+ * One stored choice: `'1'` keeps the default, `'0'` is the reader's opt-out,
+ * `undefined` means no choice was stored (or the storage is blocked).
+ */
+function stored(): '1' | '0' | undefined {
   try {
-    return globalThis.localStorage?.getItem(REDUCE_MOTION_STORAGE_KEY) === '1'
+    const value = globalThis.localStorage?.getItem(REDUCE_MOTION_STORAGE_KEY)
+    return value === '1' || value === '0' ? value : undefined
   } catch {
-    // A blocked storage (private mode, disabled cookies) only costs persistence.
-    return false
+    // A blocked storage (private mode, disabled cookies) only costs persistence;
+    // the deployment default still applies.
+    return undefined
   }
 }
 
-/** Persist or clear the choice, ignoring a blocked storage. */
-function store(on: boolean): void {
+/** Persist or clear the opt-out, ignoring a blocked storage. */
+function store(value: '1' | '0' | undefined): void {
   try {
-    if (on) globalThis.localStorage?.setItem(REDUCE_MOTION_STORAGE_KEY, '1')
-    else globalThis.localStorage?.removeItem(REDUCE_MOTION_STORAGE_KEY)
+    if (value === undefined) globalThis.localStorage?.removeItem(REDUCE_MOTION_STORAGE_KEY)
+    else globalThis.localStorage?.setItem(REDUCE_MOTION_STORAGE_KEY, value)
   } catch {
     // Same blocked-storage case as `stored`: this page still gets the attribute.
   }
 }
 
 /**
- * Resolve the deployment's reduced-motion choice. The query parameter wins and
- * persists the choice (`?reduce-motion`, `=1`, `=true` enable it; `=0` or
- * `=false` clear it); without the parameter the stored choice applies.
+ * Resolve the deployment's reduced-motion choice. Motion is off by default; a
+ * stored opt-out (`?reduce-motion=0`) turns it back on, and `?reduce-motion=1`
+ * clears that opt-out. The query parameter wins and persists.
  * @param search - the page URL's query string, with or without the leading `?`.
  * @returns whether this page should run without motion.
  */
 export function resolveReduceMotion(search: string): boolean {
   const value = new URLSearchParams(search).get(REDUCE_MOTION_QUERY_KEY)
-  if (value === null) return stored()
+  if (value === null) return stored() !== '0'
   const on = value !== '0' && value !== 'false'
-  store(on)
+  store(on ? undefined : '0')
   return on
 }
 
