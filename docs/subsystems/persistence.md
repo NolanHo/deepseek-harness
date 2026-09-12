@@ -2,9 +2,9 @@
 
 English | [中文](persistence.zh.md)
 
-The **durability seam** for the event log. [session.md](session.md) describes the in-memory `Session` — the append-only `SessionEvent` log that is the source of truth. This page describes how that log is made durable: the abstract `SessionPersistence` service, its provider model and shipped JSONL backend, the flush checkpoint, crash recovery, and the metadata header that travels alongside the log. The event vocabulary the log carries is enumerated, member by member, in the generated [persistence log event catalog](../persistence-catalog.md).
+The **durability seam** for the event log. [session.md](session.md) describes the in-memory `Session` — the append-only `SessionEvent` log that is the source of truth. This page describes how that log is made durable: the abstract `SessionPersistence` service, its provider model and shipped JSONL backend, the flush checkpoint, crash recovery, the one host-initiated in-place rewrite path, and the metadata header that travels alongside the log. The event vocabulary the log carries is enumerated, member by member, in the generated [persistence log event catalog](../persistence-catalog.md).
 
-The seam is a [capability seam](../../.agents/notes/implemented/architecture/2026-06-13-capability-seams.md): one abstract service ([dsh-session-persistence](../../packages/session/session-persistence), `ctx.sessionPersistence`) exposing `create`/`open`/`stat`/`list` over the existing `SessionEvent` — **no parallel persisted event type** — where `create` and `open` return a per-session `SessionHandle` (`read`/`append`/`flush`/`close`) that carries all log access and single-writer ownership. The repository ships [dsh-session-persistence-jsonl](../../packages/session/session-persistence-jsonl) as its provider; out-of-tree providers may implement the same service contract. See the [handle-based persistence Agent Note](../../.agents/notes/implemented/architecture/2026-08-27-handle-based-session-persistence.md) and the [session-persistence Agent Note](../../.agents/notes/implemented/architecture/2026-06-14-session-persistence.md).
+The seam is a [capability seam](../../.agents/notes/implemented/architecture/2026-06-13-capability-seams.md): one abstract service ([dsh-session-persistence](../../packages/session/session-persistence), `ctx.sessionPersistence`) exposing `create`/`open`/`stat`/`list` over the existing `SessionEvent` — **no parallel persisted event type** — where `create` and `open` return a per-session `SessionHandle` (`read`/`append`/`flush`/`close`, plus the optional `truncate` rewrite capability) that carries all log access and single-writer ownership. The repository ships [dsh-session-persistence-jsonl](../../packages/session/session-persistence-jsonl) as its provider; out-of-tree providers may implement the same service contract, and only a provider that can rewrite a committed log implements `truncate`. See the [handle-based persistence Agent Note](../../.agents/notes/implemented/architecture/2026-08-27-handle-based-session-persistence.md) and the [session-persistence Agent Note](../../.agents/notes/implemented/architecture/2026-06-14-session-persistence.md).
 
 ## `SessionHandle` — one open channel onto a stored session
 
@@ -77,6 +77,19 @@ interface SessionHandle extends AsyncDisposable {
    * @param options - optional cancellation observed before the write starts.
    */
   append(events: readonly SessionEvent[], options?: SessionHandleAppendOptions): Promise<void>
+
+  /**
+   * Rewrite capability: discard every stored event from `toSeq` on, so the
+   * stored log then ends at `toSeq - 1` and the next append must start at
+   * `toSeq`. Durable on resolution. A backend that cannot rewrite a committed
+   * log omits this method; a consumer that needs the rewrite refuses loudly
+   * rather than admitting the operation unmet. Rejects with
+   * `SessionReadOnlyError` on a read handle and with `SessionOwnershipLostError`
+   * when write ownership is gone.
+   * @param toSeq - first logical event seq to discard; every event below it stays.
+   * @param options - optional cancellation observed before the rewrite starts.
+   */
+  truncate?(toSeq: SessionLogOffset, options?: SessionHandleTruncateOptions): Promise<void>
 
   /**
    * The durability barrier — the one operation that promises storage: on
@@ -326,7 +339,7 @@ The optional `eventCount`/`sizeBytes` fields remain cheap backend observations f
 
 The shipped provider implements the abstract `SessionPersistence` contract (`create`/`open`/`stat`/`list`, with per-session `SessionHandle`s carrying `read`/`append`/`flush`/`close` and optional cancellation throughout) and passes the shared persistence contract suite:
 
-- **[dsh-session-persistence-jsonl](../../packages/session/session-persistence-jsonl)** — an append-only logical JSONL log per session, stored as checksummed concatenated Zstandard frames by default or raw lines by configuration, with crash-safe atomic materialization, per-batch `fsync` appends, and torn-tail truncation before the first new append. `stat`/`list` carry `sizeBytes` and a best-effort `fs.stat`-derived revision.
+- **[dsh-session-persistence-jsonl](../../packages/session/session-persistence-jsonl)** — an append-only logical JSONL log per session, stored as checksummed concatenated Zstandard frames by default or raw lines by configuration, with crash-safe atomic materialization, per-batch `fsync` appends, and torn-tail truncation before the first new append. `stat`/`list` carry `sizeBytes` and a best-effort `fs.stat`-derived revision. The backend omits the optional `truncate` rewrite capability; a consumer that needs the in-place rewrite fails loud instead of admitting the operation unmet.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -340,9 +353,9 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.sessionPersistence` — `SessionPersistence` (abstract seam)
 
-Durable append-only session storage addressed through per-session handles.
+Durable session storage addressed through per-session handles.
 
-Storage semantics shared by every backend: events are contiguous from seq 0 and never rewritten; a torn physical tail is never returned to a reader and is truncated by the write path before its first append; reads validate current-format records only and refuse unknown vocabulary fail-closed. `append` persists best-effort; `flush` — per handle or service-wide — is the durability barrier.
+Storage semantics shared by every backend: events are contiguous from seq 0; `append` never rewrites committed events, and the one committed-log rewrite is the optional write-handle SessionHandle.truncate — a backend may omit it, and a consumer that needs the rewrite fails loud on a backend without the capability. A torn physical tail is never returned to a reader and is truncated by the write path before its first append; reads validate current-format records only and refuse unknown vocabulary fail-closed. `append` persists best-effort; `flush` — per handle or service-wide — is the durability barrier.
 
 Visibility: a created session is observable through `stat`/`list`/`open` in this process from the moment `create` resolves, even while a backend defers physical materialization (a pure optimization); other processes see the session only once it materializes, and a session that never materialized before a crash never existed. `SessionHandle.flush` forces materialization.
 

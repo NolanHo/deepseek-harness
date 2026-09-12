@@ -46,6 +46,13 @@ export interface SessionHandleFlushOptions {
 export interface SessionHandleTruncateOptions {
   /** Optional cancellation observed before the rewrite starts. */
   readonly signal?: AbortSignal
+  /**
+   * Events this rewrite must land at the cut, in seq order starting exactly at
+   * `toSeq`, committed in the same durable step as the discard. A caller whose
+   * shortened log needs a balancing event cannot leave it to a second append:
+   * a crash between the two would expose the truncated log without it.
+   */
+  readonly append?: readonly SessionEvent[]
 }
 
 /**
@@ -105,7 +112,9 @@ export interface SessionHandle extends AsyncDisposable {
   /**
    * Rewrite capability: discard every stored event from `toSeq` on, so the
    * stored log then ends at `toSeq - 1` and the next append must start at
-   * `toSeq`. Durable on resolution. A backend that cannot rewrite a committed
+   * `toSeq`. {@link SessionHandleTruncateOptions.append} lands in the same
+   * durable step, so a caller never observes the rewritten log without it.
+   * Durable on resolution. A backend that cannot rewrite a committed
    * log omits this method; a consumer that needs the rewrite refuses loudly
    * rather than admitting the operation unmet. Rejects with
    * `SessionReadOnlyError` on a read handle and with `SessionOwnershipLostError`

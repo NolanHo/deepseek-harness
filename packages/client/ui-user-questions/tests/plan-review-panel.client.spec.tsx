@@ -105,6 +105,7 @@ const inputState: InputState = {
   phase: 'plain',
   occurrences: [],
   queue: [],
+  rewriteFrom: null,
 }
 
 const questionDraftStore = createQuestionDraftStore().create(SID)
@@ -129,6 +130,7 @@ const kit: Omit<QuestionComposerProps, 'matched'> = {
     addAttachments: () => { throw new Error('unused') },
     removeAttachment: () => { throw new Error('unused') },
     pruneAttachments: () => { throw new Error('unused') },
+    setRewriteFrom: () => { throw new Error('unused') },
     submit: () => { throw new Error('unused') },
   },
   useStore: selector => selector(questionDraftStore.getSnapshot()),

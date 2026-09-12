@@ -105,7 +105,7 @@ The packed-row foundation lives in the archived "SQLite physical chunk-row decis
 | File | Role |
 |---|---|
 | [`src/index.ts`](src/index.ts) | Plugin entry: `Config` schema, service registration, coordinator wiring |
-| [`src/store.ts`](src/store.ts) | Storage primitives: transactional append, reads, repair, path and ownership validation |
+| [`src/store.ts`](src/store.ts) | Storage primitives: transactional append, reads, repair, truncate, path and ownership validation |
 | [`src/schema.ts`](src/schema.ts) | Schema ownership: version gate, connection hardening, row decoding |
 | [`src/codec.ts`](src/codec.ts) | Packing: which `assistant/chunk` runs become packed rows, size bounds |
 | [`src/compression.ts`](src/compression.ts) | Physical encoding: dictionary compression, sequence lists, row scan and decode |
@@ -127,6 +127,8 @@ The exact columns live in [`resources/sql/schema.sql`](resources/sql/schema.sql)
 ### Write path
 
 Each append takes an immediate transaction, re-validates schema ownership, checks the stored tail so a stale writer cannot extend the log, packs only the new batch, inserts its rows, bumps the session revision once, and commits. The coordinator coalesces live events for the configured window, so high-frequency streams produce larger packed runs while physical writes stay proportional to newly durable batches.
+
+`truncate` runs the same immediate transaction: it deletes every row at or past the cut, rewrites the one packed row whose run spans the cut so only its members below it survive, bumps the session revision once, and commits.
 
 ### Read and recovery
 

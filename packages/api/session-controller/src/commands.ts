@@ -16,6 +16,10 @@ import {
 import type { MessageSource } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
+import {
+  SessionPersistenceNotFoundError,
+  type SessionHandle,
+} from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
@@ -32,7 +36,10 @@ import {
   hasApiSessionSubagentOwner,
   inspectApiSession,
 } from './agent.ts'
+import { planInboxRepair, resolveRewriteCut } from './fork/rewrite-history.ts'
+import type { RewriteInboxRepair } from './fork/rewrite-history.ts'
 import type {
+  RewriteUnavailableReason,
   SessionAttachmentRequest,
   SessionAttachmentValue,
   SessionCancelRequest,
@@ -258,7 +265,9 @@ export class SessionCommandController {
     const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
     try {
       const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
-      await this.ctx.agents.create({
+      // Fork patch (FORK_SURFACE.md): the child handle is retained so an
+      // in-place rewrite of the fork child can dispose its Agent.
+      await this.agents.createSeeded({
         sessionId: childId,
         seed: source.events.slice(0, cut),
         inheritedEventCount: cut,
@@ -295,9 +304,14 @@ export class SessionCommandController {
   }
 
   /**
-   * Reject empty content, then admit one prompt after Agent and attachment validation.
-   * @param request - Session identity, prompt content, source metadata, and delivery mode.
-   * @returns acknowledgement that the Agent accepted the prompt.
+   * Reject empty content, then admit one prompt after Agent and attachment
+   * validation. An armed `rewriteFrom` first rewrites the stored log in
+   * place: the armed message's turn and every event after it are discarded,
+   * and the prompt is admitted at that cut on the same Session.
+   * @param request - Session identity, prompt content, source metadata,
+   *   delivery mode, and optional in-place rewrite anchor.
+   * @returns acknowledgement that the Agent accepted the prompt, flagged with
+   *   the rewrite when admission truncated the Session log.
    */
   async prompt(request: SessionPromptRequest): Promise<SessionPromptValue> {
     if (!hasPromptContent(request.content)) {
@@ -317,6 +331,15 @@ export class SessionCommandController {
         { value: request.clientTimeZone },
       )
     }
+    // A retried prompt whose requestId a live Agent already holds must never
+    // rewrite again, so the idempotent accept precedes every rewrite step.
+    const alreadyLive = this.ctx.agents.get(request.sessionId)
+    if (alreadyLive !== undefined && hasPromptRequest(alreadyLive, request.requestId)) {
+      return { accepted: true }
+    }
+    const rewrote = request.rewriteFrom === undefined
+      ? false
+      : await this.rewriteHistory(request, request.rewriteFrom)
     const agent = await this.resolveAgent(request.sessionId)
     if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
     const selection = this.agents.selectionFor(agent).current
@@ -372,7 +395,182 @@ export class SessionCommandController {
       }
       return { accepted: true }
     }
-    return hasImage ? this.agents.serializeImageAdmission(agent, admit) : admit()
+    const accepted = await (hasImage
+      ? this.agents.serializeImageAdmission(agent, admit)
+      : admit())
+    return rewrote ? { ...accepted, rewrote: true } : accepted
+  }
+
+  /**
+   * Rewrite one Session log in place before prompt admission: validate the
+   * armed anchor against the stored log, require any live Agent to be idle,
+   * dispose it, and truncate the stored log at the armed turn's start.
+   * @param request - the prompt request carrying the armed anchor.
+   * @param rewriteFrom - seq of the armed `user/message` to replace.
+   * @returns true once the stored log ends at the armed turn's start.
+   */
+  private async rewriteHistory(
+    request: SessionPromptRequest,
+    rewriteFrom: number,
+  ): Promise<true> {
+    if (request.mode !== 'queue') {
+      throw new RemoteError(
+        'gateway/bad-request',
+        'in-place rewrite prompts require queue mode',
+        {},
+      )
+    }
+    let anchored: ReturnType<typeof SessionSeq>
+    try {
+      anchored = SessionSeq(rewriteFrom)
+    } catch {
+      throw new RemoteError(
+        'gateway/bad-request',
+        'rewriteFrom must be a non-negative safe integer',
+        {},
+      )
+    }
+    let observed: SessionObservation
+    try {
+      observed = await this.ctx.sessionQuery.observeSession(request.sessionId)
+    } catch (error) {
+      if (error instanceof SessionQueryError
+        && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
+        throw new RemoteError('session/not-found', `session "${request.sessionId}" not found`, {
+          sessionId: request.sessionId,
+        })
+      }
+      throw new RemoteError(
+        'gateway/internal',
+        `rewrite source unavailable for session "${request.sessionId}": ${String(error)}`,
+        {},
+      )
+    }
+    using source = observed
+    const verdict = resolveRewriteCut(
+      source.header,
+      source.events,
+      anchored,
+      source.inheritedEventCount,
+    )
+    if (!verdict.ok) {
+      if (verdict.reason === 'REWRITE_SUBAGENT_SESSION') {
+        throw apiSessionSubagentOwnershipError(request.sessionId)
+      }
+      throw rewriteUnavailableError(request.sessionId, verdict.reason)
+    }
+    const live = this.ctx.agents.get(request.sessionId)
+    if (live !== undefined) {
+      if (hasApiSessionSubagentOwner(this.ctx, live.session, live)) {
+        throw apiSessionSubagentOwnershipError(request.sessionId)
+      }
+      // Disposal must never silently cancel someone else's work: refuse a
+      // running turn, and refuse queued work the disposal would discard.
+      if (live.status !== 'idle') {
+        throw rewriteUnavailableError(request.sessionId, 'REWRITE_TURN_RUNNING')
+      }
+      if (live.inbox.nextTurn.length > 0 || live.inbox.nextStep.length > 0) {
+        throw rewriteUnavailableError(request.sessionId, 'REWRITE_INBOX_PENDING')
+      }
+      await live.whenIdle()
+    }
+    await this.agents.disposeAgent(request.sessionId)
+    // A message queued while an earlier turn was still running keeps its
+    // admission insert inside that earlier turn, which survives the cut; the
+    // removal splice below empties the pending entry again so the resumed
+    // driver cannot replay the replaced message as a new turn.
+    const armedEvent = source.events[Number(anchored)]
+    const repair = armedEvent?.type === 'user/message'
+      ? planInboxRepair(source.events, verdict.cut, String(armedEvent.data.id))
+      : undefined
+    await this.truncateStoredLog(request.sessionId, verdict.cut, repair)
+    // The projection cache's rows are bound to a session lifecycle and their
+    // watermarks assume the log only grows: a row at or past the cut now
+    // describes events the rewrite removed, and the identity check cannot see
+    // it. Only this rewrite knows, so it discards the record; the next open
+    // refolds the (shorter) log.
+    await this.ctx.get('sessionProjectionCache')?.discard(request.sessionId)
+    return true
+  }
+
+  /**
+   * Truncate one stored Session log to an exact cut through a write handle,
+   * optionally appending the inbox repair the cut makes necessary.
+   * @param sessionId - Session whose log is truncated.
+   * @param cut - first stored event seq to discard.
+   * @param repair - removal splice appended at the cut, when the retained
+   *   prefix still lists the replaced message as pending.
+   */
+  private async truncateStoredLog(
+    sessionId: SessionId,
+    cut: SessionLogOffset,
+    repair?: RewriteInboxRepair,
+  ): Promise<void> {
+    // The persistence seam is an optional service on this composition: resolve
+    // it through `ctx.get` (a declared-injection property proxy is absent
+    // here) and fail loud when no backend is mounted.
+    const persistence = this.ctx.get('sessionPersistence')
+    if (persistence === undefined) {
+      throw new RemoteError(
+        'session/rewrite-unsupported',
+        `session storage cannot truncate session "${sessionId}": no persistence backend is mounted`,
+        { sessionId },
+      )
+    }
+    let handle: SessionHandle
+    try {
+      handle = await persistence.open(sessionId, 'write')
+    } catch (error) {
+      if (error instanceof SessionPersistenceNotFoundError) {
+        throw new RemoteError('session/not-found', `session "${sessionId}" not found`, {
+          sessionId,
+        })
+      }
+      throw new RemoteError(
+        'gateway/internal',
+        `failed to open session "${sessionId}" for rewrite: ${String(error)}`,
+        {},
+      )
+    }
+    try {
+      if (handle.truncate === undefined) {
+        throw new RemoteError(
+          'session/rewrite-unsupported',
+          `session storage cannot truncate session "${sessionId}": the backend has no rewrite capability`,
+          { sessionId },
+        )
+      }
+      try {
+        // The repair lands in the truncation's own durable step: an append
+        // after it would leave a crash window in which the shortened log
+        // exposes the phantom this repair exists to prevent.
+        await handle.truncate(cut, repair === undefined
+          ? undefined
+          : {
+            append: [{
+              type: 'agent/inbox/spliced',
+              seq: SessionSeq(Number(cut)),
+              time: Date.now(),
+              data: {
+                target: repair.target,
+                start: repair.start,
+                removedCount: 1,
+                inserted: [],
+                outcome: 'canceled',
+              },
+            }],
+          })
+      } catch (error) {
+        if (remoteErrorOf(error) !== undefined) throw error
+        throw new RemoteError(
+          'gateway/internal',
+          `failed to truncate session "${sessionId}": ${String(error)}`,
+          {},
+        )
+      }
+    } finally {
+      await handle.close()
+    }
   }
 
   /**
@@ -592,6 +790,20 @@ function hasPromptRequest(agent: Agent, requestId: SessionRequestId): boolean {
     const source = event.data.source
     return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
   })
+}
+
+function rewriteUnavailableError(
+  sessionId: SessionId,
+  reason: RewriteUnavailableReason,
+): RemoteError<'session/rewrite-unavailable'> {
+  const message = reason === 'REWRITE_INVALID_FROM'
+    ? `session "${sessionId}" has no user message at the armed rewrite position`
+    : reason === 'REWRITE_INHERITED_PREFIX'
+      ? `session "${sessionId}" cannot cut into its fork-inherited prefix`
+      : reason === 'REWRITE_TURN_RUNNING'
+        ? `session "${sessionId}" is running a turn; retry the rewrite when it is idle`
+        : `session "${sessionId}" has queued messages; retry the rewrite once they settle`
+  return new RemoteError('session/rewrite-unavailable', message, { sessionId, reason })
 }
 function imageBlockIn(
   content: unknown,

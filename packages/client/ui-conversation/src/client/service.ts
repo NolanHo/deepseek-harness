@@ -223,6 +223,8 @@ export class ConversationController extends Service implements IConversation {
    * @param attachmentIds - ordered draft-local attachment ids.
    * @param mode - queue or steer delivery selected by composer policy.
    * @param signal - optional cancellation for the complete Host admission.
+   * @param rewriteFrom - armed in-place rewrite seq; null or omitted sends a
+   *   plain append (the subagent continuation branch never rewrites).
    * @returns the Host admission outcome; local attachment preparation failures reject.
    */
   async sendSession(
@@ -231,6 +233,7 @@ export class ConversationController extends Service implements IConversation {
     attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal?: AbortSignal,
+    rewriteFrom?: number | null,
   ): Promise<SubmitOutcome> {
     const attachments = this.resolveDraftAttachments(attachmentIds)
     if (attachments.length !== attachmentIds.length) {
@@ -289,7 +292,10 @@ export class ConversationController extends Service implements IConversation {
       submission.abandon()
       throw error
     }
-    const result = await session.prompt(content, mode, signal, submission.requestId)
+    const rewriteOptions = rewriteFrom === undefined || rewriteFrom === null ? undefined : { rewriteFrom }
+    const result = await session.prompt(
+      content, mode, signal, submission.requestId, ...(rewriteOptions === undefined ? [] : [rewriteOptions]),
+    )
     if (!result.ok) return { kind: 'error' }
     if (retirement !== undefined && (await retirement).reason !== 'observed') return { kind: 'error' }
     return { kind: 'success' }

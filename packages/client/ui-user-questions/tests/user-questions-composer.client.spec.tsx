@@ -104,6 +104,7 @@ const inputState: InputState = {
   phase: 'plain',
   occurrences: [],
   queue: [],
+  rewriteFrom: null,
 }
 
 /** Framework standard-kit stubs: the composer consumes the locale and draft-store seats;
@@ -128,6 +129,7 @@ const kitBase: Omit<QuestionComposerProps, 'matched' | 'useStore' | 'actions'> =
     addAttachments: () => { throw new Error('unused') },
     removeAttachment: () => { throw new Error('unused') },
     pruneAttachments: () => { throw new Error('unused') },
+    setRewriteFrom: () => { throw new Error('unused') },
     submit: () => { throw new Error('unused') },
   },
   // The seat's key domain is question ∪ common.

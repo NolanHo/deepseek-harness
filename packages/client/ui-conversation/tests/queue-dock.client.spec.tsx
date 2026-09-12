@@ -70,7 +70,7 @@ function liveSession(initial: SessionSnapshot) {
   }
 }
 
-const INPUT_STATE: InputState = { draft: '', attachmentIds: [], draftRev: 0, phase: 'plain', occurrences: [], queue: [] }
+const INPUT_STATE: InputState = { draft: '', attachmentIds: [], draftRev: 0, phase: 'plain', occurrences: [], queue: [], rewriteFrom: null }
 
 const t: QueueDockProps['t'] = makeTranslate(zh, commonZh)
 const usePanelInfo: GlobalStandardProps['usePanelInfo'] = selector => selector({ activePanelId: null })

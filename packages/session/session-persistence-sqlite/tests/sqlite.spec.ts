@@ -24,7 +24,11 @@ import SessionPersistenceSqlite, {
   DEFAULT_WRITE_BATCH_MAX_DELAY_MS,
   SCHEMA_VERSION,
 } from '@deepseek-ai/dsh-session-persistence-sqlite'
-import type { SessionStorageMetadata } from '@deepseek-ai/dsh-session-persistence'
+import {
+  SessionHandleClosedError,
+  SessionReadOnlyError,
+  type SessionStorageMetadata,
+} from '@deepseek-ai/dsh-session-persistence'
 import {
   meta,
   oneTurnLog,
@@ -1380,5 +1384,311 @@ describe('SessionPersistenceSqlite edge behavior', () => {
     await writeFile(parent, 'not a directory')
     await expect(store.open()).rejects.toThrow(/ENOENT|ENOTDIR/)
     await store.close()
+  })
+})
+
+describe('SessionPersistenceSqlite truncate', () => {
+  function stepStart(seq: number): SessionEvent {
+    return { type: 'step/start', seq: SessionSeq(seq), time: seq + 1, data: { turn: 1, step: 1 } }
+  }
+
+  function stepEnd(seq: number): SessionEvent {
+    return { type: 'step/end', seq: SessionSeq(seq), time: seq + 1, data: { turn: 1, step: 1 } }
+  }
+
+  it('cuts to zero, resumes appends at seq 0, and moves the revision durably', async () => {
+    const path = await freshDbPath('dsh-sqlite-truncate-zero-')
+    const mounted = await mountSqlite(path)
+    try {
+      const header = meta('truncate-zero')
+      const handle = await mounted.persistence.create(header)
+      await handle.append(oneTurnLog())
+      const before = await mounted.persistence.stat(header.id)
+      await handle.truncate!(SessionLogOffset(0))
+      expect((await handle.read()).events).toEqual([])
+      expect((await handle.read(0)).events).toEqual([])
+      const after = await mounted.persistence.stat(header.id)
+      expect(after?.revision).not.toBe(before?.revision)
+
+      await handle.append([turnStart(0)])
+      expect((await handle.read()).events).toEqual([turnStart(0)])
+      await handle.close()
+
+      const reopened = await mountSqlite(path)
+      try {
+        const reader = await reopened.persistence.open(header.id, 'read')
+        expect((await reader.read()).events).toEqual([turnStart(0)])
+        await reader.close()
+      } finally {
+        await reopened.dispose()
+      }
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('cuts mid-log at a row boundary: the suffix goes, reads past the cut are empty, appends resume exactly at the cut', async () => {
+    const path = await freshDbPath('dsh-sqlite-truncate-middle-')
+    const mounted = await mountSqlite(path)
+    try {
+      const header = meta('truncate-middle')
+      const log = oneTurnLog()
+      const handle = await mounted.persistence.create(header)
+      await handle.append(log)
+      const before = await mounted.persistence.stat(header.id)
+      await handle.truncate!(SessionLogOffset(3))
+      expect((await handle.read()).events).toEqual(log.slice(0, 3))
+      expect((await handle.read(3)).events).toEqual([])
+      expect((await handle.read(99)).events).toEqual([])
+      expect((await mounted.persistence.stat(header.id))?.revision).not.toBe(before?.revision)
+
+      // The next append must start exactly at the cut: the wrong seq rejects
+      // and the right seq is accepted durably.
+      await expect(handle.append([turnStart(4, 2)])).rejects.toThrow(/expected 3/)
+      await handle.append([turnStart(3, 2)])
+      expect((await handle.read()).events.map(event => event.seq)).toEqual([0, 1, 2, 3])
+      await handle.close()
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('a cut at or past the stored end is a no-op that leaves the log and revision alone', async () => {
+    const path = await freshDbPath('dsh-sqlite-truncate-end-')
+    const mounted = await mountSqlite(path)
+    try {
+      const header = meta('truncate-end')
+      const log = oneTurnLog()
+      const handle = await mounted.persistence.create(header)
+      await handle.append(log)
+      const before = await mounted.persistence.stat(header.id)
+
+      await handle.truncate!(SessionLogOffset(log.length))
+      expect((await handle.read()).events).toEqual(log)
+      expect((await mounted.persistence.stat(header.id))?.revision).toBe(before?.revision)
+
+      await handle.truncate!(SessionLogOffset(1_000))
+      expect((await handle.read()).events).toEqual(log)
+      expect((await mounted.persistence.stat(header.id))?.revision).toBe(before?.revision)
+
+      // The next append still continues the stored end, not the no-op cut.
+      await handle.append([turnStart(log.length, 2)])
+      expect((await handle.read()).events.map(event => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6])
+      await handle.close()
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('lands a landing batch in the truncation transaction and resumes right after it', async () => {
+    const path = await freshDbPath('dsh-sqlite-truncate-landing-')
+    const mounted = await mountSqlite(path)
+    try {
+      const header = meta('truncate-landing')
+      const handle = await mounted.persistence.create(header)
+      await handle.append(oneTurnLog())
+      const before = await mounted.persistence.stat(header.id)
+      const landing = stepStart(3)
+      await handle.truncate!(SessionLogOffset(3), { append: [landing] })
+      // The cut and the landing batch are one committed step: both visible,
+      // one revision move, and the next append continues after the batch.
+      expect((await handle.read()).events).toEqual([...oneTurnLog().slice(0, 3), landing])
+      const after = await mounted.persistence.stat(header.id)
+      expect(after?.revision).not.toBe(before?.revision)
+      await handle.append([turnEnd(4)])
+      expect((await handle.read()).events.slice(3)).toEqual([landing, turnEnd(4)])
+      await handle.close()
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('refuses a landing batch that does not start at the cut, leaving the log untouched', async () => {
+    const path = await freshDbPath('dsh-sqlite-truncate-landing-offcut-')
+    const mounted = await mountSqlite(path)
+    try {
+      const header = meta('truncate-landing-offcut')
+      const handle = await mounted.persistence.create(header)
+      await handle.append(oneTurnLog())
+      const before = await handle.read()
+      await expect(handle.truncate!(SessionLogOffset(3), { append: [stepStart(4)] }))
+        .rejects.toThrow(/must start at the cut 3/)
+      expect((await handle.read()).events).toEqual(before.events)
+      await handle.close()
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('a read handle refuses truncate with SessionReadOnlyError and mutates nothing', async () => {
+    const path = await freshDbPath('dsh-sqlite-truncate-read-only-')
+    const mounted = await mountSqlite(path)
+    try {
+      const header = meta('truncate-read-only')
+      const writer = await mounted.persistence.create(header)
+      await writer.append(oneTurnLog())
+      await writer.close()
+
+      const reader = await mounted.persistence.open(header.id, 'read')
+      await expect(reader.truncate?.(SessionLogOffset(0))).rejects.toBeInstanceOf(SessionReadOnlyError)
+      expect((await reader.read()).events).toEqual(oneTurnLog())
+      await reader.close()
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('a closed handle refuses truncate and rejects non-integer offsets', async () => {
+    const path = await freshDbPath('dsh-sqlite-truncate-closed-')
+    const mounted = await mountSqlite(path)
+    try {
+      const header = meta('truncate-closed')
+      const handle = await mounted.persistence.create(header)
+      await handle.append(oneTurnLog())
+      await expect(handle.truncate!(-1 as SessionLogOffset)).rejects.toThrow(/non-negative safe integer/)
+      await expect(handle.truncate!(1.5 as SessionLogOffset)).rejects.toThrow(/non-negative safe integer/)
+      await handle.close()
+      await expect(handle.truncate!(SessionLogOffset(0))).rejects.toBeInstanceOf(SessionHandleClosedError)
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('refuses a cut that enters the fork-inherited prefix', async () => {
+    const path = await freshDbPath('dsh-sqlite-truncate-seeded-')
+    const mounted = await mountSqlite(path)
+    try {
+      const header: SessionHeader = {
+        version: SESSION_FORMAT_VERSION,
+        id: SessionId('truncate-seeded'),
+        createdAt: 1_000,
+        isSeeded: true,
+      }
+      const handle = await mounted.persistence.create(header, {
+        inheritedEventCount: SessionLogOffset(3),
+      })
+      await expect(handle.truncate!(SessionLogOffset(0)))
+        .rejects.toThrow(/fork-inherited prefix \(3\)/)
+      await expect(handle.truncate!(SessionLogOffset(2)))
+        .rejects.toThrow(/fork-inherited prefix \(3\)/)
+      // The cut at the inherited boundary discards nothing (empty log).
+      await handle.truncate!(SessionLogOffset(3))
+      await handle.close()
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('rewrites a synthetic packed row spanning the cut instead of dropping members below it', async () => {
+    for (const toSeq of [4, 5]) {
+      const path = await freshDbPath(`dsh-sqlite-truncate-packed-${toSeq}-`)
+      const store = new SqliteStore({ path, journalMode: 'wal', busyTimeoutMs: DEFAULT_BUSY_TIMEOUT_MS })
+      const header = meta(`truncate-packed-${toSeq}`)
+      await store.appendBatch(storage(header), [turnStart(0), stepStart(1)], false)
+      // One synthetic packed row representing seqs 2..6 (5 members); plain-JSON
+      // data bypasses the encoder's compression entirely.
+      const raw = new DatabaseSync(path)
+      raw.prepare(testSql('insert-packed-event')).run(header.id, 2, 1_000, JSON.stringify({
+        turn: 1,
+        step: 1,
+        index: 0,
+        dt: [1, 1, 1, 1],
+        texts: ['a', 'b', 'c', 'd', 'e'],
+      }))
+      raw.close()
+      await store.appendBatch(storage(header), [stepEnd(7), turnEnd(8)], true)
+
+      const revision = (await store.stat(header.id))?.revision
+      await store.truncateLog(storage(header), toSeq)
+      expect((await store.stat(header.id))?.revision).not.toBe(revision)
+
+      // Only the members below the cut survive. A remainder of 2 members is
+      // below MIN_PACKED_ROW_MEMBERS, so it becomes scalar rows; a remainder
+      // of 3 re-packs as one packed row.
+      const probe = new DatabaseSync(path, { readOnly: true })
+      const rows = (probe.prepare(testSql('select-event-rows')).all(header.id) as unknown as PhysicalRow[])
+        .map(row => ({ seq: row.seq, type: row.type, ignorable: row.ignorable }))
+      probe.close()
+      const kept = toSeq - 2
+      expect(rows.slice(0, 2)).toEqual([
+        { seq: 0, type: 'turn/start', ignorable: null },
+        { seq: 1, type: 'step/start', ignorable: null },
+      ])
+      expect(rows.slice(2)).toEqual(kept >= 3
+        ? [{ seq: 2, type: 'text-chunks', ignorable: 0 }]
+        : [
+          { seq: 2, type: 'assistant/chunk', ignorable: null },
+          { seq: 3, type: 'assistant/chunk', ignorable: null },
+        ])
+
+      // The next append lands exactly at the cut.
+      await store.appendBatch(storage(header), [stepEnd(toSeq), turnEnd(toSeq + 1)], true)
+      await store.close()
+    }
+  })
+
+  it('publishes a legacy packed log on write open, then cuts the published rows cleanly', async () => {
+    const path = await writeLegacyV0Fixture()
+    const mounted = await mountSqlite(path)
+    try {
+      const writer = await mounted.persistence.open(LEGACY_ID, 'write')
+      const full = (await writer.read()).events
+      await writer.truncate!(SessionLogOffset(3))
+      expect((await writer.read()).events).toEqual(full.slice(0, 3))
+      await writer.append([turnStart(3, 2)])
+      expect((await writer.read()).events.map(event => event.seq)).toEqual([0, 1, 2, 3])
+      await writer.close()
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('other handles observe the intentional shrink once the revision moved, and still refuse an unrecorded shrink', async () => {
+    const path = await freshDbPath('dsh-sqlite-truncate-shrink-guard-')
+    const mounted = await mountSqlite(path)
+    try {
+      const header = meta('truncate-shrink-guard')
+      const log = oneTurnLog()
+      const writer = await mounted.persistence.create(header)
+      await writer.append(log)
+      const reader = await mounted.persistence.open(header.id, 'read')
+      expect((await reader.read()).events).toEqual(log)
+
+      // An intentional truncate moves the revision, so the concurrent reader
+      // serves the shorter committed log instead of misreporting damage.
+      await writer.truncate!(SessionLogOffset(3))
+      expect((await reader.read()).events).toEqual(log.slice(0, 3))
+      await writer.append([turnStart(3, 2)])
+      expect((await reader.read()).events.map(event => event.seq)).toEqual([0, 1, 2, 3])
+
+      // A shrink without any recorded mutation (raw row deletion) still
+      // refuses as damage.
+      const raw = new DatabaseSync(path)
+      raw.prepare(testSql('delete-session-events')).run(header.id)
+      raw.close()
+      await expect(reader.read()).rejects.toThrow(/stored log shrank below a previously observed prefix/)
+      await reader.close()
+      await writer.close()
+    } finally {
+      await mounted.dispose()
+    }
+  })
+
+  it('truncates a :memory: database and resumes appends at the cut', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionPersistenceSqlite, { path: ':memory:' })
+    try {
+      const header = meta('memory-truncate')
+      const handle = await ctx.sessionPersistence.create(header)
+      await handle.append(oneTurnLog())
+      await handle.truncate!(SessionLogOffset(2))
+      expect((await handle.read()).events).toEqual(oneTurnLog().slice(0, 2))
+      await handle.append([turnStart(2, 2)])
+      expect((await handle.read()).events.map(event => event.seq)).toEqual([0, 1, 2])
+      await handle.close()
+    } finally {
+      await ctx.fiber.dispose()
+    }
   })
 })

@@ -228,10 +228,17 @@ export class SessionProjectionCache extends Service {
     events: readonly SessionEvent[],
     durableEventCount: number,
   ): ProjectionSnapshot {
-    const record = this.recordFor(
+    const found = this.recordFor(
       session.id,
       identityOf(session.header, session.inheritedEventCount),
     )
+    // Rows at or past the durable prefix were folded from events this log no
+    // longer holds (an in-place history rewrite moves a log backwards), so
+    // they are not a seed: folding them would restore state the log cannot
+    // prove — a queued message, a completed turn.
+    const record = found !== undefined && rowsWithinDurablePrefix(found.rows, durableEventCount)
+      ? found
+      : undefined
     if (record === undefined) {
       // One restore over the durable prefix supplies the record a later
       // windowed open folds from; hydrating the cells from those rows then
@@ -314,8 +321,14 @@ export class SessionProjectionCache extends Service {
     events: readonly SessionEvent[],
   ): ProjectionSnapshot {
     const identity = identityOf(meta, inheritedEventCount)
+    const found = this.recordFor(meta.id, identity)
+    // Same water rule as `hydratePrepared`: a row at or past the supplied log
+    // length cannot have been folded from this log, so it is not a seed.
+    const rows = found !== undefined && rowsWithinDurablePrefix(found.rows, events.length)
+      ? found.rows
+      : {}
     const restored = this.ctx.sessionProjections.restore(
-      this.recordFor(meta.id, identity)?.rows ?? {},
+      rows,
       events,
       SessionLogOffset(0),
       meta,
@@ -329,6 +342,26 @@ export class SessionProjectionCache extends Service {
     return restored.snapshot
   }
 
+
+  /**
+   * Discard one Session's stored checkpoint record. The in-place history
+   * rewrite (edit-and-resend truncation) is the one operation that moves a
+   * Session log backwards, so a stored row's watermark can sit past the new
+   * log end or describe events the rewrite removed; the identity-checked read
+   * cannot tell, and only the caller that rewrote the log knows to invalidate.
+   * A live Session under the same id is dropped from the write-behind first,
+   * so a queued checkpoint cannot re-install the discarded rows.
+   * @param id - the Session whose record is discarded.
+   * @returns resolution after the durable delete.
+   */
+  async discard(id: SessionId): Promise<void> {
+    for (const session of [...this.dirty.keys()]) {
+      if (session.id !== id) continue
+      this.markClean(session)
+      this.dirty.delete(session)
+    }
+    await this.requireTable().delete(id)
+  }
 
   /**
    * Fork patch (FORK_SURFACE.md): replace one prepared Session's record with
@@ -441,6 +474,23 @@ export class SessionProjectionCache extends Service {
     if (this.table === undefined) throw new Error('session projection cache is not initialized')
     return this.table
   }
+}
+
+/**
+ * Whether every stored row sits below the durable prefix of the log it is
+ * folded against. The cache may be behind a log, never ahead of it: a row at
+ * or past the prefix was folded from events that log does not contain (the
+ * host's in-place history rewrite moves a log backwards), and seeding from it
+ * would restore state the log cannot prove.
+ * @param rows - the stored checkpoint rows.
+ * @param durableEventCount - event count of the durable prefix.
+ * @returns whether the rows are a usable seed for that prefix.
+ */
+function rowsWithinDurablePrefix(rows: ProjectionCheckpoint, durableEventCount: number): boolean {
+  for (const row of Object.values(rows)) {
+    if (row.seq >= durableEventCount) return false
+  }
+  return true
 }
 
 /** Project a header onto the identity fields a record is bound to. */

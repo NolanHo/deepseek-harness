@@ -311,10 +311,12 @@ export class SqliteSessionPersistence extends SessionPersistence {
           .then(() => { this.tracker.materialized(header.id) }),
       truncateTornTail: (header, inheritedEventCount, tornMarker) =>
         this.store.commitRepair({ meta: header, inheritedEventCount }, tornMarker, []),
+      truncateLog: (header, inheritedEventCount, toSeq, appended) =>
+        this.store.truncateLog({ meta: header, inheritedEventCount }, toSeq, appended),
       readStoredLog: async (id, signal) => {
         const stored = await this.store.loadStoredLog(id, signal)
         if (stored === undefined) throw new SessionPersistenceNotFoundError(id)
-        return { eventState: 'shared-frozen', events: stored.events }
+        return { eventState: 'shared-frozen', events: stored.events, revision: stored.revision }
       },
       hasPendingSession: id => this.tracker.hasPending(id),
       releaseHandle: (handle, materialized) => {

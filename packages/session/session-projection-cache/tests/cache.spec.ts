@@ -820,3 +820,61 @@ describe('SessionProjectionCache cold-read seeding', () => {
     }, { timeout: 5_000 })
   })
 })
+
+describe('SessionProjectionCache discard', () => {
+  it('drops the stored record so a rewritten log refolds from scratch', async () => {
+    const { ctx, root, cache } = await harness({ config: { writeEveryEvents: 1, writeIntervalMs: 60_000 } })
+    const session = ctx.sessions.create(SessionId('discard-stored'), { meta: { cwd: '/proj' } })
+    mark(session, ['stale'])
+    await vi.waitFor(async () => { expect(await storedRows(root, session.id)).toBeDefined() })
+    await cache.discard(session.id)
+    expect(await storedRecord(root, session.id)).toBeUndefined()
+    // The read face agrees: no record means no seeded snapshot.
+    expect(cache.cachedSnapshot(session.header, session.inheritedEventCount)).toBeUndefined()
+  })
+
+  it('cancels a live session pending write-behind so it cannot re-install discarded rows', async () => {
+    vi.useFakeTimers()
+    const { ctx, root, cache } = await harness({ config: { writeEveryEvents: 100, writeIntervalMs: 5_000 } })
+    const session = ctx.sessions.create(SessionId('discard-pending'), { meta: { cwd: '/proj' } })
+    mark(session, ['stale'])
+    await cache.discard(session.id)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(await storedRecord(root, session.id)).toBeUndefined()
+  })
+})
+
+describe('SessionProjectionCache water rule', () => {
+  it('refuses a stored row ahead of the log it would seed (a rewritten, shorter log)', async () => {
+    const { cache } = await harness({ config: { writeEveryEvents: 1, writeIntervalMs: 60_000 } })
+    const meta = headerOf(SessionId('row-ahead'))
+    const marksLog = (marks: string[][]): SessionEvent[] => {
+      const events: SessionEvent[] = [{ type: 'turn/start', seq: SessionSeq(0), time: 0, data: { turn: 1 } }]
+      for (const markSet of marks) {
+        events.push({
+          type: 'cache-test/mark',
+          seq: SessionSeq(events.length),
+          time: events.length,
+          data: { marks: markSet },
+        })
+      }
+      events.push({ type: 'turn/end', seq: SessionSeq(events.length), time: events.length, data: { turn: 1, reason: { kind: 'completed' } } })
+      return events
+    }
+    const full = marksLog([['old'], ['gone']])
+    const session = Session.create(meta.id, full, meta)
+    expect(cache.hydratePrepared(session, full, full.length).values['cache-test/marks'])
+      .toEqual({ marks: ['gone'] })
+    await vi.waitFor(() => {
+      expect(cache.cachedSnapshot(meta, SessionLogOffset(0))).toBeDefined()
+    }, { timeout: 5_000 })
+
+    // The same id now serves a shorter log — the in-place history rewrite cut
+    // the tail. The cached row's watermark sits past that prefix, so it cannot
+    // be a seed: folding it would restore a mark no stored event carries.
+    const shorter = marksLog([['old']])
+    const rewritten = Session.create(meta.id, shorter, meta)
+    expect(cache.hydratePrepared(rewritten, shorter, shorter.length).values['cache-test/marks'])
+      .toEqual({ marks: ['old'] })
+  })
+})

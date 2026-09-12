@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-本包让应用通过后端无关的 API 持久存储并恢复会话事件日志。读者可以创建、打开、检查、列出、追加、读取、刷新和关闭已存储会话，同时保持连续且仅追加的历史记录。只有完成 flush 才构成持久性屏障；读取方不会收到撕裂尾部或无效记录，并且每个后端实例内每个会话只允许一个写入方。若希望每个会话使用一份压缩日志，可选用随产品交付的 [JSONL 后端](../session-persistence-jsonl/README.zh.md)；也可以实现具备相同可观察保证的其他后端。
+本包让应用通过后端无关的 API 持久存储并恢复会话事件日志。读者可以创建、打开、检查、列出、追加、读取、刷新和关闭已存储会话，同时保持连续的历史记录；可选写句柄 truncate 在实现它的后端上丢弃一段已提交后缀。只有完成 flush 才构成持久性屏障；读取方不会收到撕裂尾部或无效记录，并且每个后端实例内每个会话只允许一个写入方。若希望每个会话使用一份压缩日志，可选用随产品交付的 [JSONL 后端](../session-persistence-jsonl/README.zh.md)；也可以实现具备相同可观察保证的其他后端。
 
 ## 目录
 
@@ -29,7 +29,7 @@ kind: "package-reference"
 
 ### 选择后端
 
-seam 随产品交付 [JSONL](../session-persistence-jsonl/README.zh.md) 后端。它把每个 Session 存为一份仅追加 `.jsonl.zstd` 产物。第三方后端可以直接实现该服务；必须遵守的[后端约定](#understand-the-implementation)见下文。
+seam 随产品交付 [JSONL](../session-persistence-jsonl/README.zh.md) 后端。它把每个 Session 存为一份仅追加 `.jsonl.zstd` 产物，且不实现 `truncate`。fork 自有的 [SQLite 后端](../session-persistence-sqlite/README.zh.md)实现可选重写能力；需要重写的消费者在后端缺失该能力时响亮失败。第三方后端可以直接实现该服务；必须遵守的[后端约定](#understand-the-implementation)见下文。
 
 ### 服务提供什么
 
@@ -46,7 +46,7 @@ await ctx.sessionPersistence.flush()                           // backend-wide d
 
 服务级 `flush()` 排空每个活跃写句柄已路由的事件并把其会话实体化，效果与各句柄自己的 `flush` 完全相同；失败按会话聚合为一个 `AggregateError` 而不中途放弃清扫，清扫途中被关闭的句柄视同已 flush，因为 close 本身会持久排空。
 
-每一次日志读写都流经返回的 `SessionHandle`；不存在按 id 寻址的 append 或 load 方法。`handle.read(offset?, length?)` 返回 `{ eventState, events }`：外层 slice 属于调用方，`eventState` 则区分独占的 `detached` event graph 与可能同时保存在 backend cache 中的 `shared-frozen` graph。该状态由生产者建立，slice 即使为空也会保留原状态。两种状态都能直接接管而无需复制；需要修改 event 的 consumer 必须先 clone。Read 绝不包含撕裂尾部，同一句柄上的重复读取绝不会观察到比先前读取更旧的状态，写句柄也能读到自己成功的 append。`handle.append(events)` 追加一个连续批次，其第一个 `seq` 等于已存储 next-seq；完成时的持久化是尽力而为的——批次被接受、有序，并对同一后端实例上的读取可见，只有完成的 `flush` 才承诺它在崩溃后依然存在（交付的 JSONL 后端恰好会立即持久化每个批次）。`handle.flush()` 是持久性屏障，同时把空的已创建会话实体化，使其可被持久列出。`handle.close()` 幂等且不可取消：读句柄释放本地资源；写句柄完成待处理的持久化并释放写所有权。一旦某次 `append` 或 `flush` 完成，其后在同一后端实例上开始的读取——无论经由任何句柄，还是经由 `stat`/`list`——至少能观察到该前缀。
+每一次日志读写都流经返回的 `SessionHandle`；不存在按 id 寻址的 append 或 load 方法。`handle.read(offset?, length?)` 返回 `{ eventState, events }`：外层 slice 属于调用方，`eventState` 则区分独占的 `detached` event graph 与可能同时保存在 backend cache 中的 `shared-frozen` graph。该状态由生产者建立，slice 即使为空也会保留原状态。两种状态都能直接接管而无需复制；需要修改 event 的 consumer 必须先 clone。Read 绝不包含撕裂尾部，同一句柄上的重复读取绝不会观察到比先前读取更旧的状态，写句柄也能读到自己成功的 append。`handle.append(events)` 追加一个连续批次，其第一个 `seq` 等于已存储 next-seq；完成时的持久化是尽力而为的——批次被接受、有序，并对同一后端实例上的读取可见，只有完成的 `flush` 才承诺它在崩溃后依然存在（交付的 JSONL 后端恰好会立即持久化每个批次）。`handle.truncate?(toSeq)` 是可选的重写能力：丢弃 `toSeq` 起的全部已存事件，完成即可持久，仅限写句柄，并拒绝切入 fork 继承前缀；无法重写已提交日志的后端省略该方法，需要重写的消费者响亮失败，而不是把未满足的操作当作成功。`handle.flush()` 是持久性屏障，同时把空的已创建会话实体化，使其可被持久列出。`handle.close()` 幂等且不可取消：读句柄释放本地资源；写句柄完成待处理的持久化并释放写所有权。一旦某次 `append` 或 `flush` 完成，其后在同一后端实例上开始的读取——无论经由任何句柄，还是经由 `stat`/`list`——至少能观察到该前缀。
 
 ### 所有权与可见性
 
@@ -80,7 +80,7 @@ await ctx.sessionPersistence.flush()                           // backend-wide d
 
 ### 每个后端必须遵守的不变量
 
-- **仅追加，连续 `seq`。** 已提交事件绝不重写；`append` 的第一个 `seq` 必须等于已存储 next-seq，缺口会被拒绝。
+- **仅追加语义，连续 `seq`。** `append` 绝不重写已提交事件，其第一个 `seq` 必须等于已存储 next-seq，缺口会被拒绝；可选写句柄 `truncate` 从后端校验过的切点（绝不进入 fork 继承前缀）丢弃一段已提交后缀。
 - **撕裂的物理尾部绝不到达读取方。** 它属于一次从未完成的 append；写路径在第一次新 append 之前将其持久截断。
 - **无损 JSON 数据。** 批次与 header 经过共享的单遍校验并快照边界（`materializeAppendBatch`/`materializeCreateHeader`）；无法序列化的载荷在调用处被拒绝。
 - **持久性。** `append` 尽力而为地持久化；`flush`——逐句柄或服务级——是承诺存储并同时把空会话实体化的屏障。
@@ -92,7 +92,7 @@ await ctx.sessionPersistence.flush()                           // backend-wide d
 | 文件 | 职责 |
 |---|---|
 | [`src/index.ts`](src/index.ts) | 插件入口：抽象 `SessionPersistence` 服务与重新导出的 seam 词汇 |
-| [`src/handle.ts`](src/handle.ts) | `SessionHandle` 约定：read/append/flush/close 语义与新鲜度规则 |
+| [`src/handle.ts`](src/handle.ts) | `SessionHandle` 约定：read/append/truncate/flush/close 语义与新鲜度规则 |
 | [`src/storage-contract.ts`](src/storage-contract.ts) | 共享校验：版本门、失败即关闭词汇表、批次实体化、连续性 |
 | [`src/errors.ts`](src/errors.ts) | 稳定的句柄/所有权失败与格式拒绝 |
 | [`src/revision.ts`](src/revision.ts) | 带品牌类型的不透明修订值 token |
@@ -152,6 +152,7 @@ seam 不添加提示词或 schema。恢复会将已存储的表层事件还原�
 - **无删除或保留接口**——剪枝已存储会话属于带外后端维护。
 - **`list()` 无分页且无过滤**——它返回每个已存储会话的快照；适合本地存储，大规模时无索引。
 - **合成 closer 是唯一崩溃方案**——恢复通过写句柄追加 `interruptedTurnClosers`；没有继续中断轮次而不先关闭它的部分轮次恢复。
+- **`truncate` 是可选的，只有 fork 自有的 SQLite 后端实现它**——随产品交付的 JSONL 后端省略重写能力；需要重写的消费者响亮失败，而不是把未满足的操作当作成功。
 
 <a id="dev-note"></a>
 ### 开发备注

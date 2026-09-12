@@ -286,6 +286,7 @@ describe('ImageGallery', () => {
         addAttachments: vi.fn(() => true),
         removeAttachment: vi.fn(),
         pruneAttachments: vi.fn(),
+        setRewriteFrom: vi.fn(),
         submit: vi.fn(),
       },
       images: [{ attachment }],

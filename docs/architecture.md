@@ -58,7 +58,7 @@ Here are some core packages that contribute to the Cordis tree.
 
 | Package | Owns | `ctx` key |
 |---|---|---|
-| [`core/session`](subsystems/session.md) | The append-only `SessionEvent` log and in-memory store | `ctx.sessions` |
+| [`core/session`](subsystems/session.md) | The in-memory append-only `SessionEvent` log and store | `ctx.sessions` |
 | [`core/system-prompt`](subsystems/system-prompt.md) | Prompt-section and tool-schema assembly | `ctx.systemPrompt` |
 | [`core/tools`](subsystems/tools.md) | The scoped tool registry and guarded execution pipeline | `ctx.tools` |
 | [`core/agent`](subsystems/core.md) | The `Agent` interface, live registry, and `agent/*` events | `ctx.agents` |

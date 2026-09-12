@@ -105,7 +105,7 @@ await ctx.sessionPersistence.append(id, events)
 | 文件 | 职责 |
 |---|---|
 | [`src/index.ts`](src/index.ts) | 插件入口：`Config` schema、服务注册、协调器接线 |
-| [`src/store.ts`](src/store.ts) | 存储原语：事务追加、读取、修复、路径与所有权验证 |
+| [`src/store.ts`](src/store.ts) | 存储原语：事务追加、读取、修复、截断、路径与所有权验证 |
 | [`src/schema.ts`](src/schema.ts) | schema 归属：版本门禁、连接加固、行解码 |
 | [`src/codec.ts`](src/codec.ts) | 打包：哪些 `assistant/chunk` 连续段成为打包行、大小上限 |
 | [`src/compression.ts`](src/compression.ts) | 物理编码：字典压缩、序列列表、行扫描与解码 |
@@ -127,6 +127,8 @@ await ctx.sessionPersistence.append(id, events)
 ### 写入路径
 
 每次追加都会开启立即事务、重新验证 schema 归属、检查已存尾部以防止陈旧写入方扩展日志、只打包新批次、插入对应行、递增一次会话 revision，然后提交。协调器按配置窗口聚合实时事件，因此高频流会产生更大的打包行，而物理写入量始终与新持久批次成正比。
+
+`truncate` 走同一条立即事务：删除切点及其后的每一行，把跨过切点的那条打包行重写为只保留切点以下的成员，递增一次会话 revision，然后提交。
 
 ### 读取与恢复
 

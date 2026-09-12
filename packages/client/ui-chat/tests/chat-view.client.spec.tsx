@@ -385,6 +385,7 @@ function makeHarness(
       addAttachments: () => true,
       removeAttachment: () => {},
       pruneAttachments: () => {},
+      setRewriteFrom: () => {},
       submit: () => {},
     },
     useStore: bindSnapshotSelector(chat),

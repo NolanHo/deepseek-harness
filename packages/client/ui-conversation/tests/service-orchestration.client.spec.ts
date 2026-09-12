@@ -748,6 +748,78 @@ describe('sendSession submission echo', () => {
   })
 })
 
+describe('sendSession rewrite threading', () => {
+  it('arms through the input shell, threads the seq into the prompt options, and clears on success', async () => {
+    const b = await bench()
+    b.shell.setDraft('edited prompt')
+    b.shell.setRewriteFrom(7)
+    expect(b.shell.snapshot.rewriteFrom).toBe(7)
+    b.shell.submit()
+    await vi.waitFor(() => { expect(b.prompt).toHaveBeenCalled() })
+    expect(b.prompt).toHaveBeenCalledWith(
+      [{ type: 'text', text: 'edited prompt' }],
+      'queue',
+      expect.any(AbortSignal),
+      expect.any(String),
+      { rewriteFrom: 7 },
+    )
+    // The armed value clears in the same step that commits the draft.
+    expect(b.shell.snapshot.rewriteFrom).toBeNull()
+    expect(b.shell.snapshot.draft).toBe('')
+    await b.runtime.dispose()
+  })
+
+  it('keeps the armed rewrite with the restored draft when the admission fails', async () => {
+    const b = await bench()
+    b.prompt.mockResolvedValueOnce({
+      ok: false, error: new RemoteError('session/agent-busy', 'busy', { reason: 'busy' }),
+    } as never)
+    b.shell.setDraft('retry me')
+    b.shell.setRewriteFrom(11)
+    b.shell.submit()
+    await vi.waitFor(() => { expect(b.shell.snapshot.draft).toBe('retry me') })
+    expect(b.shell.snapshot.rewriteFrom).toBe(11)
+    expect(b.prompt).toHaveBeenCalledWith(
+      [{ type: 'text', text: 'retry me' }],
+      'queue',
+      expect.any(AbortSignal),
+      expect.any(String),
+      { rewriteFrom: 11 },
+    )
+    // A manual clear still wins over the restored arm.
+    b.shell.setRewriteFrom(null)
+    expect(b.shell.snapshot.rewriteFrom).toBeNull()
+    await b.runtime.dispose()
+  })
+
+  it('sends a plain append when nothing is armed', async () => {
+    const b = await bench()
+    b.shell.setDraft('plain')
+    b.shell.submit()
+    await vi.waitFor(() => { expect(b.prompt).toHaveBeenCalled() })
+    expect(b.prompt).toHaveBeenCalledWith(
+      [{ type: 'text', text: 'plain' }], 'queue', expect.any(AbortSignal), expect.any(String),
+    )
+    await b.runtime.dispose()
+  })
+
+  it('never threads the rewrite through a subagent continuation', async () => {
+    const b = await bench()
+    const session = b.runtime.sessions.binding('s1')!.session
+    const snapshot = session.getSnapshot()
+    vi.spyOn(session, 'getSnapshot').mockReturnValue({
+      ...snapshot,
+      subagent: {
+        address: { parentSessionId: 'parent', childSessionId: 'child', mode: 'continuable' } as never,
+      },
+    })
+    await expect(b.root.sendSession(session, '继续', [], 'queue', undefined, 3)).resolves.toEqual({ kind: 'success' })
+    expect(b.prompt).toHaveBeenCalledWith([{ type: 'text', text: '继续' }], 'queue', undefined)
+    expect(b.prompt.mock.calls[0]).toHaveLength(3)
+    await b.runtime.dispose()
+  })
+})
+
 describe('draft image dimension probe', () => {
   it('fills intrinsic dimensions from the header probe and skips runtimes without Image', async () => {
     const b = await bench()

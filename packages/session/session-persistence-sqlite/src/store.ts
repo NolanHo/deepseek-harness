@@ -472,6 +472,71 @@ export class SqliteStore {
   }
 
   /**
+   * Durably discard every stored event from `toSeq` on, so the stored
+   * next-seq becomes exactly `toSeq`. A packed row whose run spans the cut is
+   * rewritten to keep only its members below it — deleting the whole row would
+   * drop committed events below the cut; when the retained members cannot be
+   * re-encoded faithfully, the transaction rolls back and the error surfaces.
+   * A cut at or past the stored end discards nothing (no revision bump).
+   * @param storage - the session's current-format metadata.
+   * @param toSeq - first logical seq to discard; must not enter the inherited prefix.
+   * @param appended - events to land at the cut in the same transaction, in
+   *   seq order starting at `toSeq`; empty for a plain discard.
+   */
+  async truncateLog(storage: SessionStorageMetadata, toSeq: number, appended: readonly SessionEvent[] = []): Promise<void> {
+    await this.open()
+    if (!Number.isSafeInteger(toSeq) || toSeq < 0) {
+      throw new TypeError(`truncate offset must be a non-negative safe integer, got ${String(toSeq)}`)
+    }
+    if (toSeq < Number(storage.inheritedEventCount)) {
+      throw new TypeError(
+        `session ${storage.meta.id} truncate offset ${toSeq} enters the fork-inherited prefix (${storage.inheritedEventCount})`,
+      )
+    }
+    this.db.exec(sql('begin-immediate'))
+    try {
+      validateSchemaForMutation(this.databaseConstructor, this.db, this.databasePath)
+      const row = this.rowFor(storage.meta.id)
+      if (row === undefined) throw new Error(`session ${storage.meta.id} metadata row is missing`)
+      const sessionKey = this.sessionKey(storage.meta.id)
+      const current = scanRows(this.db.prepare(sql('select-events')).all(sessionKey).map(decodeEventRow))
+      if (toSeq >= current.preserved.length) {
+        // The valid log already ends at or before the cut: nothing to discard,
+        // and the appended batch is the caller's ordinary append to land.
+        const insert = this.insertStatement()
+        for (const record of packChunkRuns(appended)) this.insertRecord(insert, sessionKey, bindRecord(record))
+        this.incrementRevision(storage.meta.id)
+        this.db.exec(sql('commit'))
+        return
+      }
+      // A packed row whose run head sits below the cut may still span it; that
+      // row alone is rewritten, every row at or past the cut is deleted whole.
+      const spanning = this.packedRowSpanning(sessionKey, toSeq)
+      this.db.prepare(sql('delete-events-from')).run(sessionKey, toSeq)
+      if (spanning !== undefined) {
+        this.db.prepare(sql('delete-event-row')).run(sessionKey, spanning.seq)
+        const kept = decodeRow(spanning).filter(event => event.seq < toSeq)
+        const insert = this.insertStatement()
+        for (const record of packChunkRuns(kept as readonly SessionEvent[])) {
+          this.insertRecord(insert, sessionKey, bindRecord(record))
+        }
+      }
+      if (appended.length > 0) {
+        const first = appended[0] as SessionEvent
+        if (first.seq !== toSeq) {
+          throw new TypeError(`session ${storage.meta.id} truncate landing batch starts at seq ${String(first.seq)}, expected the cut ${String(toSeq)}`)
+        }
+        const insert = this.insertStatement()
+        for (const record of packChunkRuns(appended)) this.insertRecord(insert, sessionKey, bindRecord(record))
+      }
+      this.incrementRevision(storage.meta.id)
+      this.db.exec(sql('commit'))
+    } catch (error: unknown) {
+      this.rollback(error, 'truncate')
+    }
+  }
+
+  /**
    * Release the database handle at disposal; a store whose open never
    * completed releases nothing, and no store operation may follow.
    */
@@ -562,6 +627,26 @@ export class SqliteStore {
     }
     const eventRows = this.db.prepare(sql('select-events-from')).all(sessionKey, base).map(decodeEventRow)
     return { base, eventRows }
+  }
+
+  /**
+   * The packed row whose logical span includes `toSeq`, or `undefined` when
+   * the cut lands at a row boundary. Row spans below the cut are contiguous
+   * (validated by the caller's `scanRows`), so at most one row can span.
+   * @param sessionKey - integer key of the session being truncated.
+   * @param toSeq - first logical seq to discard.
+   * @returns the spanning packed row.
+   */
+  private packedRowSpanning(sessionKey: number, toSeq: number): EventRow | undefined {
+    const floor = Math.max(0, toSeq - MAX_PACKED_ROW_MEMBERS + 1)
+    const predecessors = this.db.prepare(sql('select-packed-predecessors'))
+      .all(sessionKey, floor, toSeq)
+      .map(decodeEventRow)
+    for (const predecessor of predecessors) {
+      const members = decodeRow(predecessor)
+      if (predecessor.seq + members.length > toSeq) return predecessor
+    }
+    return undefined
   }
 
   private logicalLastEvent(id: SessionId, tailRows: readonly EventRow[]): StoredLogicalEvent | undefined {

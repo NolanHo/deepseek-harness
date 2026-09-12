@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This package lets applications persist and resume session event logs through a backend-independent API. Readers can create, open, inspect, list, append to, read, flush, and close stored sessions while preserving contiguous append-only history. A completed flush is the durability barrier; readers never receive torn tails or invalid records, and only one writer per session is allowed within a backend instance. Use the shipped [JSONL backend](../session-persistence-jsonl/README.md) for one compressed log per session, or implement another backend with the same observable guarantees.
+This package lets applications persist and resume session event logs through a backend-independent API. Readers can create, open, inspect, list, append to, read, flush, and close stored sessions while preserving contiguous history; an optional write-handle truncate discards a committed suffix on backends that implement it. A completed flush is the durability barrier; readers never receive torn tails or invalid records, and only one writer per session is allowed within a backend instance. Use the shipped [JSONL backend](../session-persistence-jsonl/README.md) for one compressed log per session, or implement another backend with the same observable guarantees.
 
 ## Table of Contents
 
@@ -29,7 +29,7 @@ Mount one persistence backend to make sessions durable. The backend registers it
 
 ### Choosing a backend
 
-The seam ships the [JSONL](../session-persistence-jsonl/README.md) backend: one append-only `.jsonl.zstd` log per session. A third-party backend may implement the service directly; the [backend contract](#understand-the-implementation) below is what it must honor.
+The seam ships the [JSONL](../session-persistence-jsonl/README.md) backend: one append-only `.jsonl.zstd` log per session, and it implements no `truncate`. The fork-owned [SQLite backend](../session-persistence-sqlite/README.md) implements the optional rewrite capability; a consumer that needs the rewrite fails loud on a backend that omits it. A third-party backend may implement the service directly; the [backend contract](#understand-the-implementation) below is what it must honor.
 
 ### What the service provides
 
@@ -46,7 +46,7 @@ await ctx.sessionPersistence.flush()                           // backend-wide d
 
 Service-level `flush()` drains every active write handle's routed events and materializes its session, exactly as each handle's own `flush` would; failures aggregate per session as an `AggregateError` without abandoning the sweep, and a handle closed mid-sweep counts as flushed because close itself drains durably.
 
-Every log read and write flows through the returned `SessionHandle`; there are no id-addressed append or load methods. `handle.read(offset?, length?)` returns `{ eventState, events }`: the outer slice belongs to the caller, while `eventState` distinguishes an exclusively `detached` event graph from a `shared-frozen` graph that may also reside in a backend cache. The producer establishes this state and slices preserve it even when empty. Both states are safe to adopt without copying; a consumer that needs mutable events clones them first. Reads never include a torn tail, repeated reads on one handle never observe an older state than a prior read, and a write handle reads its own successful appends. `handle.append(events)` appends a contiguous batch whose first `seq` equals the stored next-seq; persistence is best-effort on resolution — the batch is accepted, ordered, and visible to reads on this backend instance, and only a resolved `flush` promises it survives a crash (the shipped JSONL backend happens to persist each batch immediately). `handle.flush()` is the durability barrier and also materializes an empty created session so it becomes durably listable. `handle.close()` is idempotent and uncancellable: a read handle frees local resources; a write handle completes pending durability and releases write ownership. Once an `append` or `flush` resolves, reads started afterwards on the same backend instance — on any handle, or through `stat`/`list` — observe at least that prefix.
+Every log read and write flows through the returned `SessionHandle`; there are no id-addressed append or load methods. `handle.read(offset?, length?)` returns `{ eventState, events }`: the outer slice belongs to the caller, while `eventState` distinguishes an exclusively `detached` event graph from a `shared-frozen` graph that may also reside in a backend cache. The producer establishes this state and slices preserve it even when empty. Both states are safe to adopt without copying; a consumer that needs mutable events clones them first. Reads never include a torn tail, repeated reads on one handle never observe an older state than a prior read, and a write handle reads its own successful appends. `handle.append(events)` appends a contiguous batch whose first `seq` equals the stored next-seq; persistence is best-effort on resolution — the batch is accepted, ordered, and visible to reads on this backend instance, and only a resolved `flush` promises it survives a crash (the shipped JSONL backend happens to persist each batch immediately). `handle.truncate?(toSeq)` is the optional rewrite capability: it discards every stored event from `toSeq` on, durable on resolution, write handle only, and refuses a cut into the fork-inherited prefix; a backend that cannot rewrite a committed log omits the method, and a consumer that needs the rewrite fails loud instead of admitting the operation unmet. `handle.flush()` is the durability barrier and also materializes an empty created session so it becomes durably listable. `handle.close()` is idempotent and uncancellable: a read handle frees local resources; a write handle completes pending durability and releases write ownership. Once an `append` or `flush` resolves, reads started afterwards on the same backend instance — on any handle, or through `stat`/`list` — observe at least that prefix.
 
 ### Ownership and visibility
 
@@ -80,7 +80,7 @@ The package is a seam, not a backend framework: it exports the abstract `Session
 
 ### The invariants every backend honors
 
-- **Append-only, contiguous `seq`.** Committed events are never rewritten; `append`'s first `seq` must equal the stored next-seq, and a gap rejects.
+- **Append semantics, contiguous `seq`.** `append` never rewrites committed events, its first `seq` must equal the stored next-seq, and a gap rejects; the optional write-handle `truncate` discards a committed suffix from a cut the backend validates (never into the fork-inherited prefix).
 - **A torn physical tail never reaches a reader.** It belongs to an append that never resolved; the write path truncates it durably before its first new append.
 - **Lossless JSON data.** Batches and headers pass the shared one-pass validate-and-snapshot boundary (`materializeAppendBatch`/`materializeCreateHeader`); non-serializable payloads reject at the call site.
 - **Durability.** `append` persists best-effort; `flush` — per handle or service-wide — is the barrier that promises storage and also materializes an empty session.
@@ -92,7 +92,7 @@ The package is a seam, not a backend framework: it exports the abstract `Session
 | File | Role |
 |---|---|
 | [`src/index.ts`](src/index.ts) | Plugin entry: the abstract `SessionPersistence` service and re-exported seam vocabulary |
-| [`src/handle.ts`](src/handle.ts) | The `SessionHandle` contract: read/append/flush/close semantics and freshness rules |
+| [`src/handle.ts`](src/handle.ts) | The `SessionHandle` contract: read/append/truncate/flush/close semantics and freshness rules |
 | [`src/storage-contract.ts`](src/storage-contract.ts) | Shared validation: version gate, fail-closed vocabulary, batch materialization, contiguity |
 | [`src/errors.ts`](src/errors.ts) | Stable handle/ownership failures and format refusals |
 | [`src/revision.ts`](src/revision.ts) | The branded opaque revision token |
@@ -152,6 +152,7 @@ These limits define where the seam's guarantees stop. They are current package c
 - **No deletion or retention API** — pruning stored sessions is out-of-band backend maintenance.
 - **`list()` is unpaginated and unfiltered** — it returns every stored session's snapshot; fine for local stores, unindexed at scale.
 - **Synthetic closers are the only crash story** — resume appends `interruptedTurnClosers` through the write handle; there is no partial-turn resume that continues an interrupted turn instead of closing it.
+- **`truncate` is optional, and only the fork-owned SQLite backend implements it** — the shipped JSONL backend omits the rewrite capability; a consumer that needs the rewrite fails loud instead of admitting the operation unmet.
 
 <a id="dev-note"></a>
 ### Dev Note

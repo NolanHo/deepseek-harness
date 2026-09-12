@@ -21,6 +21,7 @@ export type {
   SessionHandleFlushOptions,
   SessionHandleReadOptions,
   SessionHandleReadResult,
+  SessionHandleTruncateOptions,
 } from './handle.ts'
 export {
   SessionAlreadyExistsError,
@@ -113,11 +114,14 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /**
- * Durable append-only session storage addressed through per-session handles.
+ * Durable session storage addressed through per-session handles.
  *
- * Storage semantics shared by every backend: events are contiguous from seq 0
- * and never rewritten; a torn physical tail is never returned to a reader and
- * is truncated by the write path before its first append; reads validate
+ * Storage semantics shared by every backend: events are contiguous from seq 0;
+ * `append` never rewrites committed events, and the one committed-log rewrite
+ * is the optional write-handle {@link SessionHandle.truncate} — a backend may
+ * omit it, and a consumer that needs the rewrite fails loud on a backend
+ * without the capability. A torn physical tail is never returned to a reader
+ * and is truncated by the write path before its first append; reads validate
  * current-format records only and refuse unknown vocabulary fail-closed.
  * `append` persists best-effort; `flush` — per handle or service-wide — is
  * the durability barrier.

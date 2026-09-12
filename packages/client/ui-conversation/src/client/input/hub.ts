@@ -41,6 +41,7 @@ interface ConversationAttachmentFace {
     attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal?: AbortSignal,
+    rewriteFrom?: number | null,
   ): Promise<SubmitOutcome>
   serializeDraftAttachments(attachmentIds: readonly DraftAttachmentId[]): Promise<DraftAttachmentSerializationResult>
   releaseDraftAttachment(id: DraftAttachmentId): void
@@ -88,7 +89,8 @@ export class InputHub implements SessionInputResolver {
       inputTriggers: () => this.controller(actx),
       popup: () => this.popup(actx),
       queue: queueReadFaceOf(session),
-      defaultSink: (text, attachmentIds, mode, signal) => this.sink(session, text, attachmentIds, mode, signal),
+      defaultSink: (text, attachmentIds, mode, signal, rewriteFrom) =>
+        this.sink(session, text, attachmentIds, mode, signal, rewriteFrom ?? null),
       steerQueue: () => { void this.steerQueue(session, shell) },
       commandAttachments: {
         serialize: async (ids) => {
@@ -173,7 +175,8 @@ export class InputHub implements SessionInputResolver {
    * Default sink: optimistic clear + prompt. The session is always a real
    * host entity (materialized when its workspace was picked), so there is
    * exactly one path; a failed first prompt is an ordinary prompt failure
-   * (banner via promptError, draft restored only while untouched).
+   * (banner via promptError, draft restored only while untouched). An armed
+   * in-place rewrite rides along; the subagent continuation branch ignores it.
    */
   private sink(
     session: SessionFace,
@@ -181,9 +184,10 @@ export class InputHub implements SessionInputResolver {
     attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal: AbortSignal,
+    rewriteFrom: number | null,
   ): Promise<SubmitOutcome> {
     if (text === '' && attachmentIds.length === 0) return Promise.resolve({ kind: 'success' })
-    return this.conversation().sendSession(session, text, attachmentIds, mode, signal)
+    return this.conversation().sendSession(session, text, attachmentIds, mode, signal, rewriteFrom)
   }
 
   /**

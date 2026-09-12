@@ -204,6 +204,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'session/steer-unavailable': { readonly itemId: MessageId }
     'session/title-invalid': { readonly sessionId: SessionId }
     'session/fork-unavailable': { readonly sessionId: SessionId }
+    'session/rewrite-unavailable': { readonly sessionId: SessionId; readonly reason: RewriteUnavailableReason }
+    'session/rewrite-unsupported': { readonly sessionId: SessionId }
     'subagent/not-found': {
       readonly parentSessionId: SessionId
       readonly childSessionId: SessionId
@@ -329,6 +331,13 @@ export interface SessionPromptValue {
   /** Whether admission rewrote the Session log first; absent when it did not. */
   readonly rewrote?: boolean
 }
+
+/** Stable in-place rewrite refusal reasons reported on `session/rewrite-unavailable`. */
+export type RewriteUnavailableReason =
+  | 'REWRITE_INVALID_FROM'
+  | 'REWRITE_INHERITED_PREFIX'
+  | 'REWRITE_TURN_RUNNING'
+  | 'REWRITE_INBOX_PENDING'
 
 /** Durable image read request. */
 export interface SessionAttachmentRequest {

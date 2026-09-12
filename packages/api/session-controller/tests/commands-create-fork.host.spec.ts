@@ -237,7 +237,10 @@ describe('Session fork failures', () => {
     creation.provide('workspaceRegistry', { list: () => [] } as never)
     const source = completedSession(creation, 'creation-source', '/workspace')
     vi.spyOn(creation.agents, 'create').mockRejectedValue(new Error('factory failed'))
-    const creationController = new SessionCommandController(creation, controllerAgents(), '/default')
+    const creationController = new SessionCommandController(creation, controllerAgents({
+      createSeeded: (options: CreateAgentOptions) =>
+        creation.agents.create(options).then(handle => handle.agent),
+    }), '/default')
     await expectFailure(creationController.fork({ sessionId: source.id }), 'gateway/internal')
     await creation.fiber.dispose()
   })
@@ -254,7 +257,10 @@ describe('Session fork failures', () => {
     const create = vi.spyOn(ctx.agents, 'create').mockImplementation(
       (options: CreateAgentOptions) => Promise.resolve(resolvedHandle(ctx, options.sessionId)),
     )
-    const controller = new SessionCommandController(ctx, controllerAgents(), '/default')
+    const controller = new SessionCommandController(ctx, controllerAgents({
+      createSeeded: (options: CreateAgentOptions) =>
+        ctx.agents.create(options).then(handle => handle.agent),
+    }), '/default')
 
     await expectFailure(controller.fork({ sessionId: source.id }), 'session/workspace-attach-failed')
     const options = create.mock.calls[0]?.[0]
@@ -273,6 +279,8 @@ describe('Session fork failures', () => {
     )
     const controller = new SessionCommandController(ctx, controllerAgents({
       composeAgent: () => Promise.resolve({ agentPreset: 'minimal', setup: () => {} }),
+      createSeeded: (options: CreateAgentOptions) =>
+        ctx.agents.create(options).then(handle => handle.agent),
     }), '/default')
 
     const forked = await controller.fork({ sessionId: source.id })

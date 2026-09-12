@@ -4,7 +4,7 @@ import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {
-  Agent, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
+  Agent, AgentHandle, AgentOptions, AgentSetup, CreateAgentOptions, ModelSelection as AgentModelSelection, ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
@@ -140,6 +140,10 @@ export async function inspectApiSession(
 export class ApiSessionAgentController {
   private readonly resumes = new Map<SessionId, Promise<Agent>>()
   private readonly creations = new Map<SessionId, Promise<Agent>>()
+  // Fork patch (FORK_SURFACE.md): the disposal capability of every Agent this
+  // controller created or resumed, retained so an in-place rewrite can tear
+  // the Agent down and release its persistence write ownership.
+  private readonly handles = new Map<SessionId, AgentHandle>()
   private readonly selections = new WeakMap<Agent, InstalledSelection>()
   private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
 
@@ -160,6 +164,51 @@ export class ApiSessionAgentController {
       if ('error' in found) throw found.error
       return found.agent.ctx
     })
+    // A disposed Agent can never be resumed again through the retained
+    // capability; drop it so the next same-id lifecycle records a fresh one.
+    ctx.on('agent/disposed', ({ agent }) => { this.handles.delete(agent.id) })
+  }
+
+  /**
+   * Dispose one live ordinary Agent after any in-flight resume or creation
+   * settles. Disposal stops the loop, closes the Session's persistence write
+   * handle (releasing write ownership), and removes the Agent and Session
+   * from the live registries, so a following resume reads the rewritten log.
+   * @param sessionId - ordinary Session identity whose Agent is disposed.
+   * @throws when a live Agent exists whose disposal capability this
+   *   controller does not hold (an Agent created outside this controller).
+   */
+  async disposeAgent(sessionId: SessionId): Promise<void> {
+    const inFlight = this.resumes.get(sessionId) ?? this.creations.get(sessionId)
+    if (inFlight !== undefined) {
+      // Disposal needs the activation SETTLED, not successful: a rejection
+      // leaves no handle to dispose, and the caller's own resolve surfaces it.
+      await inFlight.catch(() => undefined)
+    }
+    const handle = this.handles.get(sessionId)
+    if (handle === undefined) {
+      if (this.ctx.agents.get(sessionId) !== undefined) {
+        throw new Error(
+          `session "${sessionId}" has a live Agent this controller cannot dispose`,
+        )
+      }
+      return
+    }
+    this.handles.delete(sessionId)
+    await handle.dispose()
+  }
+
+  /**
+   * Create one fork-child Agent through the registry while retaining its
+   * disposal capability, so a later in-place rewrite of the child can dispose
+   * it like any other ordinary Session's Agent.
+   * @param options - registry create options for the seeded child.
+   * @returns the published child Agent.
+   */
+  async createSeeded(options: CreateAgentOptions): Promise<Agent> {
+    const handle = await this.ctx.agents.create(options)
+    this.handles.set(options.sessionId, handle)
+    return handle.agent
   }
 
   /**
@@ -427,11 +476,13 @@ export class ApiSessionAgentController {
     if (published !== undefined && hasApiSessionSubagentOwner(this.ctx, published, live)) {
       throw new ApiSessionSubagentOwnership(sessionId)
     }
-    return (await this.ctx.agents.resume({
+    const handle = await this.ctx.agents.resume({
       resumeSessionId: sessionId,
       agentOptions: this.agentOptions(),
       setup: composition.setup,
-    })).agent
+    })
+    this.handles.set(sessionId, handle)
+    return handle.agent
   }
 
   private async createOrAdopt(
@@ -459,11 +510,13 @@ export class ApiSessionAgentController {
         const storedPreset = this.presetForObservation(observation)
         this.assertPresetUnchanged(sessionId, presetId, storedPreset)
         const composition = await this.composeAgent(storedPreset)
-        return (await this.ctx.agents.resume({
+        const handle = await this.ctx.agents.resume({
           resumeSessionId: sessionId,
           agentOptions: this.agentOptions(),
           setup: composition.setup,
-        })).agent
+        })
+        this.handles.set(sessionId, handle)
+        return handle.agent
       } catch (error: unknown) {
         if (!(error instanceof SessionQueryError)
           || error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
@@ -476,7 +529,7 @@ export class ApiSessionAgentController {
       throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
     }
     const composition = await this.composeAgent(presetId)
-    return (await this.ctx.agents.create({
+    const handle = await this.ctx.agents.create({
       sessionId,
       agentOptions: this.agentOptions(),
       meta: {
@@ -484,7 +537,9 @@ export class ApiSessionAgentController {
         ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
       },
       setup: composition.setup,
-    })).agent
+    })
+    this.handles.set(sessionId, handle)
+    return handle.agent
   }
 
   private agentOptions(): AgentOptions {

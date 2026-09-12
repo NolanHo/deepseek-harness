@@ -8,6 +8,7 @@
   "files": [
     "src/fork/open-window.ts",
     "src/fork/page-boundary.ts",
+    "src/fork/rewrite-history.ts",
     "src/index.ts",
     "src/types.ts",
     "src/remote-events.ts",

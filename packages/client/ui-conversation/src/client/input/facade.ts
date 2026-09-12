@@ -66,6 +66,7 @@ export interface SessionInputDeps {
     attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal: AbortSignal,
+    rewriteFrom?: number | null,
   ): Promise<SubmitOutcome>
   /** Command-plane attachment plumbing (the hub owns the conversation face and the copy). */
   commandAttachments: {
@@ -118,6 +119,8 @@ interface DetachedDraft {
   readonly draft: string
   readonly occurrences: readonly Occurrence[]
   readonly attachmentIds: readonly DraftAttachmentId[]
+  /** Armed in-place rewrite seq captured at detach (null = plain append). */
+  readonly rewriteFrom: number | null
 }
 
 /**
@@ -138,6 +141,7 @@ export class SessionInputShell implements SessionInput {
     addAttachments: ids => this.addAttachments(ids),
     removeAttachment: (id) => { this.removeAttachment(id) },
     pruneAttachments: (ids) => { this.pruneAttachments(ids) },
+    setRewriteFrom: (fromSeq) => { this.setRewriteFrom(fromSeq) },
     submit: () => { this.submit('queue') },
   }
 
@@ -151,6 +155,8 @@ export class SessionInputShell implements SessionInput {
   private noticeSeq = 0
   private lastMirroredDraft = ''
   private attachmentIds: readonly DraftAttachmentId[] = []
+  /** Armed in-place rewrite seq; null while no rewrite is armed. */
+  private rewriteFrom: number | null = null
   private disposed = false
   /** Draft persistence mirror (Conversation store write; receives the clipboard projection). */
   private mirrorFn: ((text: string) => void) | undefined
@@ -279,6 +285,18 @@ export class SessionInputShell implements SessionInput {
       }
       root.selectEnd()
     }, { discrete: true, tag: HISTORY_MERGE_TAG })
+  }
+
+  /**
+   * Arm or clear the in-place rewrite the next default submission carries:
+   * the armed submission consumes the value (cleared with the committed
+   * draft), and a failed one restores it with the draft for retry.
+   * @param fromSeq - durable seq of the `user/message` event to replace, or null to clear.
+   */
+  setRewriteFrom(fromSeq: number | null): void {
+    if (this.rewriteFrom === fromSeq) return
+    this.rewriteFrom = fromSeq
+    this.publish()
   }
 
   /** Append ordered attachment ids unless an admission transaction is locked. */
@@ -690,15 +708,19 @@ export class SessionInputShell implements SessionInput {
   ): void {
     const attachmentIds = [...this.attachmentIds]
     this.attachmentIds = []
+    const rewriteFrom = this.rewriteFrom
+    this.rewriteFrom = null
     const occurrences = this.projection.occurrences
-    const record = { draft, occurrences, attachmentIds }
+    const record = { draft, occurrences, attachmentIds, rewriteFrom }
     this.detachedDrafts.set(attempt.seq, record)
     if (this.failedRestoreRev === this.rev) {
       this.failedDetached.clear()
       this.failedRestoreRev = undefined
     }
     if (occurrences.length === 0) {
-      this.settleSink(attempt, this.deps.defaultSink(draft.trim(), attachmentIds, mode, attempt.signal))
+      this.settleSink(attempt, this.deps.defaultSink(
+        draft.trim(), attachmentIds, mode, attempt.signal, ...(rewriteFrom === null ? [] : [rewriteFrom]),
+      ))
       return
     }
     const inputTriggers = this.deps.inputTriggers?.()
@@ -722,7 +744,9 @@ export class SessionInputShell implements SessionInput {
           cursor = part.offset + part.length
         }
         out += draft.slice(cursor)
-        this.settleSink(attempt, this.deps.defaultSink(out.trim(), attachmentIds, mode, attempt.signal))
+        this.settleSink(attempt, this.deps.defaultSink(
+          out.trim(), attachmentIds, mode, attempt.signal, ...(rewriteFrom === null ? [] : [rewriteFrom]),
+        ))
       },
       (error: unknown) => {
         if (this.dead(attempt)) return
@@ -760,6 +784,9 @@ export class SessionInputShell implements SessionInput {
     if (record === undefined) return
     this.detachedDrafts.delete(attempt.seq)
     this.restoreAttachments(record.attachmentIds)
+    // An armed failed send restores its rewrite seq for retry; a newer arm
+    // made while this send was in flight stays untouched.
+    if (record.rewriteFrom !== null && this.rewriteFrom === null) this.rewriteFrom = record.rewriteFrom
     this.failedDetached.set(attempt.seq, record)
     if (this.projection.clipboardText === '' || this.failedRestoreRev === this.rev) {
       this.restoreFailedDrafts()
@@ -910,6 +937,7 @@ export class SessionInputShell implements SessionInput {
       ...(core.claim !== undefined ? { claim: core.claim } : {}),
       occurrences: this.projection.occurrences,
       queue: this.deps.queue?.getSnapshot() ?? EMPTY_QUEUE,
+      rewriteFrom: this.rewriteFrom,
     }
   }
 

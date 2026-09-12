@@ -26,6 +26,7 @@ import type {
   SessionHandleFlushOptions,
   SessionHandleReadOptions,
   SessionHandleReadResult,
+  SessionHandleTruncateOptions,
 } from '@deepseek-ai/dsh-session-persistence'
 
 /** The storage primitives the handle drives on its owning service. */
@@ -41,8 +42,13 @@ export interface SqliteHandleStorage {
   persistHeader(header: SessionHeader, inheritedEventCount: SessionLogOffset): Promise<void>
   /** Truncate a torn physical tail before the first new append lands. */
   truncateTornTail(header: SessionHeader, inheritedEventCount: SessionLogOffset, tornMarker: number): Promise<void>
+  /** Durably discard every stored event from `toSeq` on. */
+  truncateLog(header: SessionHeader, inheritedEventCount: SessionLogOffset, toSeq: number, appended: readonly SessionEvent[]): Promise<void>
   /** Read and validate the stored log, including its event aliasing state. */
-  readStoredLog(id: SessionId, signal?: AbortSignal): Promise<SessionHandleReadResult>
+  readStoredLog(id: SessionId, signal?: AbortSignal): Promise<SessionHandleReadResult & {
+    /** Source-qualified revision of the stored log just read. */
+    readonly revision: SessionPersistenceRevision
+  }>
   /** Whether the id is still a created-but-unmaterialized session here. */
   hasPendingSession(id: SessionId): boolean
   /** Drop the handle's bookkeeping on close. */
@@ -64,14 +70,16 @@ export interface SqliteHandleState {
 /**
  * The SQLite session handle. Mutations serialize on a per-handle promise
  * chain; appends persist durably on resolution, so reads re-scan the database
- * on demand and never observe a shorter log than a prior read on this handle.
- * Routed live events buffer in a bounded window and drain through the same
- * chain as explicit appends.
+ * on demand and never observe a shorter log than a prior read on this handle —
+ * except after this handle's own {@link truncate}, which deliberately shortens
+ * the committed log. Routed live events buffer in a bounded window and drain
+ * through the same chain as explicit appends.
  */
 export class SqliteSessionHandle implements SessionHandle {
   private chain: Promise<unknown> = Promise.resolve()
   private closing: Promise<void> | undefined
   private observedLength = 0
+  private observedRevision: SessionPersistenceRevision | undefined
   /** Routed live events awaiting their batching deadline (persistence-owned copies). */
   private buffered: SessionEvent[] = []
   private batchTimer: ReturnType<typeof setTimeout> | undefined
@@ -113,10 +121,15 @@ export class SqliteSessionHandle implements SessionHandle {
     options?.signal?.throwIfAborted()
     if (!this.state.materialized) return { eventState: 'detached', events: [] }
     const source = await this.storage.readStoredLog(this.id, options?.signal)
-    if (source.events.length < this.observedLength) {
+    // Every legitimate mutation (append, repair, publish, truncate) bumps the
+    // stored revision in the same transaction as the row changes, so a shrink
+    // across an unchanged revision is damage while an intentional truncate
+    // reads through as the new, shorter committed log.
+    if (source.events.length < this.observedLength && source.revision === this.observedRevision) {
       throw new Error(`session "${this.id}": stored log shrank below a previously observed prefix (${source.events.length} < ${this.observedLength})`)
     }
     this.observedLength = source.events.length
+    this.observedRevision = source.revision
     return { eventState: source.eventState, events: source.events.slice(offset, offset + length) }
   }
 
@@ -133,6 +146,51 @@ export class SqliteSessionHandle implements SessionHandle {
     return this.run('append', async () => {
       options?.signal?.throwIfAborted()
       await this.persistContiguous(batch)
+    })
+  }
+
+  /**
+   * Durably discard every stored event from `toSeq` on; see the seam contract.
+   * On resolution this handle's next-seq is `toSeq` (or its prior end when the
+   * cut was at or past it), reads at and after `toSeq` return empty slices,
+   * and the next append must start at `toSeq`. A cut below the exact
+   * fork-inherited prefix is refused: deleting inherited events would desync
+   * the stored seed cut from its log.
+   * @param toSeq - first logical event seq to discard.
+   * @param options - the seam's {@link SessionHandleTruncateOptions}: optional
+   *   cancellation and the events this rewrite lands at the cut.
+   */
+  async truncate(toSeq: SessionLogOffset, options?: SessionHandleTruncateOptions): Promise<void> {
+    this.assertOpen('truncate')
+    if (this.access !== 'write') throw new SessionReadOnlyError(this.id, 'truncate')
+    if (!Number.isSafeInteger(toSeq) || toSeq < 0) {
+      throw new TypeError(`truncate offset must be a non-negative safe integer, got ${String(toSeq)}`)
+    }
+    if (toSeq < this.state.inheritedEventCount) {
+      throw new TypeError(`truncate offset ${toSeq} enters the fork-inherited prefix (${this.state.inheritedEventCount})`)
+    }
+    // Validate and deep-snapshot the landing batch HERE, exactly as `append`
+    // does, so the checked values are the persisted ones.
+    const landing = materializeAppendBatch(options?.append ?? [])
+    const landingStart = landing.length === 0 ? undefined : Number((landing[0] as SessionEvent).seq)
+    if (landingStart !== undefined && landingStart !== Number(toSeq)) {
+      throw new TypeError(`session "${this.id}": the landing batch must start at the cut ${String(toSeq)}, got ${String(landingStart)}`)
+    }
+    return this.run('truncate', async () => {
+      options?.signal?.throwIfAborted()
+      // A cut at or past the known end discards nothing; an unmaterialized
+      // handle has no durable row for the store to address, so the landing
+      // batch is an ordinary append.
+      if (toSeq >= this.state.cursor) {
+        if (landing.length > 0) await this.persistContiguous(landing)
+        return
+      }
+      await this.storage.truncateLog(this.header, this.state.inheritedEventCount, toSeq, landing)
+      this.state.cursor = toSeq + landing.length
+      // The torn tail sat beyond the cut, so the deletion cleared it; a
+      // pending repair marker would be stale for the next append.
+      this.state.tornTruncateTo = undefined
+      this.observedLength = Math.min(this.observedLength, toSeq)
     })
   }
 

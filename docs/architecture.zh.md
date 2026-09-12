@@ -58,7 +58,7 @@ Electron 通过内置的上游 Node.js 进程启动私有 Desktop Host 包；该
 
 | 包 | 职责 | `ctx` 键 |
 |---|---|---|
-| [`core/session`](subsystems/session.zh.md) | 仅追加的 `SessionEvent` 日志和内存存储 | `ctx.sessions` |
+| [`core/session`](subsystems/session.zh.md) | 进程内仅追加的 `SessionEvent` 日志和存储 | `ctx.sessions` |
 | [`core/system-prompt`](subsystems/system-prompt.zh.md) | 提示词片段与工具 schema 的组装 | `ctx.systemPrompt` |
 | [`core/tools`](subsystems/tools.zh.md) | 作用域化的工具注册表和带把关的执行流水线 | `ctx.tools` |
 | [`core/agent`](subsystems/core.zh.md) | `Agent` 接口、活跃 agent 注册表和 `agent/*` 事件 | `ctx.agents` |

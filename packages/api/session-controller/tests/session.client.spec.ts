@@ -131,34 +131,34 @@ describe('Session open', () => {
 })
 
 
-  it('publishes live chunk frames at frame cadence, not once per chunk', async () => {
-    const frames: FrameRequestCallback[] = []
-    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
-      frames.push(callback)
-      return frames.length
-    })
-    const { api, session } = makeSession()
-    api.onHistory = () => histResponse(plainTurn(SessionSeq(0), 0, '早', '安'))
-    await session.open()
-    let notified = 0
-    const unsubscribe = session.subscribe(() => { notified++ })
-    const attempt = LlmAttemptId('session:cadence')
-    await api.pushFollow(SID, { type: 'assistant-stream', frame: {
-      type: 'start', attemptId: attempt, revision: 1, startedAfterSeq: -1, turn: 1, step: 1,
-    } } as never)
-    for (const index of [0, 1, 2]) {
-      await api.pushFollow(SID, { type: 'assistant-stream', frame: {
-        type: 'chunk', attemptId: attempt, revision: index + 2, index, time: 20 + index,
-        chunk: { type: 'text-delta', index: 0, text: `chunk-${String(index)}` },
-      } } as never)
-    }
-    for (let turn = 0; turn < 4; turn++) await new Promise<void>((resolve) => { queueMicrotask(() => { resolve() }) })
-    // Three chunk frames landed; the session snapshot still awaits the frame.
-    expect(notified).toBe(0)
-    for (const callback of frames.splice(0)) callback(0)
-    expect(notified).toBe(1)
-    unsubscribe()
+it('publishes live chunk frames at frame cadence, not once per chunk', async () => {
+  const frames: FrameRequestCallback[] = []
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    frames.push(callback)
+    return frames.length
   })
+  const { api, session } = makeSession()
+  api.onHistory = () => histResponse(plainTurn(SessionSeq(0), 0, '早', '安'))
+  await session.open()
+  let notified = 0
+  const unsubscribe = session.subscribe(() => { notified++ })
+  const attempt = LlmAttemptId('session:cadence')
+  await api.pushFollow(SID, { type: 'assistant-stream', frame: {
+    type: 'start', attemptId: attempt, revision: 1, startedAfterSeq: -1, turn: 1, step: 1,
+  } } as never)
+  for (const index of [0, 1, 2]) {
+    await api.pushFollow(SID, { type: 'assistant-stream', frame: {
+      type: 'chunk', attemptId: attempt, revision: index + 2, index, time: 20 + index,
+      chunk: { type: 'text-delta', index: 0, text: `chunk-${String(index)}` },
+    } } as never)
+  }
+  for (let turn = 0; turn < 4; turn++) await new Promise<void>((resolve) => { queueMicrotask(() => { resolve() }) })
+  // Three chunk frames landed; the session snapshot still awaits the frame.
+  expect(notified).toBe(0)
+  for (const callback of frames.splice(0)) callback(0)
+  expect(notified).toBe(1)
+  unsubscribe()
+})
 
 describe('live event path', () => {
   async function opened(events: SessionEvent[] = plainTurn(SessionSeq(0), 0, 'a', 'b')) {
@@ -651,6 +651,66 @@ describe('prompt and cancel errors', () => {
     expect(api.callsOf('session.attachment')).toEqual([{
       sessionId: SID, attachmentId: 'attachment-1',
     }])
+  })
+})
+
+describe('prompt rewrite options', () => {
+  it('puts rewriteFrom on the wire and rebuilds the window before resolving when the Host reports rewrote', async () => {
+    const { api, session } = makeSession()
+    api.onHistory = () => histResponse(plainTurn(SessionSeq(0), 0, '旧问', '旧答'), true)
+    await session.open()
+    api.onPrompt = () => Promise.resolve(ok({ accepted: true as const, rewrote: true }))
+    api.onHistory = () => histResponse([
+      ...plainTurn(SessionSeq(0), 0, '旧问', '旧答'),
+      ...plainTurn(SessionSeq(6), 1, '新问', '新答'),
+    ])
+    const result = await session.prompt(
+      [{ type: 'text', text: '新问' }], 'queue', undefined, undefined, { rewriteFrom: 5 },
+    )
+    expect(result).toEqual({ ok: true, value: { accepted: true, rewrote: true } })
+    expect(api.callsOf('session.prompt')).toMatchObject([{
+      sessionId: SID, mode: 'queue', content: [{ type: 'text', text: '新问' }], rewriteFrom: 5,
+    }])
+    // The rewrite resolves only after the window rebuilt from the new log.
+    expect(api.callsOf('session.follow')).toHaveLength(2)
+    expect(eventSeqs(session)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+  })
+
+  it('fails visibly when an armed rewrite is admitted without rewrote (not-yet-restarted Host)', async () => {
+    const { api, session } = makeSession()
+    api.onHistory = () => histResponse(plainTurn(SessionSeq(0), 0, '旧问', '旧答'))
+    await session.open()
+    api.onPrompt = () => Promise.resolve(ok({ accepted: true as const }))
+    const handle = session.beginSubmission({ mode: 'queue', text: '新问', attachments: [] })
+    const result = await session.prompt(
+      [{ type: 'text', text: '新问' }], 'queue', undefined, handle.requestId, { rewriteFrom: 5 },
+    )
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'session/rewrite-missed', details: { sessionId: SID, rewriteFrom: 5 } },
+    })
+    expect(session.getSnapshot().promptError).toMatchObject({
+      op: 'send', error: { code: 'session/rewrite-missed' },
+    })
+    expect(session.getSnapshot().pendingSubmissions).toEqual([])
+    // The skipped rewrite must not resync: the stale window stays untouched.
+    expect(api.callsOf('session.follow')).toHaveLength(1)
+    expect(eventSeqs(session)).toEqual([0, 1, 2, 3, 4, 5])
+  })
+
+  it('ignores rewrite options on a subagent-addressed continuation', async () => {
+    const api = new FakeApiClient()
+    const session = new Session(SID, fakeRemote(api), {
+      address: { parentSessionId: PARENT, childSessionId: SID, mode: 'continuable' },
+    })
+    await session.open()
+    const prompted = await session.prompt(
+      [{ type: 'text', text: '继续' }], 'queue', undefined, undefined, { rewriteFrom: 3 },
+    )
+    expect(prompted).toEqual({ ok: true, value: { accepted: true } })
+    expect(api.callsOf('subagents.prompt')).toMatchObject([{ content: [{ type: 'text', text: '继续' }] }])
+    expect(api.callsOf('session.prompt')).toEqual([])
+    expect(api.callsOf('session.follow')).toHaveLength(1)
   })
 })
 

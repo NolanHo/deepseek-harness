@@ -19,7 +19,7 @@ import type {
   SessionRequestId,
 } from '../../types.ts'
 import type {
-  BeginSubmissionInput, PendingSubmissionRetirement, SessionFace, SubmissionHandle,
+  BeginSubmissionInput, PendingSubmissionRetirement, SessionFace, SessionPromptOptions, SubmissionHandle,
 } from '../contract/session.ts'
 import type {
   OpenState, PendingSubmission, PromptError, SessionSnapshot,
@@ -41,6 +41,13 @@ import {
   ClientAssistantStream,
   type ClientAssistantStreamResult,
 } from './assistant-stream.ts'
+
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface RemoteErrorDetailsMap {
+    /** The Host admitted an armed rewrite prompt without rewriting: version skew with a not-yet-restarted Host. */
+    'session/rewrite-missed': { readonly sessionId: SessionId; readonly rewriteFrom: number }
+  }
+}
 
 function projectionsBaseline(value: SessionProjectionBaseline): ProjectionsBaseline {
   return {
@@ -231,14 +238,19 @@ export class Session implements SessionFace {
    * @param mode - queue appends after the current turn; steer interrupts it.
    * @param signal - optional caller cancellation for the complete admission round-trip.
    * @param requestId - identity from {@link beginSubmission}; a failed identified prompt retires its echo.
-   * @returns the prompt result (also mirrored into promptError on failure).
+   * @param options - optional in-place history rewrite applied before admission; a
+   *   subagent-addressed Session ignores it.
+   * @returns the prompt result (also mirrored into promptError on failure). An armed
+   *   rewrite the Host skipped without reporting `rewrote` resolves
+   *   `session/rewrite-missed` instead of a silent append.
    */
   async prompt(
     content: PromptContentPart[],
     mode: 'queue' | 'steer',
     signal?: AbortSignal,
     requestId?: SessionRequestId,
-  ): Promise<RemoteResult<{ accepted: true }>> {
+    options?: SessionPromptOptions,
+  ): Promise<RemoteResult<{ accepted: true; rewrote?: boolean }>> {
     this.promptError = null
     this.lastAgentError = null
     // Synchronous, before the first await: the blank → engaging edge must be
@@ -247,7 +259,7 @@ export class Session implements SessionFace {
     this.promptAttempted = true
     if (this.blankBit) this.firstPromptPendingTurn = true
     this.notifier.markDirty()
-    let result: RemoteResult<{ accepted: true }>
+    let result: RemoteResult<{ accepted: true; rewrote?: boolean }>
     if (this.address === undefined) {
       const clientTimeZone = resolvedClientTimeZone()
       result = await this.remote.session.prompt({
@@ -256,6 +268,7 @@ export class Session implements SessionFace {
         mode,
         content,
         clientTimeZone,
+        ...(options?.rewriteFrom === undefined ? {} : { rewriteFrom: options.rewriteFrom }),
       }, signal)
     } else if (content.some(part => part.type === 'file')) {
       result = {
@@ -286,6 +299,27 @@ export class Session implements SessionFace {
       this.promptError = { op: 'send', error: result.error }
       this.notifier.markDirty()
       return result
+    }
+    if (this.address === undefined && options?.rewriteFrom !== undefined) {
+      if (result.value.rewrote === true) {
+        // Rebuild the window from the rewritten log before resolving: the
+        // follow stream silently drops events at or below its cursor, so a
+        // missed rebuild leaves the stale tail visible.
+        await this.resync()
+      } else {
+        // The Host admitted without rewriting — version skew with a
+        // not-yet-restarted Host. A silent append would falsify the armed
+        // edit, so the settlement is a visible failure instead.
+        const skew = new RemoteError(
+          'session/rewrite-missed',
+          'host did not rewrite the session log for the armed prompt (server restart required)',
+          { sessionId: this.sessionId, rewriteFrom: options.rewriteFrom },
+        )
+        if (requestId !== undefined) this.retireFailedSubmission(requestId)
+        this.promptError = { op: 'send', error: skew }
+        this.notifier.markDirty()
+        return { ok: false, error: skew }
+      }
     }
     // Blank flips on ACCEPTANCE, not attempt: an accepted prompt starts the
     // conversation's first turn on the host (the host criterion — a logged
