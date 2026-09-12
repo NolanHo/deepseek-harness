@@ -58,8 +58,22 @@ const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set([
   'ENOTDIR',
 ])
 
+// Fork patch (FORK_SURFACE.md): dist directories whose every emitted file
+// carries a content hash in its name (`apps/web/vite.config.ts` fixes `[hash]`
+// for assets/, assets/langs/, assets/fonts/, and preview/). One name therefore
+// always holds the same bytes, so the shell reuses them across reloads instead
+// of re-downloading its 1.27 MB of JavaScript and CSS. Index entries and the
+// other root files (index.html, favicon.svg, manifest.webmanifest) keep
+// serving without a cache directive.
+const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
+
+/** Dist directories whose file names Vite hashes. */
+const HASHED_OUTPUT_DIRECTORIES = ['assets', 'preview'] as const
+
 /**
- * Serve one GET/HEAD static request from the dist root.
+ * Serve one GET/HEAD static request from the dist root. A hit inside a
+ * hash-named output directory carries an immutable cache header; every other
+ * hit keeps its previous headers, including index responses.
  * @param pathname - decoded URL pathname of the request.
  * @param res - the node:http response to write.
  * @param distRoot - absolute dist root directory (resolved by the caller).
@@ -101,7 +115,12 @@ export async function serveStatic(
     res.end()
     return
   }
-  res.writeHead(200, { 'content-type': type })
+  res.writeHead(200, {
+    'content-type': type,
+    ...(HASHED_OUTPUT_DIRECTORIES.some(directory => target.startsWith(`${distRoot}${sep}${directory}${sep}`))
+      ? { 'cache-control': IMMUTABLE_CACHE }
+      : {}),
+  })
   res.end(body)
 }
 
