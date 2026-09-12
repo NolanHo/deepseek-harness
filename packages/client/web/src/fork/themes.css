@@ -11,9 +11,9 @@
    body` is 0-2-1 and wins in both modes.
 
    The palette values are the owner's blue/white recolor of the locally
-   installed "夕港 / Harbor" skin (dsh-market, author moeblack) with the
-   Dracula markdown and syntax palette (MIT). The wallpaper and the skin's
-   runtime hooks stay out of the repository. */
+   installed "夕港 / Harbor" skin (dsh-market, author moeblack) with the Tokyo
+   Night markdown and syntax palette taken from the owner's xbot checkout. The
+   wallpaper and the skin's runtime hooks stay out of the repository. */
 
 :root[data-dsh-theme="harbor"],
 :root[data-dsh-theme="harbor"] body {
@@ -108,26 +108,57 @@
   --dsw-specific-sidebar-nav-item-hover: #ffffff0d;
   --dsw-specific-tip: #181f36d9;
 
-  /* Markdown + syntax: Dracula (MIT), high contrast on the dusk panels. */
-  --dsw-alias-markdown-citation: #44475a;
-  --dsw-alias-markdown-code-block: #282a36;
-  --dsw-alias-markdown-code-block-banner: #44475a;
-  --dsw-alias-markdown-code-segment-selected: #44475a;
-  --dsw-alias-markdown-code-segment-unselected: #282a36;
-  --dsw-alias-markdown-inline-code: #343a52;
-  --dsw-alias-markdown-placeholder: #6272a4;
-  --dsw-alias-markdown-tag: #44475a;
-  --shiki-foreground: #f8f8f2;
-  --shiki-background: #282a36;
-  --shiki-token-constant: #bd93f9;
-  --shiki-token-string: #f1fa8c;
-  --shiki-token-comment: #6272a4;
-  --shiki-token-keyword: #ff79c6;
-  --shiki-token-parameter: #ffb86c;
-  --shiki-token-function: #50fa7b;
-  --shiki-token-string-expression: #f1fa8c;
-  --shiki-token-punctuation: #f8f8f2;
-  --shiki-token-link: #8be9fd;
+  /* Markdown + syntax: Tokyo Night, shifted onto the dusk surfaces. The
+     palette comes from the markdown theme set in the owner's xbot checkout
+     (`web/src/styles/markdown-themes.css`, "tokyo-night"): the code surface
+     moves from Tokyo's neutral #1a1b26 to the dusk deep blue, links take
+     Tokyo's cyan, and the low-contrast comment/punctuation steps are lifted
+     for the darker background. */
+  --dsw-alias-link: #7dcfff;
+  --dsw-alias-markdown-citation: #2a3151;
+  --dsw-alias-markdown-code-block: #161a2e;
+  --dsw-alias-markdown-code-block-banner: #1f2540;
+  --dsw-alias-markdown-code-segment-selected: #2b3358;
+  --dsw-alias-markdown-code-segment-unselected: #1b2138;
+  --dsw-alias-markdown-inline-code: #2b3358;
+  --dsw-alias-markdown-placeholder: #6b7590;
+  --dsw-alias-markdown-tag: #2a3151;
+  --shiki-foreground: #a9b1d6;
+  --shiki-background: #161a2e;
+  --shiki-token-constant: #ff9e64;
+  --shiki-token-string: #9ece6a;
+  --shiki-token-comment: #6b7394;
+  --shiki-token-keyword: #bb9af7;
+  --shiki-token-parameter: #e0af68;
+  --shiki-token-function: #7aa2f7;
+  --shiki-token-string-expression: #9ece6a;
+  --shiki-token-punctuation: #8f97b8;
+  --shiki-token-link: #7dcfff;
+}
+
+/* Element-level contrast in the chat transcript: headings, inline-code chips,
+   and table headers carry no upstream token for their text or background, and
+   the dusk panels need more separation than the inherited label colors give.
+   Two-tier headings put the top levels on Tokyo's blue and deeper levels on
+   the bright foreground; links stay cyan, so no heading reuses the link color
+   and a heading never reads as a link. */
+:root[data-dsh-theme="harbor"] [data-chat-flow] h1,
+:root[data-dsh-theme="harbor"] [data-chat-flow] h2 {
+  color: #7aa2f7;
+}
+
+:root[data-dsh-theme="harbor"] [data-chat-flow] :is(h3, h4, h5, h6) {
+  color: #c8d3f5;
+}
+
+:root[data-dsh-theme="harbor"] [data-chat-flow] code:not(pre code) {
+  color: #9ece6a;
+  border-color: #45507a;
+}
+
+:root[data-dsh-theme="harbor"] [data-chat-flow] th {
+  color: #c8d3f5;
+  background: #1f2540;
 }
 
 /* The shell paints its own backdrop; the marked palette owns it instead. */
