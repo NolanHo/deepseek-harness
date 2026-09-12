@@ -52,14 +52,17 @@ textarea {
   font-family: inherit;
 }
 
-/* Fork patch (FORK_SURFACE.md): the deployment's reduced-motion opt-in
-   (`?reduce-motion=1`, applied by the boot kernel). Animations complete in
-   one step instead of being removed, so transition-driven state machines
-   still settle; readers who never opt in render exactly as before. */
+/* Fork patch (FORK_SURFACE.md): the deployment's reduced-motion default
+   (`?reduce-motion=0` opts out, applied by the boot kernel). Animations
+   complete in one step instead of being removed, so animation-driven state
+   still settles; transitions keep their authored duration because the right
+   Sidebar's panel machinery reads transition availability and reports
+   "panel transform transition is unavailable" when every duration is 1 ms
+   (apps/web/tests/sidebar-right.e2e.ts). Readers who opt out render exactly
+   as before. */
 :root[data-reduce-motion] *,
 :root[data-reduce-motion] *::before,
 :root[data-reduce-motion] *::after {
   animation-duration: 1ms !important;
   animation-iteration-count: 1 !important;
-  transition-duration: 1ms !important;
 }

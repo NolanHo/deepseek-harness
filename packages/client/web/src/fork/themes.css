@@ -1,0 +1,131 @@
+/* Fork-owned deployment theme (see FORK_SURFACE.md): the dusk-blue palette
+   this deployment runs by default. The boot kernel marks
+   `<html data-dsh-theme="harbor">` before any entry activates, so the first
+   frame already carries these tokens; `?theme=default` removes the marker and
+   every rule here stops applying.
+
+   The palette is the owner's blue/white recolor of the locally installed
+   "夕港 / Harbor" skin (dsh-market, author moeblack) with the Dracula
+   markdown and syntax palette (MIT). The wallpaper and the skin's runtime
+   hooks stay out of the repository. */
+
+:root[data-dsh-theme="harbor"] {
+  color: #eaf2ff;
+  color-scheme: dark;
+  background-color: #141a2e;
+
+  --dsw-alias-bg-base: #141a2e;
+  --dsw-alias-bg-layer-1: #181f36;
+  --dsw-alias-bg-layer-2: #1d2540;
+  --dsw-alias-bg-layer-3: #222b4a;
+  --dsw-alias-bg-overlay: #2a3357d1;
+  --dsw-alias-bg-module-platform: #222b4ac7;
+  --dsw-alias-bg-multi-select: #222b4ac7;
+  --dsw-alias-bg-skeleton: #ffffff0f;
+
+  --dsw-alias-border-l1: #ffffff12;
+  --dsw-alias-border-l2: #ffffff1f;
+  --dsw-alias-border-l3: #ffffff29;
+  --dsw-alias-border-l4: #fff3;
+
+  --dsw-alias-brand-primary: #6ea8fe;
+  --dsw-alias-brand-primary-invert: #ffffff;
+  --dsw-alias-brand-primary-new-colorprimary-new-color: #8fbaff;
+  --dsw-alias-brand-text: #eaf2ff;
+
+  --dsw-alias-button-contrast-fill: #141a2e;
+  --dsw-alias-button-elevated-fill: #222b4a;
+  --dsw-alias-button-floating-fill: #181f36;
+  --dsw-alias-button-floating-hover: #222b4a;
+  --dsw-alias-button-ghost-active-border: #4a5678;
+  --dsw-alias-button-ghost-active-fill: #2a3357;
+  --dsw-alias-button-ghost-active-hover: #333c63;
+  --dsw-alias-button-info-fill: #5b8cff;
+  --dsw-alias-button-info-hover: #6ea8fe;
+  --dsw-alias-button-primary-dimmed: #2a3357;
+  --dsw-alias-button-primary-fill: #5b8cff;
+  --dsw-alias-button-primary-hover: #6ea8fe;
+  --dsw-alias-button-tool-bar-fill-invisible: #2a33575c;
+  --dsw-alias-button-tool-bar-fill: #4a567880;
+  --dsw-alias-button-tool-bar-hover: #4a567899;
+
+  --dsw-alias-interactive-bg-active: #eaf2ff24;
+  --dsw-alias-interactive-bg-hover-accent: #6ea8fe2e;
+  --dsw-alias-interactive-bg-hover-danger: #ff5c7a26;
+  --dsw-alias-interactive-bg-hover-solid: #222b4a;
+  --dsw-alias-interactive-bg-hover: #eaf2ff12;
+
+  --dsw-alias-label-caption: #8a94ab;
+  --dsw-alias-label-dimmed: #6b7590;
+  --dsw-alias-label-primary: #eaf2ff;
+  --dsw-alias-label-primary-dimmed: #dbe7ff;
+  --dsw-alias-label-primary-foreground: #ffffff;
+  --dsw-alias-label-primary-inverted: #141a2e;
+  --dsw-alias-label-secondary: #b9c6e0;
+  --dsw-alias-label-tertiary: #9dc2ff;
+
+  --dsw-alias-state-business-primary: #6ea8fe;
+  --dsw-alias-state-business-tertiary: #6ea8fe2e;
+  --dsw-alias-state-error-primary: #ff7a8a;
+  --dsw-alias-state-error-secondary: #ff94a3;
+  --dsw-alias-state-success-primary: #7fd6a4;
+  --dsw-alias-state-success-secondary: #63c48e;
+  --dsw-alias-state-success-tertiary: #7fd6a429;
+  --dsw-alias-state-warn-label: #f6c177;
+  --dsw-alias-state-warn-primary: #f6c177;
+  --dsw-alias-state-warn-secondary: #e5a95e;
+  --dsw-alias-state-warn-tertiary: #f6c17729;
+
+  --dsw-alias-scrollbar-bg-l1: #3a4468;
+  --dsw-alias-scrollbar-bg-l2: #3a4468;
+  --dsw-alias-scrollbar-hover-l1: #6ea8fe;
+  --dsw-alias-scrollbar-hover-l2: #8fbaff;
+
+  --dsw-alias-toast-bg: #333c63;
+  --dsw-alias-tooltip-bg: #333c63;
+
+  --dsw-specific-bubble: #1d2540d9;
+  --dsw-specific-bubble-highlight: #2a3357e6;
+  --dsw-specific-input-major: #181f36d9;
+  --dsw-specific-login-input: #181f36d9;
+  --dsw-specific-menu: #222b4ae6;
+  --dsw-specific-selector: #222b4ae6;
+  --dsw-specific-sidebar-fill: #0c0f1ce6;
+  --dsw-specific-sidebar-nav-item-active: #2a3357;
+  --dsw-specific-sidebar-nav-item-active-accent: #6ea8fe38;
+  --dsw-specific-sidebar-nav-item-hover: #ffffff0d;
+  --dsw-specific-tip: #181f36d9;
+
+  /* Markdown + syntax: Dracula (MIT), high contrast on the dusk panels. */
+  --dsw-alias-markdown-citation: #44475a;
+  --dsw-alias-markdown-code-block: #282a36;
+  --dsw-alias-markdown-code-block-banner: #44475a;
+  --dsw-alias-markdown-code-segment-selected: #44475a;
+  --dsw-alias-markdown-code-segment-unselected: #282a36;
+  --dsw-alias-markdown-inline-code: #343a52;
+  --dsw-alias-markdown-placeholder: #6272a4;
+  --dsw-alias-markdown-tag: #44475a;
+  --shiki-foreground: #f8f8f2;
+  --shiki-background: #282a36;
+  --shiki-token-constant: #bd93f9;
+  --shiki-token-string: #f1fa8c;
+  --shiki-token-comment: #6272a4;
+  --shiki-token-keyword: #ff79c6;
+  --shiki-token-parameter: #ffb86c;
+  --shiki-token-function: #50fa7b;
+  --shiki-token-string-expression: #f1fa8c;
+  --shiki-token-punctuation: #f8f8f2;
+  --shiki-token-link: #8be9fd;
+}
+
+/* The shell paints its own backdrop; the marked palette owns it instead. */
+:root[data-dsh-theme="harbor"] [id="root"] {
+  background: none;
+}
+
+/* Drawer button: a light icon on the floating dark fill (upstream renders the
+   inverted label color, which the dusk fill swallows). Paired light-fill/dark-
+   text chrome, such as the version badge, keeps the token value above. */
+:root[data-dsh-theme="harbor"] button[class*="mobileMenu"] {
+  color: var(--dsw-alias-label-primary);
+}

@@ -11,12 +11,14 @@ import type {
 } from '@deepseek-ai/dsh-client-modules/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { BootPage } from './boot-page.ts'
-// Fork patch (FORK_SURFACE.md): the deployment's reduced-motion opt-in is
-// applied to the document root before any entry activates.
+// Fork patch (FORK_SURFACE.md): the deployment's reduced-motion opt-in and
+// theme palette are applied to the document root before any entry activates.
 import { applyReduceMotion } from './fork/reduce-motion.ts'
+import { applyTheme } from './fork/deployment-theme.ts'
 import { getStaticModules } from './seed.ts'
 import { STATE_LABELS } from './loader-status.ts'
 import './base.css'
+import './fork/themes.css'
 
 /** Module transport hook replaced by jsdom tests. */
 export type BootSeams = Pick<ClientModuleCreateOptions, 'loadBundle'>
@@ -39,6 +41,7 @@ export class AppWebEntry {
     this.container = container
     this.seams = seams
     applyReduceMotion(document.documentElement, globalThis.location?.search ?? '')
+    applyTheme(document.documentElement, globalThis.location?.search ?? '')
     this.page = new BootPage(container)
   }
 
