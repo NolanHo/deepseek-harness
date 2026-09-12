@@ -64,8 +64,8 @@ const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set([
 // is copied to the dist root verbatim, so it stays outside both directories).
 // One name therefore always holds the same bytes, so the shell reuses them
 // across reloads instead of re-downloading its 1,352 KiB of JavaScript and CSS.
-// Index entries and the other root files (index.html, favicon.svg,
-// manifest.webmanifest) keep serving without a cache directive.
+// Index entries and the other root files (index.html, preview.html,
+// favicon.svg, manifest.webmanifest) keep serving without a cache directive.
 const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
 
 /** Dist directories whose file names Vite hashes. */
