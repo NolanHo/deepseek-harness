@@ -23,6 +23,13 @@ The main checkout serves the running dsh and hosts concurrent agent sessions. De
 The running dsh serves the deployment clone (for example `/root/dsh-web/app`); its supervisor program must stay up while agents work.
 
 - **Exercise the change on another port first**: every product-visible change runs end-to-end on a second `dsh web` instance (its own `DSH_HOME` and bind patch, e.g. port 3097+) against the built artifacts before the production instance is touched. Never restart production to find out whether a change works.
+- **Isolate the second instance's Session storage too**: a second instance needs its own session database, not just its own `DSH_HOME`. A profile that still declares the production `session-persistence-sqlite` path (`path: /root/.dsh/sessions.sqlite`) opens the production database — and a staged `profiles/<name>` that symlinks back to the production profile carries that path with it. Two instances then hold the same Session, their append cursors diverge, and both lose turns to append conflicts (`session <key> append starts at seq N / stored next seq M`). Point the staging row at its own file, or at a snapshot copy of the production database when the real Sessions are needed, and prove single ownership before starting:
+
+```sh
+for p in /proc/[0-9]*; do ls -la "$p/fd" 2>/dev/null | grep -q '/root/.dsh/sessions.sqlite' && echo "$p"; done
+```
+
+Only the supervisor-managed `dsh-web` may appear; a second pid means the instance is not isolated.
 - **Restart behind a detached delayed script**: schedule the production restart from a detached script (for example `setsid bash -c 'sleep 90; exec /root/dsh-web/restart-and-check.sh'`) so it outlives the agent turn that scheduled it and survives the restart killing that agent. The script probes health after the restart and rolls back on failure; report the probe result before calling the deployment done.
 
 ## Pre-stable APIs and released Session data
