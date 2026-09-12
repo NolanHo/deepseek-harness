@@ -17,9 +17,9 @@
 - text: Begin your reply with the plain sentence "Reading the workspace now." as text, and in that same message call the bash tool with the command "echo alpha". After the tool result, reply with the single word DONE and stop. {{clock}}
 - button "Copy":
   - img
-- button "Collapsed 1 tool call · 1 message · {{duration}}":
+- button "1 tool call · 1 message":
+  - text: 1 tool call · 1 message
   - img
-  - text: Collapsed 1 tool call · 1 message · {{duration}}
 - paragraph: partial
 - text: Stopped
 - button "Copy":
@@ -40,7 +40,6 @@
   - img
 - button "Add attachment":
   - img
-- 'button "Access mode, current: Workspace Write"': Workspace Write
 - button "Select model, current DeepSeek-V4-Flash":
   - text: DeepSeek-V4-Flash
   - img
