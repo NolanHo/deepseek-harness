@@ -1,4 +1,4 @@
-# Agent Note: 部分历史下的 Turn Process 折叠与更丰富的摘要
+# Agent Note: 部分历史下的 Turn Process 折叠
 
 Status: implemented
 
@@ -8,25 +8,25 @@ Status: implemented
 
 ## 问题
 
-上游的折叠在仍有更早历史可加载时（`historyIncomplete` 门）不显示折叠控件、也不隐藏任何成员。真实会话几乎总是超过一页历史，导致折叠实际从不生效——已关闭回合的中间工具调用和 Assistant 消息全部内联展开。fork 合并前的折叠没有此门，且额外显示回合时长。
+上游的折叠在仍有更早历史可加载时（`ChatNodeSeat.processWindowReady` 的 `historyIncomplete` 门）不显示折叠控件、也不隐藏任何成员。被服务的页按构造就是局部的（`session.ts` 的 `PAGE_MESSAGES = 8`），因此真实会话的 `hasMore` 几乎恒为真，折叠从不出现——已关闭回合把中间的 Tool 调用、Context 行与 Assistant 消息全部内联展开。
 
 ## 决策
 
-- `ChatNodeSeat` 不再读取 `historyIncomplete`：`processWindowReady` 与折叠布局键集去掉该门，`hasMore` 为真时已关闭回合同样默认折叠；`ChatView` 停止传递该 prop。
-- `TurnProcessNodeView` 增加回合墙钟时长（取自回合位置 `turn/start` 与 `turn/end` 边界），并采用折叠前缀标签（`Collapsed {counts}` / `已折叠 {counts}`）；计数为零时保留 `Thought for a while` 并追加时长（若存在）。控件由通栏分隔线改为圆角胶囊样式。
-- 测试：两个部分历史折叠测试改为断言折叠生效；标签断言覆盖前缀与时长段；chat-scroll 锚点测试的页数上限适配 8 消息分页。
+- `ChatNodeSeat` 既不再声明也不再读取 `historyIncomplete`：`processWindowReady` 去掉该门，`hasMore` 为真时已关闭回合同样默认折叠；`ChatView` 停止传递该 prop。注入点带 `// Fork patch (FORK_SURFACE.md)` 标记，对应行登记在 [FORK_SURFACE.md](../../../FORK_SURFACE.md)。
+- 折叠标签与回合时长采用上游的内联形式：fork 的分类折叠前缀与墙钟时长已退役给它，时长仍在轮次页脚的用量详情中可见。
+- 测试：`folds a closed Turn even while history is partial` 与 `folds final-page groups while history is partial` 断言 `hasMore` 为真时折叠生效，且在翻回 `false` 后保持。
 
 ## 后果
 
-- 无论剩余历史多少，已关闭回合默认折叠；部分页显示胶囊控件，且每页首绘折叠即稳定（与回合完整边界工作配套）。
-- 回合时长与已折叠前缀标签来自客户端已派生的位置数据；无新增事件。
+- 无论剩余历史多少，已关闭回合默认折叠；局部页显示折叠控件，且折叠在页面首绘即稳定。
+- 被服务的页按回合对齐（`session-controller/src/fork/page-boundary.ts` 把上游切点展宽到所属回合的开场事件），因此折叠跨度是整个回合，控件计数覆盖它隐藏的每个成员。
+- 除此之外没有其他变化：被隐藏的成员就是已加载页携带的那些行。
 
 ## 备选方案
 
 - **保留 `historyIncomplete` 门控**：与分页矛盾——被服务的页按构造就是不完整的，折叠只会在短会话出现。
 - **仅在用户显式操作时折叠**：中间的 Tool/Assistant 行仍会占据每个长会话的默认视图。
 
-
 ## 验证
 
-`pnpm run test:gui` 全绿；seeded-history 金样已刷新；提高页数上限后 chat-scroll-contract 锚点测试全绿。
+`pnpm run test:gui`；无此改动时 `folds a closed Turn even while history is partial` 以 `TypeError: Cannot read properties of null (reading 'getAttribute')` 失败、`folds final-page groups while history is partial` 以 `expected null not to be null` 失败；有此改动时两者通过。replay lane 比较的录制 web 金样已刷新，`pnpm run typecheck` 干净。

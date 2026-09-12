@@ -22,9 +22,9 @@
   - img
   - img
   - text: System prompt
-- button "Collapsed 6 tool calls · {{duration}}":
+- button "6 tool calls":
+  - text: 6 tool calls
   - img
-  - text: Collapsed 6 tool calls · {{duration}}
 - paragraph:
   - strong: Turn 1 / 2
   - text: — 随机选中的包：
@@ -51,9 +51,9 @@
   - img
   - img
   - text: System prompt
-- button "Collapsed 5 tool calls · 2 messages · {{duration}}":
+- button "5 tool calls · 2 messages":
+  - text: 5 tool calls · 2 messages
   - img
-  - text: Collapsed 5 tool calls · 2 messages · {{duration}}
 - paragraph: 两个 turn 都完成了 ✅
 - paragraph:
   - strong: 总结：
@@ -120,7 +120,6 @@
   - img
 - button "Add attachment":
   - img
-- 'button "Access mode, current: Workspace Write"': Workspace Write
 - button "Select model, current DeepSeek-V4-Flash":
   - text: DeepSeek-V4-Flash
   - img

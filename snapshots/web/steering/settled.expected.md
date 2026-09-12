@@ -17,9 +17,9 @@
 - text: Use the ask_user_question tool to ask me exactly one question with id "checkpoint", question "Ready to continue?", header "Checkpoint", and options labeled "Yes" and "No". After I answer, reply with one short sentence acknowledging my answer and stop. {{clock}}
 - button "Copy":
   - img
-- button "Collapsed 1 tool call · {{duration}}":
+- button "1 tool call":
+  - text: 1 tool call
   - img
-  - text: Collapsed 1 tool call · {{duration}}
 - text: "Interjection: include the word BANANA in your final reply. {{clock}}"
 - button "Copy":
   - img
@@ -41,7 +41,6 @@
   - img
 - button "Add attachment":
   - img
-- 'button "Access mode, current: Workspace Write"': Workspace Write
 - button "Select model, current DeepSeek-V4-Flash":
   - text: DeepSeek-V4-Flash
   - img

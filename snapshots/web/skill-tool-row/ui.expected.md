@@ -15,9 +15,9 @@
 - text: Load the editing-cordis-compositions skill with the skill tool, then reply DONE. {{date}} {{clock}}
 - button "Copy":
   - img
-- button "Collapsed 1 tool call · {{duration}}" [expanded]:
+- button "1 tool call" [expanded]:
+  - text: 1 tool call
   - img
-  - text: Collapsed 1 tool call · {{duration}}
 - button "Context injection @deepseek-ai/dsh-system-prompt":
   - img
   - img
@@ -57,7 +57,6 @@
   - img
 - button "Add attachment":
   - img
-- 'button "Access mode, current: Full access"': Full access
 - button "Select model, current DeepSeek-V4-Flash":
   - text: DeepSeek-V4-Flash
   - img
