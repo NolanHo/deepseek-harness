@@ -60,6 +60,7 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | `api/session-controller` `openWorkspacePath` 桌面门控 + `ui-chat` 文件打开路由 | C | 门控保持内联（5 行）；路由 = 标记+import+2 处调用 | 打开 RPC 查询 `canOpenPath()` 并快速失败（内在一行式）；路由决策与拒绝文案映射在 `src/client/chat/fork/open-file-routing.ts` |
 | `client/modules` + `client/web` 延迟启动批次 | C | 3 个文件约 120 行 | `WebBootBatchPhase 'deferred'` + `Config.defer` 切分 + 两段式 boot；上游形态（增量线格式字段、空默认）；defer 名单是部署配置而非仓库状态 |
 | `ui-workspace` 提升头部稳定 | C | 标记+import | `nextSessionOrderAccount`/`reconciledSessionOrder` 在 `src/client/fork/order-stability.ts`；WorkspaceBrowser 直接调用 |
+| `ui-chat` 消息动作条 DOM 钩子 | C | `MessageIconActions.tsx` 1 个属性 | 动作条带 `data-message-actions`，第三方插件可在原生复制/分支按钮旁挂自己的动作。上游 0.1.5 删除了 `data-time-hover-root`，而 fork 的 `dsh-rewind` 正锚定它；没有稳定钩子时插件静默不渲染。该属性纯新增、不可见 |
 | `ui-chat` StatsLine 绘制后测量 | C | 1 行 + 注释 | 省略号测试从 `useLayoutEffect` 移到 `useEffect`（绘制后）；行为零变化 |
 | `skill` 注册表目录限制 | C | `index.ts` 内 17 行 | 全部逻辑在 `src/fork/skill-restrict.ts`（编译、按作用域存储、链式过滤）；`index.ts` 只留 import、一个字段、两个标记的委托调用；allow/deny 互斥记录在模块 JSDoc |
 | `subagent` 子代理 cwd + skillFilter | C | 接缝 + `child-agent.ts` 内 2 个注入点 | 逻辑在 `src/fork/child-scoping.ts`（`stampChildCwd`、`applyChildSkillFilter`）；贯穿 `childSessionMeta`/continuation/驱动的请求字段是保留的接缝；descriptor v3→4（同步遇上游 bump：字段取并集）；冷恢复的 cwd 权威仍在会话 header |
