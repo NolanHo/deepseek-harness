@@ -16,7 +16,7 @@ This checkout is a **personal fork** of [deepseek-ai/deepseek-harness](https://g
 
 ## Working tree: branches, never a dirty main checkout
 
-The main checkout serves the running dsh and hosts concurrent agent sessions. Develop on a git worktree under `.worktrees/<slug>` (git-ignored) on its own branch, and land through a PR against `origin/master` (or a clean fast-forward merge when the branch stays local). Never develop on, or leave uncommitted changes in, the main checkout: uncommitted fork docs or sources there block other sessions' merges. Commit or stash before ending a session; a branch keeps the work recoverable and mergeable.
+The main checkout serves the running dsh and hosts concurrent agent sessions. Develop on a git worktree at `<repo>/.worktrees/<slug>` (git-ignored) on its own branch, and land through a PR against `origin/master` (or a clean fast-forward merge when the branch stays local). Every worktree lives in that `.worktrees/` directory — never `/tmp`, a sibling path, or another clone: only there does it stay git-ignored and get swept with the repository. Remove it once its branch has landed. Never develop on, or leave uncommitted changes in, the main checkout: uncommitted fork docs or sources there block other sessions' merges. Commit or stash before ending a session; a branch keeps the work recoverable and mergeable.
 
 ## Landing changes in the running deployment
 
