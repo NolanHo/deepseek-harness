@@ -40,6 +40,17 @@ async function loadComposition(): Promise<Context> {
   await writeFile(join(dist, 'blob.bin'), 'BLOB')
   await writeFile(join(dist, 'manifest.webmanifest'), '{}')
   await mkdir(join(dist, 'empty'))
+  // Vite-shaped output: content-hashed names inside assets/ (and its nested
+  // chunk directories) and preview/, plus a sibling directory whose name merely
+  // starts with the same letters.
+  await mkdir(join(dist, 'assets'))
+  await writeFile(join(dist, 'assets', 'index-abcdef12.js'), 'export const hashed = true')
+  await mkdir(join(dist, 'assets', 'langs'))
+  await writeFile(join(dist, 'assets', 'langs', 'c-abcdef12.js'), 'export {}')
+  await mkdir(join(dist, 'preview'))
+  await writeFile(join(dist, 'preview', 'bootstrap-abcdef12.js'), 'export {}')
+  await mkdir(join(dist, 'assets-copy'))
+  await writeFile(join(dist, 'assets-copy', 'plain.js'), 'export {}')
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
     "- name: '@deepseek-ai/dsh-credentials-local'",
@@ -93,6 +104,12 @@ async function request(port: number, path: string, init?: RequestInit): Promise<
   }
 }
 
+/** Read one response's cache-control header. */
+async function cacheControl(port: number, path: string, init?: RequestInit): Promise<string | null> {
+  const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, init)
+  return response.headers.get('cache-control')
+}
+
 describe('real Loader composition', () => {
   it('serves explicit index entries and files while preserving HTTP error semantics', { timeout: 60_000 }, async () => {
     const loaded = await loadComposition()
@@ -138,6 +155,21 @@ describe('real Loader composition', () => {
 
     // Unknown extension ships as octet-stream.
     expect(await request(port, '/blob.bin')).toMatchObject({ status: 200, type: 'application/octet-stream', body: 'BLOB' })
+
+    // Fork patch: hits inside a hash-named output directory are immutable for
+    // both methods; every other hit, index responses included, keeps no cache
+    // directive. A sibling directory whose name merely starts with `assets`
+    // must not inherit the header.
+    const immutable = 'public, max-age=31536000, immutable'
+    expect(await cacheControl(port, '/assets/index-abcdef12.js')).toBe(immutable)
+    expect(await cacheControl(port, '/assets/index-abcdef12.js', { method: 'HEAD' })).toBe(immutable)
+    expect(await cacheControl(port, '/assets/langs/c-abcdef12.js')).toBe(immutable)
+    expect(await cacheControl(port, '/preview/bootstrap-abcdef12.js')).toBe(immutable)
+    expect(await cacheControl(port, '/assets-copy/plain.js')).toBeNull()
+    expect(await cacheControl(port, '/app.js')).toBeNull()
+    expect(await cacheControl(port, '/manifest.webmanifest')).toBeNull()
+    expect(await cacheControl(port, '/', authenticated())).toBeNull()
+    expect(await cacheControl(port, '/index.html', authenticated())).toBeNull()
 
     // Only the root and index path render index.html through registered taps.
     const untap = server.tapIndex(html => html.replace('<head>', '<head><script>window.__T__=1</script>'))
