@@ -315,11 +315,19 @@ export interface SessionPromptRequest {
   /** At least one non-whitespace text part or attachment. */
   readonly content: readonly PromptContentPart[]
   readonly clientTimeZone?: string
+  /**
+   * Durable seq of one `user/message` event this prompt replaces: the Host
+   * discards that message's turn and every event after it before admitting
+   * the prompt, so the accepted message continues the same Session at the cut.
+   */
+  readonly rewriteFrom?: number
 }
 
 /** Receipt after one prompt enters the target Agent inbox. */
 export interface SessionPromptValue {
   readonly accepted: true
+  /** Whether admission rewrote the Session log first; absent when it did not. */
+  readonly rewrote?: boolean
 }
 
 /** Durable image read request. */

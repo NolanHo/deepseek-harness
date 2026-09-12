@@ -42,6 +42,12 @@ export interface SessionHandleFlushOptions {
   readonly signal?: AbortSignal
 }
 
+/** Options for {@link SessionHandle.truncate}. */
+export interface SessionHandleTruncateOptions {
+  /** Optional cancellation observed before the rewrite starts. */
+  readonly signal?: AbortSignal
+}
+
 /**
  * One open channel onto a stored session. A handle is single-owner state, not
  * a shared service: `read` never backtracks below what this handle already
@@ -95,6 +101,19 @@ export interface SessionHandle extends AsyncDisposable {
    * @param options - optional cancellation observed before the write starts.
    */
   append(events: readonly SessionEvent[], options?: SessionHandleAppendOptions): Promise<void>
+
+  /**
+   * Rewrite capability: discard every stored event from `toSeq` on, so the
+   * stored log then ends at `toSeq - 1` and the next append must start at
+   * `toSeq`. Durable on resolution. A backend that cannot rewrite a committed
+   * log omits this method; a consumer that needs the rewrite refuses loudly
+   * rather than admitting the operation unmet. Rejects with
+   * `SessionReadOnlyError` on a read handle and with `SessionOwnershipLostError`
+   * when write ownership is gone.
+   * @param toSeq - first logical event seq to discard; every event below it stays.
+   * @param options - optional cancellation observed before the rewrite starts.
+   */
+  truncate?(toSeq: SessionLogOffset, options?: SessionHandleTruncateOptions): Promise<void>
 
   /**
    * The durability barrier — the one operation that promises storage: on

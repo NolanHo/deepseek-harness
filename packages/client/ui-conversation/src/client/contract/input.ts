@@ -237,6 +237,16 @@ export interface InputActions {
   pruneAttachments(ids: readonly DraftAttachmentId[]): void
   /** Enter submission (adjudication / claim transaction / default sink inside). */
   submit(): void
+  /**
+   * Arm or clear the in-place rewrite this Session's next submission carries:
+   * the Host discards the armed message's turn and every event after it before
+   * admitting the prompt, so an edited prompt replaces that message instead of
+   * appending after it. A successful submission clears the armed value with
+   * its draft; a failed one keeps both for retry.
+   * @param fromSeq - durable seq of the `user/message` event to replace, or
+   *   `null` to clear an armed rewrite.
+   */
+  setRewriteFrom(fromSeq: number | null): void
 }
 
 /** One surfaced notice (command results, adjudication failures). seq keys re-render of repeats. */
@@ -340,6 +350,12 @@ export interface InputState {
   readonly occurrences: readonly Occurrence[]
   /** Read-only transient inbox projection from Session control, including pending steering. */
   readonly queue: readonly QueuedMessage[]
+  /**
+   * Durable seq of the `user/message` event an armed in-place rewrite
+   * replaces; `null` when no rewrite is armed. Cleared with the draft when a
+   * submission commits.
+   */
+  readonly rewriteFrom: number | null
 }
 
 /**

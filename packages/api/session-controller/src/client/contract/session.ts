@@ -59,6 +59,16 @@ export interface ProjectionsFace {
   faceOf(key: string): ObservableSnapshot<unknown>
 }
 
+/** Optional in-place history rewrite applied to one prompt's admission. */
+export interface SessionPromptOptions {
+  /**
+   * Durable seq of one `user/message` event this prompt replaces: the Host
+   * discards that message's turn and every event after it before admitting the
+   * prompt, and the window rebuilds from the rewritten log.
+   */
+  readonly rewriteFrom?: number
+}
+
 /** Identity plus the behavior verbs features may invoke on a session. */
 export interface ISession {
   /** The session's host identity (agent id — same axis). */
@@ -81,6 +91,7 @@ export interface ISession {
    * @param mode - 'queue' appends a turn; 'steer' interrupts the running one.
    * @param signal - optional caller cancellation for the complete admission round-trip.
    * @param requestId - identity from {@link beginSubmission}; a failed identified prompt retires its echo.
+   * @param options - optional in-place history rewrite applied before admission.
    * @returns acceptance, or the business error (also mirrored into snapshot.promptError).
    */
   prompt(
@@ -88,7 +99,8 @@ export interface ISession {
     mode: 'queue' | 'steer',
     signal?: AbortSignal,
     requestId?: SessionRequestId,
-  ): Promise<RemoteResult<{ accepted: true }>>
+    options?: SessionPromptOptions,
+  ): Promise<RemoteResult<{ accepted: true; rewrote?: boolean }>>
   /**
    * Resolve one durable image referenced by this session.
    * @param attachmentId - opaque id found in the folded session log.
