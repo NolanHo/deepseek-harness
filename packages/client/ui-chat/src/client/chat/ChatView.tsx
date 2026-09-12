@@ -810,7 +810,6 @@ export function ChatView({
             order={order}
             useChatNode={useChatNode}
             useChatNodeProcess={useChatNodeProcess}
-            historyIncomplete={hasMore}
             compactTranscript={compactTranscript}
             useStore={useStore}
             actions={actions}

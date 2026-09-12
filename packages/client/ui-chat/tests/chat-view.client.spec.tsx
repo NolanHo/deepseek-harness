@@ -1663,7 +1663,7 @@ describe('ChatView', () => {
     expect(contextRow?.getAttribute('hidden')).toBe('until-found')
   })
 
-  it('keeps a foldable closed Turn fully visible while history is partial', () => {
+  it('folds a closed Turn even while history is partial', () => {
     const h = makeHarness({
       nodes: [
         user(1, 'question'),
@@ -1677,17 +1677,19 @@ describe('ChatView', () => {
     const view = render(<h.ChatView {...h.props} />)
     const contextRow = view.container.querySelector<HTMLElement>('[data-chat-flow-kind="context"]')
 
-    expect(turnProcessControl(view.container)).toBeNull()
-    expect(contextRow?.getAttribute('hidden')).toBeNull()
-    expect(contextRow?.hasAttribute('data-turn-process-member')).toBe(false)
-
-    act(() => { h.set({ hasMore: false }) })
+    // Partial history does not withhold the fold: the closed Turn folds by
+    // default, hiding its intermediate members behind the disclosure control.
     const toggle = turnProcessControl(view.container)!
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(contextRow?.getAttribute('hidden')).toBe('until-found')
+    expect(contextRow?.hasAttribute('data-turn-process-member')).toBe(true)
+
+    act(() => { h.set({ hasMore: false }) })
+    expect(turnProcessControl(view.container)?.getAttribute('aria-expanded')).toBe('false')
+    expect(contextRow?.getAttribute('hidden')).toBe('until-found')
   })
 
-  it('withholds process controls for partial history and folds final-page groups', () => {
+  it('folds final-page groups while history is partial', () => {
     const h = makeHarness({
       nodes: [user(9, 'visible question'), assistant(10, 'visible answer', 2)],
       hasMore: true,
@@ -1716,6 +1718,12 @@ describe('ChatView', () => {
 
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(member?.getAttribute('hidden')).toBeNull()
+
+    // Loading an older page (hasMore flips) keeps the fold: the disclosure
+    // survives with the members' expanded state intact.
+    act(() => { h.set({ hasMore: true }) })
+    expect(turnProcessControl(view.container)).not.toBeNull()
     expect(member?.getAttribute('hidden')).toBeNull()
   })
 
