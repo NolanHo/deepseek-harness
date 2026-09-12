@@ -10,11 +10,12 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  /* The ChatView owns every scrollTop adjustment: prepends re-anchor rows
-     explicitly and the tail-follow re-asserts on ResizeObserver growth.
-     The browser's native scroll anchoring would also adjust scrollTop when
-     content above grows, which the reader-input ledger misattributes as a
-     user scroll — killing the tail follow and double-shifting prepends. */
+  /* Fork patch (FORK_SURFACE.md): the ChatView owns every scrollTop
+     adjustment — prepends re-anchor rows explicitly and the tail-follow
+     re-asserts on ResizeObserver growth. The browser's native scroll
+     anchoring would also adjust scrollTop when content above grows, which
+     the reader-input ledger misattributes as a user scroll — killing the
+     tail follow and double-shifting prepends. */
   overflow-anchor: none;
   /* Sides = composer clearance + 16px: on narrow viewports the transcript
      stays exactly 32px narrower than the input card (the shared width rule). */
@@ -228,10 +229,11 @@
   min-width: 72px;
 }
 
-/* Narrow viewports (~412px): the full composer-clearance + 16px side padding
-   leaves too little line length; drop to a flat 12px per side. The wide
-   width relation (transcript 32px narrower than the input card) does not
-   hold below this breakpoint. */
+/* Fork patch (FORK_SURFACE.md): narrow viewports (~412px). The full
+   composer-clearance + 16px side padding leaves too little line length, so
+   the transcript drops to a flat 12px per side; the wide width relation
+   (transcript 32px narrower than the input card) does not hold below this
+   breakpoint. */
 @media (max-width: 560px) {
   .scroll {
     padding-left: 12px;

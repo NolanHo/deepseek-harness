@@ -154,6 +154,8 @@
   animation: input-pending 1s ease-in-out infinite alternate;
 }
 
+/* Fork patch (FORK_SURFACE.md): the pending dot stops its alternate chase when
+   the reader asked for reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   .pending {
     animation: none;

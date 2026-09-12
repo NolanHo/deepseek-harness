@@ -126,6 +126,8 @@
   animation: todo-progress-spin 1s linear infinite;
 }
 
+/* Fork patch (FORK_SURFACE.md): the progress glyph stops spinning under
+   reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   .glyphProgress {
     animation: none;

@@ -30,7 +30,7 @@ for p in /proc/[0-9]*; do ls -la "$p/fd" 2>/dev/null | grep -q '/root/.dsh/sessi
 ```
 
 Only the supervisor-managed `dsh-web` may appear; a second pid means the instance is not isolated.
-- **Restart behind a detached delayed script**: schedule the production restart from a detached script (for example `setsid bash -c 'sleep 90; exec /root/dsh-web/restart-and-check.sh'`) so it outlives the agent turn that scheduled it and survives the restart killing that agent. The script probes health after the restart and rolls back on failure; report the probe result before calling the deployment done.
+- **Never restart the deployment: hand it to the human**: an agent's deployment work stops at built artifacts — reset the deployment clone, rebuild, verify the built bundle, then report the restart as pending. Restarting `dsh-web` is the human's action alone, on their schedule: a restart drops every live Session's stream and the browser reader attached to it, and the human may be mid-turn. No detached script, `supervisorctl` call, or other route restarts it on an agent's behalf, and an agent re-verifies the served bundle and the GUI only after the human reports the restart.
 
 ## Pre-stable APIs and released Session data
 

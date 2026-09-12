@@ -65,8 +65,8 @@
   animation: dsh-state-dot-chase 1s infinite;
 }
 
-/* Reduced motion keeps the ongoing state readable with a static mid-phase
-   value instead of the chase. */
+/* Fork patch (FORK_SURFACE.md): reduced motion keeps the ongoing state readable
+   with a static mid-phase value instead of the chase. */
 @media (prefers-reduced-motion: reduce) {
   .cell {
     animation: none;

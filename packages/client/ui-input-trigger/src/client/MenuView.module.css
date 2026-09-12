@@ -179,6 +179,8 @@
   animation: dsh-menu-skeleton 2s cubic-bezier(0.36, 0, 0.64, 1) infinite;
 }
 
+/* Fork patch (FORK_SURFACE.md): the skeleton bar stops its sweep under reduced
+   motion. */
 @media (prefers-reduced-motion: reduce) {
   .skeletonBar {
     animation: none;
