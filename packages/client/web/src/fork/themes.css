@@ -4,12 +4,19 @@
    frame already carries these tokens; `?theme=default` removes the marker and
    every rule here stops applying.
 
-   The palette is the owner's blue/white recolor of the locally installed
-   "夕港 / Harbor" skin (dsh-market, author moeblack) with the Dracula
-   markdown and syntax palette (MIT). The wallpaper and the skin's runtime
-   hooks stay out of the repository. */
+   The palette is declared on the marked root AND on its body: upstream
+   declares the alias tokens on `body` (light) and `body[data-ds-dark-theme]`
+   (dark, specificity 0-1-1), which beat a root-only block inside the app
+   subtree and left the panels on upstream's colors. `:root[data-dsh-theme]
+   body` is 0-2-1 and wins in both modes.
 
-:root[data-dsh-theme="harbor"] {
+   The palette values are the owner's blue/white recolor of the locally
+   installed "夕港 / Harbor" skin (dsh-market, author moeblack) with the
+   Dracula markdown and syntax palette (MIT). The wallpaper and the skin's
+   runtime hooks stay out of the repository. */
+
+:root[data-dsh-theme="harbor"],
+:root[data-dsh-theme="harbor"] body {
   color: #eaf2ff;
   color-scheme: dark;
   background-color: #141a2e;
