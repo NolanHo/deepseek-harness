@@ -128,6 +128,27 @@ function WidthHandle(props: {
   )
 }
 
+/**
+ * Renders the input dock with the live input snapshot as its owner props.
+ *
+ * Fork patch (FORK_SURFACE.md): the input subscription lives in this leaf.
+ * Held in ConversationRoot it re-rendered the column — header, transcript
+ * window, and composer stack — on every keystroke, so per-keystroke work grew
+ * with the loaded history window.
+ * @param props - The dock's session, the render share, and the input hook seat.
+ * @returns the dock slot, or null before the input store is available.
+ */
+function InputDockSlot({ session, renderSlot, useInput }: {
+  readonly session: InputZone['session']
+  readonly renderSlot: ConversationRootProps['renderSlot']
+  readonly useInput: ConversationRootProps['useInput']
+}) {
+  const input = useInput(s => s)
+  if (input === undefined) return null
+  const zone: InputZone = { session, input }
+  return <>{renderSlot('conversation.input.dock', zone)}</>
+}
+
 export function ConversationRoot({
   sessionId, useSession, useSessions, useSessionPendingInteraction,
   useWorkspaces, useConversation, useInput, useComposerBlock,
@@ -141,7 +162,6 @@ export function ConversationRoot({
     ? 'blank'
     : conversationPhase(session, conversation)
   const openState = session?.openState
-  const inputState = useInput(s => s)
   const cwd = useSessions(s => sessionId === undefined ? undefined : s.byId[sessionId]?.cwd)
   const summaryBlank = useSessions(s => sessionId === undefined ? undefined : s.byId[sessionId]?.blank)
   const workspaces = useWorkspaces(s => s)
@@ -271,8 +291,6 @@ export function ConversationRoot({
   )
   const hero = sessionId === undefined
     || (shellPhase === 'blank' && (openState === 'open' || summaryBlank === true))
-  const zone: InputZone | undefined =
-    session === undefined || inputState === undefined ? undefined : { session, input: inputState }
 
   // The chip is a selector; label resolution walks the flow top-down:
   //   1. a just-picked workspace (pending) → its title;
@@ -347,7 +365,9 @@ export function ConversationRoot({
     <div className={clsx(css.composerStack, hero && css.composerHero)}>
       {hero && <HeroShell t={t} renderSlot={renderSlot} />}
       {hero && heroWorkspaceRow}
-      {zone !== undefined && renderSlot('conversation.input.dock', zone)}
+      {session !== undefined && (
+        <InputDockSlot session={session} renderSlot={renderSlot} useInput={useInput} />
+      )}
       {inputBar}
     </div>
   )

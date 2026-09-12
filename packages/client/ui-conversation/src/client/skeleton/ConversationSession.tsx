@@ -160,6 +160,32 @@ export function ConversationSessionHeader({
 }
 
 /**
+ * Seeds the composer from the persisted draft once per view mount and keeps the
+ * draft mirror bound while the view is up.
+ *
+ * Fork patch (FORK_SURFACE.md): the input and draft subscriptions live in this
+ * null leaf. Held in ConversationSession they re-rendered the view area — the
+ * whole loaded transcript window — on every keystroke, so per-keystroke work
+ * grew with the history window a reader had loaded.
+ * @param props - The strict session body shares the seed effect reads.
+ * @returns null; this component renders no DOM.
+ */
+function DraftMirror({
+  useInput, inputActions, useStore, actions, bindDraftMirror,
+}: Pick<ConversationSessionProps, 'useInput' | 'inputActions' | 'useStore' | 'actions' | 'bindDraftMirror'>) {
+  const draftEmpty = useInput(s => s.draft === '')
+  const storedDraft = useStore(s => s.draft)
+  useEffect(() => {
+    if (draftEmpty && storedDraft !== '') inputActions.setDraft(storedDraft)
+    const unmirror = bindDraftMirror(actions.setDraft)
+    return () => { unmirror() }
+    // Mount-only (deps pinned to inputActions): later store writes come from
+    // the machine mirror, not this seed effect.
+  }, [inputActions])
+  return null
+}
+
+/**
  * Renders the active Session view inside the resident scrollport and keeps
  * the input draft mirrored while blank Hero chrome is visible.
  * @param props - Strict Session input/store, view ledger, and render shares.
@@ -174,26 +200,26 @@ export function ConversationSession({
   const active = resolveActiveView(tabs, selectedId)
   const session = useSession(s => s)
   const conversation = useConversation(s => s)
-  const inputState = useInput(s => s)
-  const storedDraft = useStore(s => s.draft)
   const viewRequest = useStore(s => s.viewRequest ?? null)
 
-  useEffect(() => {
-    if (inputState.draft === '' && storedDraft !== '') inputActions.setDraft(storedDraft)
-    const unmirror = bindDraftMirror(actions.setDraft)
-    return () => { unmirror() }
-    // Mount-only (deps pinned to inputActions): later store writes come from
-    // the machine mirror, not this seed effect.
-  }, [inputActions])
-
-  if (session.blank && conversationPhase(session, conversation) === 'blank') return null
   return (
-    <div className={css.viewArea}>
-      {active !== undefined && renderSlot('conversation.view', {
-        viewRequest,
-        openView,
-        completeViewRequest: actions.completeViewRequest,
-      }, { only: active.id })}
-    </div>
+    <>
+      <DraftMirror
+        useInput={useInput}
+        inputActions={inputActions}
+        useStore={useStore}
+        actions={actions}
+        bindDraftMirror={bindDraftMirror}
+      />
+      {session.blank && conversationPhase(session, conversation) === 'blank' ? null : (
+        <div className={css.viewArea}>
+          {active !== undefined && renderSlot('conversation.view', {
+            viewRequest,
+            openView,
+            completeViewRequest: actions.completeViewRequest,
+          }, { only: active.id })}
+        </div>
+      )}
+    </>
   )
 }
