@@ -29,4 +29,4 @@ The upstream fold withholds the disclosure control and hides no members while an
 
 ## Verification
 
-`pnpm run test:gui`; the two partial-history fold tests fail without the change (`expected null not to be null`) and pass with it; seeded-history browser goldens refreshed; `pnpm run typecheck` clean.
+`pnpm run test:gui`; without the change `folds a closed Turn even while history is partial` fails with `TypeError: Cannot read properties of null (reading 'getAttribute')` and `folds final-page groups while history is partial` with `expected null not to be null`; both pass with it. The recorded web goldens the replay lane compares are refreshed, and `pnpm run typecheck` is clean.

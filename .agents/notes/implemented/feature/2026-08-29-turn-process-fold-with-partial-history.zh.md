@@ -29,4 +29,4 @@ Status: implemented
 
 ## 验证
 
-`pnpm run test:gui`；两个部分历史折叠测试在无此改动时失败（`expected null not to be null`）、有此改动时通过；seeded-history 浏览器金样已刷新；`pnpm run typecheck` 干净。
+`pnpm run test:gui`；无此改动时 `folds a closed Turn even while history is partial` 以 `TypeError: Cannot read properties of null (reading 'getAttribute')` 失败、`folds final-page groups while history is partial` 以 `expected null not to be null` 失败；有此改动时两者通过。replay lane 比较的录制 web 金样已刷新，`pnpm run typecheck` 干净。
