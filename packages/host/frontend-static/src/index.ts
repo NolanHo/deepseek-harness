@@ -60,11 +60,12 @@ const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set([
 
 // Fork patch (FORK_SURFACE.md): dist directories whose every emitted file
 // carries a content hash in its name (`apps/web/vite.config.ts` fixes `[hash]`
-// for assets/, assets/langs/, assets/fonts/, and preview/). One name therefore
-// always holds the same bytes, so the shell reuses them across reloads instead
-// of re-downloading its 1.27 MB of JavaScript and CSS. Index entries and the
-// other root files (index.html, favicon.svg, manifest.webmanifest) keep
-// serving without a cache directive.
+// for assets/, assets/langs/, assets/fonts/, and preview/; `apps/web/public/`
+// is copied to the dist root verbatim, so it stays outside both directories).
+// One name therefore always holds the same bytes, so the shell reuses them
+// across reloads instead of re-downloading its 1,352 KiB of JavaScript and CSS.
+// Index entries and the other root files (index.html, favicon.svg,
+// manifest.webmanifest) keep serving without a cache directive.
 const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
 
 /** Dist directories whose file names Vite hashes. */
@@ -98,6 +99,7 @@ export async function serveStatic(
   }
   let body: string | Buffer
   let type: string
+  let cacheControl: string | undefined
   try {
     if (target === distRoot || target === distIndex) {
       if (!authorizeIndex()) return
@@ -106,6 +108,12 @@ export async function serveStatic(
     } else {
       body = await readFile(target)
       type = MIME[extname(target)] ?? 'application/octet-stream'
+      // Only the file branch can ask for the immutable header, so an index
+      // response keeps its headers even if distIndex sits inside a hashed
+      // directory.
+      if (HASHED_OUTPUT_DIRECTORIES.some(directory => target.startsWith(`${distRoot}${sep}${directory}${sep}`))) {
+        cacheControl = IMMUTABLE_CACHE
+      }
     }
   } catch (error) {
     // Only absent or non-file targets are 404; other filesystem failures reach
@@ -117,9 +125,7 @@ export async function serveStatic(
   }
   res.writeHead(200, {
     'content-type': type,
-    ...(HASHED_OUTPUT_DIRECTORIES.some(directory => target.startsWith(`${distRoot}${sep}${directory}${sep}`))
-      ? { 'cache-control': IMMUTABLE_CACHE }
-      : {}),
+    ...(cacheControl === undefined ? {} : { 'cache-control': cacheControl }),
   })
   res.end(body)
 }

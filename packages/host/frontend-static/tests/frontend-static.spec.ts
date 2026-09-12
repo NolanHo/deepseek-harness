@@ -40,10 +40,15 @@ async function loadComposition(): Promise<Context> {
   await writeFile(join(dist, 'blob.bin'), 'BLOB')
   await writeFile(join(dist, 'manifest.webmanifest'), '{}')
   await mkdir(join(dist, 'empty'))
-  // Vite-shaped output: content-hashed names inside assets/, plus a sibling
-  // directory whose name merely starts with the same letters.
+  // Vite-shaped output: content-hashed names inside assets/ (and its nested
+  // chunk directories) and preview/, plus a sibling directory whose name merely
+  // starts with the same letters.
   await mkdir(join(dist, 'assets'))
   await writeFile(join(dist, 'assets', 'index-abcdef12.js'), 'export const hashed = true')
+  await mkdir(join(dist, 'assets', 'langs'))
+  await writeFile(join(dist, 'assets', 'langs', 'c-abcdef12.js'), 'export {}')
+  await mkdir(join(dist, 'preview'))
+  await writeFile(join(dist, 'preview', 'bootstrap-abcdef12.js'), 'export {}')
   await mkdir(join(dist, 'assets-copy'))
   await writeFile(join(dist, 'assets-copy', 'plain.js'), 'export {}')
   const configPath = join(root, 'cordis.yml')
@@ -158,10 +163,13 @@ describe('real Loader composition', () => {
     const immutable = 'public, max-age=31536000, immutable'
     expect(await cacheControl(port, '/assets/index-abcdef12.js')).toBe(immutable)
     expect(await cacheControl(port, '/assets/index-abcdef12.js', { method: 'HEAD' })).toBe(immutable)
+    expect(await cacheControl(port, '/assets/langs/c-abcdef12.js')).toBe(immutable)
+    expect(await cacheControl(port, '/preview/bootstrap-abcdef12.js')).toBe(immutable)
     expect(await cacheControl(port, '/assets-copy/plain.js')).toBeNull()
     expect(await cacheControl(port, '/app.js')).toBeNull()
     expect(await cacheControl(port, '/manifest.webmanifest')).toBeNull()
     expect(await cacheControl(port, '/', authenticated())).toBeNull()
+    expect(await cacheControl(port, '/index.html', authenticated())).toBeNull()
 
     // Only the root and index path render index.html through registered taps.
     const untap = server.tapIndex(html => html.replace('<head>', '<head><script>window.__T__=1</script>'))
