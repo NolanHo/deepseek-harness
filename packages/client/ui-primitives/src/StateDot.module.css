@@ -74,6 +74,16 @@
   }
 }
 
+/* Fork patch (FORK_SURFACE.md): the deployment's reduced-motion default
+   completes animations in one step, which leaves this chase at its 0.15 base
+   opacity — the running Session indicator becomes unreadable. The ongoing
+   state is the only signal that a Session is running, so it keeps the chase
+   (the marker's blanket override yields to these two declarations). */
+:root[data-reduce-motion] .cell {
+  animation-duration: 1s !important;
+  animation-iteration-count: infinite !important;
+}
+
 @keyframes dsh-state-dot-chase {
   0%, 12.4% { opacity: 1; }
   12.5%, 24.9% { opacity: 0.6; }

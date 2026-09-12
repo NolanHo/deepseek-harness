@@ -40,6 +40,11 @@
   --dsw-alias-brand-primary-new-colorprimary-new-color: #8fbaff;
   --dsw-alias-brand-text: #eaf2ff;
 
+  /* The ongoing StateDot chase and the default file-type icon ride the 450
+     static step; the shipped rgb(86 134 254) reads as near-black on the dusk
+     panels, so the palette lifts it to the brand-light blue. */
+  --dsw-static-deepseek-450: #8fbaff;
+
   --dsw-alias-button-contrast-fill: #141a2e;
   --dsw-alias-button-elevated-fill: #222b4a;
   --dsw-alias-button-floating-fill: #181f36;
