@@ -490,15 +490,16 @@
   visibility: hidden;
 }
 
-/* Composer safe area: on notch/gesture-bar devices the sticky seat must
-   clear the system inset; a no-op max() where the inset is zero. */
+/* Fork patch (FORK_SURFACE.md): composer safe area — on notch/gesture-bar
+   devices the sticky seat must clear the system inset; a no-op max() where the
+   inset is zero. */
 .composerSeat {
   padding-bottom: max(8px, env(safe-area-inset-bottom));
 }
 
-/* Mobile regime (<768px, matching ui-layout's MOBILE_VIEWPORT): the frame's
-   fixed drawer opener occupies the header's top-left corner, so the session
-   header's leading edge clears it. */
+/* Fork patch (FORK_SURFACE.md): mobile regime (<768px, matching ui-layout's
+   MOBILE_VIEWPORT) — the frame's fixed drawer opener occupies the header's
+   top-left corner, so the session header's leading edge clears it. */
 @media (max-width: 767.98px) {
   .header {
     padding-left: 56px;

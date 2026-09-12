@@ -1,3 +1,8 @@
+/* Fork patch (FORK_SURFACE.md): the disclosure renders as a rounded pill that
+   hugs its label, with a hover surface and the chevron set off from it;
+   upstream renders a full-width divider row with a trailing chevron. The
+   class names are upstream's, so a wholesale upstream stylesheet adoption
+   would silently restore the divider. */
 .root {
   box-sizing: border-box;
   display: flex;
