@@ -81,7 +81,9 @@ interface SessionHandle extends AsyncDisposable {
   /**
    * Rewrite capability: discard every stored event from `toSeq` on, so the
    * stored log then ends at `toSeq - 1` and the next append must start at
-   * `toSeq`. Durable on resolution. A backend that cannot rewrite a committed
+   * `toSeq`. {@link SessionHandleTruncateOptions.append} lands in the same
+   * durable step, so a caller never observes the rewritten log without it.
+   * Durable on resolution. A backend that cannot rewrite a committed
    * log omits this method; a consumer that needs the rewrite refuses loudly
    * rather than admitting the operation unmet. Rejects with
    * `SessionReadOnlyError` on a read handle and with `SessionOwnershipLostError`
