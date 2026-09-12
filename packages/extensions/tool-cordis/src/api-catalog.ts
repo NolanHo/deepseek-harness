@@ -605,6 +605,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the graph served as `window.__DSH_BOOT__`.',
       },
       {
+        signature: 'publishTrustedAuthorities(authorities: readonly string[]): void',
+        description: 'Replace the host-published serving authorities. The producer is the client-connection node half, whose `trustedHosts` config is the exact fence list; publication may land after construction, so the injected HTML always renders the settled graph. Same-value publication does nothing; a change recomposes the graph and notifies listeners once.',
+        parameters: [{ name: 'authorities', description: 'non-loopback authorities, canonical `host[:port]`.' }],
+      },
+      {
         signature: 'clientPath(id: string): string | undefined',
         description: 'Absolute path of an entry\'s client bundle.',
         parameters: [{ name: 'id', description: 'entry id (package name).' }],
@@ -2182,6 +2187,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the exact Cordis effect disposer, preserving composite teardown order and invalidating caches.',
       },
       {
+        signature: 'restrict(filter: SkillRestriction): () => void',
+        description: 'Restrict the inherited skill catalog for the calling agent scope. The mask contract and implementation live in the fork-owned restriction registrar, SkillRestrictionStore.',
+        parameters: [{ name: 'filter', description: 'inherited-name mask: `allow` (keep only) or `deny` (remove), never both.' }],
+        returns: 'the exact disposer that lifts this restriction.',
+        throws: ['when the calling context is unscoped or the filter is invalid.'],
+      },
+      {
         signature: 'async list(options: SkillViewOptions = {}): Promise<SkillSummary[]>',
         description: 'List invocation-neutral skill summaries for a workspace. Consumers apply model or user invocation policy at their operational boundary. Lookup options and provider candidates are readonly same-process values borrowed throughout discovery.',
         parameters: [{ name: 'options', description: 'view options; `scope` selects the viewing agent\'s layers, `cwd` selects project roots, and `signal` cancels discovery.' }],
@@ -2773,9 +2785,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the disposer that unregisters the provider.',
       },
       {
-        signature: 'async search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>',
-        description: 'Run one search through the selected provider. Resolves the provider at call time with the selection rules above; throws WebError when the capability cannot run. The seam enforces `request.maxResults` on the result: if the provider over-returns, `sources[]` is truncated and `truncated` set.',
-        parameters: [{ name: 'request', description: 'the query and optional result limit.' }, { name: 'signal', description: 'optional cancellation signal forwarded to the provider.' }],
+        signature: 'async search(request: WebSearchRequest, options: WebSearchOptions = {}): Promise<WebSearchResult>',
+        description: 'Run one search through the selected provider. Resolves the provider at call time with the selection rules above; an explicit `options.provider` wins over the configured default for this call alone. Throws WebError when the capability cannot run. The seam enforces `request.maxResults` on the result: if the provider over-returns, `sources[]` is truncated and `truncated` set.',
+        parameters: [{ name: 'request', description: 'the query and optional result limit.' }, { name: 'options', description: 'cancellation signal and optional per-request provider override.' }],
         returns: 'the provider\'s results, capped to `request.maxResults`.',
       },
       {
@@ -3944,7 +3956,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ContinuableSubagentDescriptorData',
-    declaration: 'export interface ContinuableSubagentDescriptorData extends SubagentDescriptorBase {\n    readonly mode: \'continuable\';\n    readonly label: string;\n    readonly agentProvider?: string;\n    readonly agentModel?: string;\n    readonly agentReasoningEffort?: ReasoningEffortId;\n    readonly persona?: string;\n    readonly toolFilter?: ToolRestriction;\n}',
+    declaration: 'export interface ContinuableSubagentDescriptorData extends SubagentDescriptorBase {\n    readonly mode: \'continuable\';\n    readonly label: string;\n    readonly agentProvider?: string;\n    readonly agentModel?: string;\n    readonly agentReasoningEffort?: ReasoningEffortId;\n    readonly persona?: string;\n    readonly toolFilter?: ToolRestriction;\n    readonly cwd?: string;\n    readonly skillFilter?: SkillFilter;\n}',
   },
   {
     name: 'CordisDynamicPackageId',
@@ -5619,6 +5631,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SkillEntry {\n    readonly name: string;\n    readonly description: string;\n    readonly whenToUse?: string;\n    readonly modelInvocable: boolean;\n}',
   },
   {
+    name: 'SkillFilter',
+    declaration: 'export interface SkillFilter {\n    readonly allow?: readonly string[];\n    readonly deny?: readonly string[];\n}',
+  },
+  {
     name: 'SkillInvocationPolicy',
     declaration: 'export interface SkillInvocationPolicy {\n    readonly modelInvocable: boolean;\n    readonly userInvocable: boolean;\n}',
   },
@@ -5653,6 +5669,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SkillResourceBase',
     declaration: 'export type SkillResourceBase = {\n    readonly kind: \'directory\';\n    readonly path: string;\n} | {\n    readonly kind: \'url\';\n    readonly url: string;\n} | {\n    readonly kind: \'opaque\';\n    readonly description: string;\n};',
+  },
+  {
+    name: 'SkillRestriction',
+    declaration: 'export interface SkillRestriction {\n    readonly allow?: readonly string[];\n    readonly deny?: readonly string[];\n}',
   },
   {
     name: 'SkillSource',
@@ -5780,7 +5800,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SubagentStartRequest',
-    declaration: 'export interface SubagentStartRequest {\n    readonly label?: string;\n    readonly prompt: ContentBlock[];\n    readonly parent: Agent;\n    readonly signal: AbortSignal;\n    readonly agentOptions?: AgentOptions;\n    readonly outputSchema?: ObjectJsonSchema;\n    readonly maxDepth?: number;\n    readonly toolFilter?: ToolRestriction;\n    readonly persona?: string;\n}',
+    declaration: 'export interface SubagentStartRequest {\n    readonly label?: string;\n    readonly prompt: ContentBlock[];\n    readonly parent: Agent;\n    readonly signal: AbortSignal;\n    readonly agentOptions?: AgentOptions;\n    readonly outputSchema?: ObjectJsonSchema;\n    readonly maxDepth?: number;\n    readonly toolFilter?: ToolRestriction;\n    readonly persona?: string;\n    readonly cwd?: string;\n    readonly skillFilter?: SkillFilter;\n}',
   },
   {
     name: 'SubagentStopReason',
@@ -6256,7 +6276,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WebBootBatchPhase',
-    declaration: 'export type WebBootBatchPhase = \'bootstrap\' | \'application\';',
+    declaration: 'export type WebBootBatchPhase = \'bootstrap\' | \'application\' | \'deferred\';',
   },
   {
     name: 'WebBootEntry',
@@ -6264,7 +6284,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WebBootGraph',
-    declaration: 'export interface WebBootGraph {\n    rev: string;\n    entries: WebBootEntry[];\n    batches: WebBootBatch[];\n}',
+    declaration: 'export interface WebBootGraph {\n    rev: string;\n    entries: WebBootEntry[];\n    batches: WebBootBatch[];\n    trustedAuthorities: string[];\n}',
   },
   {
     name: 'WebFetchBody',
@@ -6329,6 +6349,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WebRouteKind',
     declaration: 'export type WebRouteKind = \'exact\' | \'prefix\';',
+  },
+  {
+    name: 'WebSearchOptions',
+    declaration: 'export interface WebSearchOptions {\n    readonly signal?: AbortSignal;\n    readonly provider?: string;\n}',
   },
   {
     name: 'WebSearchProvider',

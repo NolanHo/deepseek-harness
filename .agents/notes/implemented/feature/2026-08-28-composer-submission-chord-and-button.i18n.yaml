@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-28-composer-submission-chord-and-button.md
-2026-08-28-composer-submission-chord-and-button.md: ee6d876384eba4627036362ecb9dde7018387df6
-2026-08-28-composer-submission-chord-and-button.zh.md: 866e915cbe3a23fee7dbc7e74a41e67acf3dd834
+2026-08-28-composer-submission-chord-and-button.md: 09543320b4e7245c6bd3dcca21c4ba3a1d4ab9a2
+2026-08-28-composer-submission-chord-and-button.zh.md: 11e454298fea82cf4d0129d491d8f310c088fdaf

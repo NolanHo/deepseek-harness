@@ -63,24 +63,26 @@ export function sessionOrderChanged(
 
 /**
  * Reconcile one editable order account and apply its activity-promotion policy.
- * @param sessionIds - The account's current session set.
- * @param previousOrder - Stored order, undefined when none exists yet.
- * @param previousUpdatedAt - Last update timestamps observed per Session.
- * @param list - Live session list supplying update timestamps.
- * @param orderBy - Manual (fixed after edits) or updated (activity promotions).
- * @param sortByRecency - Full recency re-sort instead of one-burst promotions.
- * @returns The next order, the observed timestamps, and whether either moved.
+ * @param input - One account's current session set, stored order, previously
+ * observed timestamps, live session list, and ordering policy.
+ * @returns The next order, the timestamps observed now, and whether either
+ * moved; a caller stores both together when `changed` is true.
  */
-export function nextSessionOrderAccount({
-  sessionIds, previousOrder, previousUpdatedAt, list, orderBy, sortByRecency,
-}: {
+export function nextSessionOrderAccount(input: {
+  /** The account's current session set. */
   sessionIds: readonly SessionId[]
+  /** Stored order, undefined when none exists yet. */
   previousOrder: readonly string[] | undefined
+  /** Last update timestamps observed per Session — the baseline a promotion compares against. */
   previousUpdatedAt: Readonly<Record<string, number>>
+  /** Live session list supplying update timestamps. */
   list: SessionListState
+  /** Manual (fixed after edits) or updated (activity promotions). */
   orderBy: SessionOrderBy
+  /** Full recency re-sort instead of one-burst promotions. */
   sortByRecency: boolean
 }): { order: SessionId[]; updatedAt: Record<string, number>; changed: boolean } {
+  const { sessionIds, previousOrder, previousUpdatedAt, list, orderBy, sortByRecency } = input
   let order = reconciledSessionOrder(sessionIds, previousOrder)
   if (sortByRecency) {
     order.sort((a, b) => compareSessionRecency(a, b, list.byId))

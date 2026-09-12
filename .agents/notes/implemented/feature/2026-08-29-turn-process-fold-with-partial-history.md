@@ -4,7 +4,7 @@ Status: implemented
 
 English | [中文](2026-08-29-turn-process-fold-with-partial-history.zh.md)
 
-> Fork-local deviation from upstream's Turn Process fold (see [2026-08-14-web-turn-process-folding](2026-08-14-web-turn-process-folding.md) for the upstream decision).
+> Fork-local deviation from upstream's Turn Process fold (see [2026-08-14-web-turn-process-folding](../../archived/feature/2026-08-14-web-turn-process-folding.md) for the upstream decision).
 
 ## Problem
 
@@ -12,7 +12,7 @@ The upstream fold withholds the disclosure control and hides no members while an
 
 ## Decision
 
-- `ChatNodeSeat` neither declares nor reads `historyIncomplete`: `processWindowReady` drops the gate, so a closed Turn folds by default even when `hasMore` is true. `ChatView` stops passing the prop. The injection point carries the `// Fork patch (FORK_SURFACE.md)` marker, and the row is registered in [FORK_SURFACE.md](../../../FORK_SURFACE.md).
+- `ChatNodeSeat` neither declares nor reads `historyIncomplete`: `processWindowReady` drops the gate, so a closed Turn folds by default even when `hasMore` is true. `ChatView` stops passing the prop. The injection point carries the `// Fork patch (FORK_SURFACE.md)` marker, and the row is registered in [FORK_SURFACE.md](../../../../FORK_SURFACE.md).
 - The disclosure label and the Turn duration are upstream's inline form: the fork's counted collapsed prefix and wall-clock duration retired to it, and the duration stays visible in the turn footer's usage details.
 - Tests: `folds a closed Turn even while history is partial` and `folds final-page groups while history is partial` assert the fold applies with `hasMore` true and survives the flip back.
 

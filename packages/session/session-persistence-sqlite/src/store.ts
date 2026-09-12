@@ -84,6 +84,7 @@ export interface SqliteStoredSnapshot {
 
 /** SQLite implementation of the physical storage hooks behind the session handle. */
 export class SqliteStore {
+  /** Backend label this store reports in rollback failure diagnostics. */
   readonly name = 'session-persistence-sqlite'
   private db!: DatabaseSync
   private databaseConstructor!: typeof import('node:sqlite')['DatabaseSync']
@@ -376,7 +377,10 @@ export class SqliteStore {
     }
   }
 
-  /** Durably materialize a header-only row for an explicitly flushed empty session. */
+  /**
+   * Durably materialize a header-only row for an explicitly flushed empty session.
+   * @param storage - the session's current-format metadata.
+   */
   async materializeHeader(storage: SessionStorageMetadata): Promise<void> {
     await this.open()
     this.db.exec(sql('begin-immediate'))
@@ -467,6 +471,10 @@ export class SqliteStore {
     }
   }
 
+  /**
+   * Release the database handle at disposal; a store whose open never
+   * completed releases nothing, and no store operation may follow.
+   */
   async close(): Promise<void> {
     if (this.ready === undefined) {
       if (this.pathReady !== undefined) await Promise.allSettled([this.pathReady])

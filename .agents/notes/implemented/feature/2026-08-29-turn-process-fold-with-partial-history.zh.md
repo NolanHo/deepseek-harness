@@ -4,7 +4,7 @@ Status: implemented
 
 [English](2026-08-29-turn-process-fold-with-partial-history.md) | 中文
 
-> fork 相对上游 Turn Process 折叠的本地化差异（上游决策见 [2026-08-14-web-turn-process-folding](2026-08-14-web-turn-process-folding.zh.md)）。
+> fork 相对上游 Turn Process 折叠的本地化差异（上游决策见 [2026-08-14-web-turn-process-folding](../../archived/feature/2026-08-14-web-turn-process-folding.md)）。
 
 ## 问题
 
@@ -12,7 +12,7 @@ Status: implemented
 
 ## 决策
 
-- `ChatNodeSeat` 既不再声明也不再读取 `historyIncomplete`：`processWindowReady` 去掉该门，`hasMore` 为真时已关闭回合同样默认折叠；`ChatView` 停止传递该 prop。注入点带 `// Fork patch (FORK_SURFACE.md)` 标记，对应行登记在 [FORK_SURFACE.md](../../../FORK_SURFACE.md)。
+- `ChatNodeSeat` 既不再声明也不再读取 `historyIncomplete`：`processWindowReady` 去掉该门，`hasMore` 为真时已关闭回合同样默认折叠；`ChatView` 停止传递该 prop。注入点带 `// Fork patch (FORK_SURFACE.md)` 标记，对应行登记在 [FORK_SURFACE.md](../../../../FORK_SURFACE.md)。
 - 折叠标签与回合时长采用上游的内联形式：fork 的分类折叠前缀与墙钟时长已退役给它，时长仍在轮次页脚的用量详情中可见。
 - 测试：`folds a closed Turn even while history is partial` 与 `folds final-page groups while history is partial` 断言 `hasMore` 为真时折叠生效，且在翻回 `false` 后保持。
 

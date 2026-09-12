@@ -108,7 +108,7 @@ const page = await ctx.web.fetch({ url: 'https://example.com' })
 |---|---|
 | [`src/index.ts`](src/index.ts) | 插件入口：`WebRuntime` 服务、两个提供方注册表与执行时选择 |
 | [`src/types.ts`](src/types.ts) | 词汇：请求／结果类型、封闭的 `WebFetchBody` 联合与 `WebError` 分类体系 |
-| — | 不发布运行时不变式伴生入口；约定在服务处强制执行。 |
+| — | 不发布运行时不变式伴生入口；提供方映射为私有，选择与结果上限在每次调用时强制执行；seam 不发布独立的注册表或请求／结果观察流。 |
 
 ### 数据模型
 

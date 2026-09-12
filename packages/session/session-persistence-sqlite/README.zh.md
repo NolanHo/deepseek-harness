@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-session-persistence-sqlite` 是 `SessionPersistence` 服务的可选存储后端：它不按会话各留一个文件，而是把所有会话的持久事件日志统一保存在同一个 SQLite 数据库中。它与 JSONL 后端提供完全相同的逻辑 `SessionEvent` 流，因此选择它不会改变 agent loop、模型或回放的任何行为——打包、压缩与恢复都是存储内部细节。仅当单一可查询数据库适合你的部署时才选择它；任何已发布的组合都不会默认启用它。这是预发布提供方：它会在原地升级唯一的 schema-19 前身，并拒绝其他一切不属于自己的数据库文件；其同步 Node SQLite 驱动会在读写时阻塞 JavaScript 线程。设置、容量评估与迁移指引在前；实现内部细节放在下方可折叠的开发者章节中。
+`dsh-session-persistence-sqlite` 把每个会话的持久历史存进同一个可查询的 SQLite 数据库，而不是每个会话一个文件，因此整份部署历史就是一个文件，便于备份与用 SQL 查询。选择它不会改变 agent loop、模型或回放的任何行为：它与 JSONL 后端提供相同的逻辑 `SessionEvent` 流，打包、压缩与恢复都留在存储内部。它是预发布提供方：就地升级 schema-19 前身，并拒绝任何其他不属于自己的文件。其同步 SQLite 驱动会阻塞 JavaScript 线程。任何已发布的组合都不会默认启用它。
 
 ## 目录
 
@@ -33,10 +33,11 @@ kind: "package-reference"
 
 ### 磁盘占用与性能
 
-打包布局以部分 SQLite 本地延迟换取更小的可查询数据库。在 501 会话对比语料上，schema-19 布局占用 233.18 MB，SQLite 对比基线占用 438.31 MB，压缩 JSONL 占用 148.15 MB。全量写入约比 JSONL 快 2.3 倍，后缀读取也仍快得多；完整读取与 fork 则略慢于 JSONL。方法、完整指标与取舍由[持久化延迟与 page size 决策](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.zh.md)记录。
+打包布局以部分 SQLite 本地延迟换取更小的可查询数据库。在 501 会话对比语料上，schema-19 布局占用 233.18 MB，SQLite 对比基线占用 438.31 MB，压缩 JSONL 占用 148.15 MB。全量写入约比 JSONL 快 2.3 倍，后缀读取也仍快得多；完整读取与 fork 则略慢于 JSONL。方法、完整指标与取舍由[持久化延迟与 page size 决策](../../../.agents/notes/archived/architecture/2026-08-25-persistence-latency-and-page-size.md)记录。
 
 磁盘成本换来的是结构化、可查询的会话历史视图：外部工具可以用 SQL 分析 `sessions` 与 `events`，按本提供方的方式解码物理行——这是内置全文搜索等功能的天然基础。
 
+<a id="minimal-configuration"></a>
 ### 最小配置
 
 先加载会话服务，再用数据库路径挂载提供方。除非位置允许依赖进程工作目录（相对路径从该目录解析），否则请使用绝对路径。`:memory:` 可用于进程内数据库，其内容随进程消失。
@@ -53,10 +54,9 @@ kind: "package-reference"
 | `path` | 必填 | SQLite 数据库路径，或 `:memory:` |
 | `journalMode` | `wal` | 持久 journal mode：`wal`、`delete`、`truncate` 或 `persist` |
 | `busyTimeoutMs` | `5,000` | 等待另一连接锁的最长同步时间 |
-| `preparedSessionCacheSize` | `5` | 为恢复复用而保留的冷会话准备结果数量 |
 | `writeBatchMaxDelayMs` | `200` | 实时事件的固定聚合窗口，单位为毫秒 |
 
-生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-session-persistence-sqlite)是每个受支持字段及其 JSDoc 的穷尽式真源。
+本包接受的字段见[最小配置](#minimal-configuration)表；每个字段及其 JSDoc 的穷尽式真源是生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-session-persistence-sqlite)。
 
 ### 迁移现有 JSONL 会话
 
@@ -98,7 +98,7 @@ await ctx.sessionPersistence.append(id, events)
 - **持久性是默认值。** 追加在立即事务中以 `synchronous=FULL` 提交，成功返回的 `append()` 意味着该批次已持久。普通追加仅插入：更早的事件行永远不会被重写。
 - **在严格边界内追求效率。** 打包与压缩让数据库保持小巧，但每个上限都是硬性格式边界——每个打包行至多表示 1,024 个事件、1 MiB 载荷。
 
-打包行基础由 archived "SQLite 物理分片行决策" note记录；当前压缩、键和 page-size 选择由[持久化延迟与 page size 决策](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.zh.md)记录。
+打包行基础由 archived "SQLite 物理分片行决策" note记录；当前压缩、键和 page-size 选择由[持久化延迟与 page size 决策](../../../.agents/notes/archived/architecture/2026-08-25-persistence-latency-and-page-size.md)记录。
 
 ### 源码地图
 
@@ -143,9 +143,9 @@ await ctx.sessionPersistence.append(id, events)
 
 - [会话持久化子系统](../../../docs/subsystems/persistence.zh.md)——后端无关的服务语义与提供方关系。
 - [会话包映射](../README.zh.md)——相邻的持久化、投影、标题与遥测包。
-- [生成配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-session-persistence-sqlite)——每个受支持配置字段及其源声明。
+- [最小配置](#minimal-configuration)——挂载片段及其接受的字段。
 - 已归档的「SQLite 物理分片行决策」笔记（冻结记录）——打包布局背后的理由、备选方案与测量。
-- [持久化延迟与 page size 决策](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.zh.md)——501 会话基准与 schema-19 存储取舍。
+- [持久化延迟与 page size 决策](../../../.agents/notes/archived/architecture/2026-08-25-persistence-latency-and-page-size.md)——501 会话基准与 schema-19 存储取舍。
 
 -----
 
@@ -186,6 +186,6 @@ await ctx.sessionPersistence.append(id, events)
 <details>
 <summary>维护者的工作上下文——点击展开</summary>
 
-501 会话语料包含私有会话数据，因此不提交到仓库。汇总方法、完整结果与未采用候选记录在[持久化延迟与 page size 决策](../../../.agents/notes/implemented/architecture/2026-08-25-persistence-latency-and-page-size.zh.md)中；schema 20 以打包资源及测试固定的字典摘要为准。
+501 会话语料包含私有会话数据，因此不提交到仓库。汇总方法、完整结果与未采用候选记录在[持久化延迟与 page size 决策](../../../.agents/notes/archived/architecture/2026-08-25-persistence-latency-and-page-size.md)中；schema 20 以打包资源及测试固定的字典摘要为准。
 
 </details>

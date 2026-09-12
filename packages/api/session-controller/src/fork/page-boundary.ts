@@ -142,6 +142,17 @@ function turnAlignedCut(
  * Message-aligned pagination over a seq-indexed SUFFIX (the fast-path read
  * starts at a positive seq, so array indexes are not seqs — the observation
  * pagination's dense-index assumption does not transfer).
+ *
+ * @param events - Every event of the suffix read, in seq order.
+ * @param beforeSeq - The request's exclusive page-before bound, undefined when
+ * the page ends at the read's own cursor (the opening page).
+ * @param maxMessages - Page size in messages (user messages anchor the cut; a
+ * window without any counts all messages).
+ * @param throughSeq - Inclusive last seq of the accepted read.
+ * @returns The page events from the cut to the window end, whether an earlier
+ * page exists, the cut seq (0 when the window holds fewer than one full page),
+ * the chosen message count, and whether the turn-aligned cut stopped at the
+ * window head before reaching its owning turn (see {@link turnAlignedCut}).
  */
 export function paginateSuffix(
   events: readonly SessionEvent[],

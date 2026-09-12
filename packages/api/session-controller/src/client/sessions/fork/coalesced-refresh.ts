@@ -19,7 +19,12 @@ export class ActivityCoalescer<SessionKey extends string = string> {
     private readonly flush: (pending: ReadonlyMap<SessionKey, number>) => void,
   ) {}
 
-  /** Record one activity; the first of a window applies immediately. */
+  /**
+   * Record one activity; the first of a window applies immediately.
+   * @param sessionId - the Session whose activity was observed.
+   * @param updatedAt - the observed activity timestamp; a later activity for
+   *   the same Session replaces it in the buffered batch.
+   */
   collect(sessionId: SessionKey, updatedAt: number): void {
     if (this.windowTimer === undefined) {
       this.flush(new Map([[sessionId, updatedAt]]))

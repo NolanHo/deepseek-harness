@@ -38,5 +38,5 @@ Web composer 提交只有一种模型：
 
 ## Related
 
-- 逐条严格插话及其 host 边界：[Steer a queued Web message into the active turn](../feature/2026-07-30-web-queue-steer-action.zh.md)
+- 逐条严格插话及其 host 边界：[Steer a queued Web message into the active turn](../../archived/feature/2026-07-30-web-queue-steer-action.md)
 - 偏好持久化边界：[Persist Web user preferences through Host settings](../bug-fix/2026-08-06-host-backed-web-preferences.zh.md)

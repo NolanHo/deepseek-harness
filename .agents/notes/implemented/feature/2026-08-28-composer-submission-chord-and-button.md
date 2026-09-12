@@ -38,5 +38,5 @@ Consolidated from the removed whole-queue gesture note: the gesture existed beca
 
 ## Related
 
-- Per-row strict steer and its host boundary: [Steer a queued Web message into the active turn](../feature/2026-07-30-web-queue-steer-action.md)
+- Per-row strict steer and its host boundary: [Steer a queued Web message into the active turn](../../archived/feature/2026-07-30-web-queue-steer-action.md)
 - Preference persistence boundary: [Persist Web user preferences through Host settings](../bug-fix/2026-08-06-host-backed-web-preferences.md)

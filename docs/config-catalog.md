@@ -194,6 +194,14 @@ Requires: `typert`
 export interface Config {
   /** WebSocket Ping interval from 1 through 2,147,483,647 milliseconds. @default 2000 */
   readonly websocketHeartbeatIntervalMs?: number
+  /**
+   * Negotiate RFC 7692 per-message compression on the Remote stream
+   * WebSocket with clients that offer it. The journal's `opened` frames carry
+   * whole history windows (a megabyte or more on event-dense sessions), so
+   * compression cuts the cold-open wire volume several-fold; sub-threshold
+   * live frames stay raw. @default false
+   */
+  readonly websocketPerMessageDeflate?: boolean
 }
 ```
 
@@ -361,6 +369,13 @@ export interface ConnectionConfig {
   trustedHosts?: string[]
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
+  /**
+   * Persistent browser-session authentication on top of the Host/Origin
+   * fence. Disable only for deployments whose own perimeter already bounds
+   * the serving authority (loopback bind behind an authenticating reverse
+   * proxy): requests then pass the fence alone. Default: true.
+   */
+  browserAuth?: boolean
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
 }
@@ -383,7 +398,7 @@ export interface ConnectionRecoveryConfig {
 }
 ```
 
-Source: [`packages/client/connection/src/index.ts:72`](../packages/client/connection/src/index.ts)
+Source: [`packages/client/connection/src/index.ts:75`](../packages/client/connection/src/index.ts)
 
 <a id="deepseek-aidsh-client-hmr"></a>
 
@@ -400,6 +415,31 @@ export interface Config {
 ```
 
 Source: [`packages/client/hmr/src/index.ts:31`](../packages/client/hmr/src/index.ts)
+
+<a id="deepseek-aidsh-client-modules"></a>
+
+## `@deepseek-ai/dsh-client-modules`
+
+Requires: `loader`
+
+```ts config-catalog
+/** Deferred-batch composition config for the web plugin table. */
+export interface Config {
+  /**
+   * Package names whose browser bundles ride `deferred` batches: the shell
+   * fetches and creates those entries only after the application mounts, so
+   * their bytes stay off the first-paint critical path. A name may go stale
+   * (an uninstalled plugin); it is ignored. A deferred package must not be
+   * stage-one (`immediately`) and must not be requested through a surviving
+   * row's `external` — both contradictions fail composition loudly. A
+   * pre-mount plugin whose Cordis service the deferred package provides stays
+   * pending and surfaces in the boot activation audit.
+   */
+  defer: string[]
+}
+```
+
+Source: [`packages/client/modules/src/index.ts:513`](../packages/client/modules/src/index.ts)
 
 <a id="deepseek-aidsh-code-runtime-worker-thread"></a>
 
@@ -1944,6 +1984,29 @@ export type JsonlCompression = 'zstd' | 'none'
 
 Source: [`packages/session/session-persistence-jsonl/src/index.ts:88`](../packages/session/session-persistence-jsonl/src/index.ts)
 
+<a id="deepseek-aidsh-session-persistence-sqlite"></a>
+
+## `@deepseek-ai/dsh-session-persistence-sqlite`
+
+```ts config-catalog
+/** Plugin configuration. */
+export interface Config {
+  /** SQLite database path, or `:memory:` for an in-process database. */
+  path: string
+  /** Durable SQLite journal mode; defaults to `wal`. */
+  journalMode?: JournalMode
+  /** Maximum wait for another SQLite connection's lock; defaults to 5,000 ms. */
+  busyTimeoutMs?: number
+  /** Fixed live-event coalescing window; not a backend completion deadline. */
+  writeBatchMaxDelayMs?: number
+}
+
+/** Durable journal modes accepted by the backend. */
+export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
+```
+
+Source: [`packages/session/session-persistence-sqlite/src/index.ts:51`](../packages/session/session-persistence-sqlite/src/index.ts)
+
 <a id="deepseek-aidsh-session-projection-cache"></a>
 
 ## `@deepseek-ai/dsh-session-projection-cache`
@@ -2014,7 +2077,7 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 Depends on: [`SessionQueryConfig`](../packages/session-query/session-query/src/index.ts)
 
-Source: [`packages/session-query/session-query-sqlite/src/index.ts:92`](../packages/session-query/session-query-sqlite/src/index.ts)
+Source: [`packages/session-query/session-query-sqlite/src/index.ts:95`](../packages/session-query/session-query-sqlite/src/index.ts)
 
 <a id="deepseek-aidsh-session-reference"></a>
 
@@ -2179,7 +2242,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/skill/skill/src/index.ts:280`](../packages/skill/skill/src/index.ts)
+Source: [`packages/skill/skill/src/index.ts:281`](../packages/skill/skill/src/index.ts)
 
 <a id="deepseek-aidsh-skill-filesystem"></a>
 
@@ -3257,7 +3320,7 @@ export interface WebRuntimeConfig {
 }
 ```
 
-Source: [`packages/web/web/src/index.ts:55`](../packages/web/web/src/index.ts)
+Source: [`packages/web/web/src/index.ts:64`](../packages/web/web/src/index.ts)
 
 <a id="deepseek-aidsh-web-app"></a>
 
@@ -3309,6 +3372,70 @@ export interface Config {
 ```
 
 Source: [`packages/web/web-fetch-http/src/index.ts:32`](../packages/web/web-fetch-http/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-academic"></a>
+
+## `@deepseek-ai/dsh-web-search-academic`
+
+Requires: `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills constant defaults). */
+export interface Config {
+  /** arXiv Atom API query endpoint. Defaults to the public export.arxiv.org endpoint. */
+  arxivBaseURL?: string
+  /** Semantic Scholar Graph API base; `/paper/search` is appended. */
+  s2BaseURL?: string
+  /** Per-backend result count. Defaults to 5. Must be a positive integer. */
+  count?: number
+  /** Minimum interval between Semantic Scholar requests, in milliseconds. Defaults to 1500. */
+  minS2IntervalMs?: number
+}
+```
+
+Source: [`packages/web/web-search-academic/src/index.ts:39`](../packages/web/web-search-academic/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-bocha"></a>
+
+## `@deepseek-ai/dsh-web-search-bocha`
+
+Requires: `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Bocha API key. Falls back to `$BOCHA_API_KEY`. Empty → provider unavailable. */
+  apiKey?: string
+  /** Endpoint base; `/v1/web-search` is appended. Defaults to the public API. */
+  baseURL?: string
+  /** Recency filter sent as Bocha's `freshness`. Defaults to `noLimit`. */
+  freshness?: string
+  /** Default result count sent as `count` when a request carries no `maxResults`. */
+  count?: number
+}
+```
+
+Source: [`packages/web/web-search-bocha/src/index.ts:38`](../packages/web/web-search-bocha/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-brave"></a>
+
+## `@deepseek-ai/dsh-web-search-brave`
+
+Requires: `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Brave API key. Falls back to `$BRAVE_API_KEY`. Empty → provider unavailable. */
+  apiKey?: string
+  /** Endpoint base; `/res/v1/web/search` is appended. Defaults to the public API. */
+  baseURL?: string
+  /** Default result count sent as `count` when a request carries no `maxResults`. */
+  count?: number
+}
+```
+
+Source: [`packages/web/web-search-brave/src/index.ts:36`](../packages/web/web-search-brave/src/index.ts)
 
 <a id="deepseek-aidsh-web-search-deepseek"></a>
 
@@ -3386,6 +3513,26 @@ export interface Config {
 
 Source: [`packages/web/web-search-perplexity/src/index.ts:30`](../packages/web/web-search-perplexity/src/index.ts)
 
+<a id="deepseek-aidsh-web-search-zhihu"></a>
+
+## `@deepseek-ai/dsh-web-search-zhihu`
+
+Requires: `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Zhihu access secret. Falls back to `$ZHIHU_ACCESS_SECRET`. Empty → provider unavailable. */
+  apiKey?: string
+  /** Endpoint base; `/api/v1/content/<backend>` is appended. Defaults to the developer API. */
+  baseURL?: string
+  /** Per-backend result count. Defaults to 5. Must be a positive integer. */
+  count?: number
+}
+```
+
+Source: [`packages/web/web-search-zhihu/src/index.ts:37`](../packages/web/web-search-zhihu/src/index.ts)
+
 <a id="deepseek-aidsh-webhook-github"></a>
 
 ## `@deepseek-ai/dsh-webhook-github`
@@ -3449,7 +3596,6 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-authorization` — requires `credentials` ([`packages/credentials/authorization/src/index.ts`](../packages/credentials/authorization/src/index.ts))
 - `@deepseek-ai/dsh-client-file-upload` — requires `agents` · `attachments` · `commands` · `connection` ([`packages/client/file-upload/src/index.ts`](../packages/client/file-upload/src/index.ts))
 - `@deepseek-ai/dsh-client-locale` ([`packages/client/locale/src/index.ts`](../packages/client/locale/src/index.ts))
-- `@deepseek-ai/dsh-client-modules` — requires `loader` ([`packages/client/modules/src/index.ts`](../packages/client/modules/src/index.ts))
 - `@deepseek-ai/dsh-client-resources` ([`packages/client/resources/src/index.ts`](../packages/client/resources/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-agent-preset` ([`packages/client/ui-agent-preset/src/index.ts`](../packages/client/ui-agent-preset/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-approval` ([`packages/client/ui-approval/src/index.ts`](../packages/client/ui-approval/src/index.ts))

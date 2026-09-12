@@ -23,6 +23,14 @@ function flowTop(row: HTMLElement, scrollport: HTMLElement): number {
  * Find the anchor row, or the nearest surviving visible row at or above its
  * position: folding may hide the captured row itself, in which case the row
  * above the collapse keeps its position and everything below stays aligned.
+ * The returned row may carry a different key than `key`, and the caller reads
+ * the new hold from its own `data-chat-anchor-key`.
+ *
+ * @param list - the flow list element owning the anchor rows.
+ * @param key - the captured row key to anchor on.
+ * @returns the row carrying `key` while it is visible, the nearest visible row
+ * above it when hidden, or null when no row carries `key` or none above it is
+ * visible.
  */
 export function anchorOrNearestVisible(list: HTMLElement, key: string): HTMLElement | null {
   const rows = list.querySelectorAll<HTMLElement>('[data-chat-anchor-key]')

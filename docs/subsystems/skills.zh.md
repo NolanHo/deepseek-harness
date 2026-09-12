@@ -297,6 +297,16 @@ registerProvider(create: (control: SkillProviderControl) => SkillProvider): () =
 register(skill: SkillRegistration): () => void
 
 /**
+ * Restrict the inherited skill catalog for the calling agent scope. The
+ * mask contract and implementation live in the fork-owned restriction
+ * registrar, {@link SkillRestrictionStore}.
+ * @param filter - inherited-name mask: `allow` (keep only) or `deny` (remove), never both.
+ * @returns the exact disposer that lifts this restriction.
+ * @throws when the calling context is unscoped or the filter is invalid.
+ */
+restrict(filter: SkillRestriction): () => void
+
+/**
  * List invocation-neutral skill summaries for a workspace. Consumers apply
  * model or user invocation policy at their operational boundary. Lookup
  * options and provider candidates are readonly same-process values borrowed
