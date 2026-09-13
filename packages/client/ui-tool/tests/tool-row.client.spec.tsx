@@ -551,4 +551,17 @@ describe('GenericToolCard', () => {
     expect(view.getByText('输出')).toBeTruthy()
     expect(view.getByText('done')).toBeTruthy()
   })
+
+  it('lets the owner replace the derived collapsed summary', () => {
+    const settled = result({
+      call: { name: 'wait_subagent', argsRaw: '{"subagent_id":["a","b"],"timeout_ms":60000}' },
+      content: [{ type: 'text', text: 'timed out waiting for subagent a' }],
+    })
+    const view = render(
+      <GenericToolCard {...props('wait_subagent', settled)} summary="等待 2 个子代理" />,
+    )
+    // 覆盖值就是折叠行的那一行；派生摘要（参数 JSON）不再出现。
+    expect(view.getByText('等待 2 个子代理')).toBeTruthy()
+    expect(view.queryByText(/subagent_id/)).toBeNull()
+  })
 })

@@ -32,10 +32,17 @@ export interface GenericToolCardProps extends ToolCallOwnerProps {
    * unchanged.
    */
   bodyContent?: ReactNode
+  /**
+   * Collapsed-summary override for a tool whose arguments carry no readable
+   * summary key (`wait_subagent`'s ids and timeout): a toolview that owns the
+   * card's expanded body also owns its one-line summary. Absent = the derived
+   * summary; a failed call's error line still wins.
+   */
+  summary?: string
 }
 
 export function GenericToolCard({
-  toolName, block, cwd, home, openFile, inspect, t, bodyContent,
+  toolName, block, cwd, home, openFile, inspect, t, bodyContent, summary,
 }: GenericToolCardProps) {
   const model = toolRowModel(toolName, block, cwd, home)
   const terminal = terminalCardModel(block, cwd)
@@ -56,7 +63,7 @@ export function GenericToolCard({
       toolName={toolName}
       icon={VARIANT_ICONS[model.variant]}
       title={t(model.titleKey)}
-      summary={model.summary}
+      summary={summary ?? model.summary}
       // Single-file tools never expose an args body — the path link is the only
       // args interaction. A card is not an args body: a read/write/edit row is
       // single-file AND carries a card, so the card expands under the path link.
