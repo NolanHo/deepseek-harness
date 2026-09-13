@@ -60,6 +60,51 @@ function declarationsIn(body: string, selector: string): Map<string, string> | u
   return undefined
 }
 
+/** Slot key whose mount anchor (`data-slot`) renders inside `.crumbs`. */
+const LINEAGE_SLOT = "[data-slot='conversation.session.header.lineage']"
+
+/** One parsed rule: the entries of its selector list and their declarations. */
+interface CssRule {
+  selectors: string[]
+  declarations: Map<string, string>
+}
+
+/**
+ * Every rule of a rule body, with `:global(...)` unwrapped and quotes and
+ * spacing normalized so a selector reads the way it targets the DOM.
+ * @param body - the rule body text to scan, already scoped to the media block.
+ * @returns the parsed rules, in source order.
+ */
+function rulesIn(body: string): CssRule[] {
+  const withoutComments = body.replace(/\/\*[\s\S]*?\*\//g, ' ')
+  const rules: CssRule[] = []
+  for (const [, selectorList = '', block = ''] of withoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const declarations = new Map<string, string>()
+    for (const part of block.split(';')) {
+      const colon = part.indexOf(':')
+      if (colon === -1) continue
+      declarations.set(part.slice(0, colon).trim(), part.slice(colon + 1).trim().replace(/\s+/g, ' '))
+    }
+    rules.push({
+      selectors: selectorList.split(',').map(value => value.trim()
+        .replace(/:global\(([^()]*)\)/g, '$1')
+        .replace(/"/g, "'")
+        .replace(/\s+/g, ' ')),
+      declarations,
+    })
+  }
+  return rules
+}
+
+/**
+ * Subject compound of one selector entry: the part after its last combinator.
+ * @param selector - one entry of a selector list.
+ * @returns the compound the rule styles.
+ */
+function subjectCompound(selector: string): string {
+  return selector.split(/[\s>+~]+/).filter(Boolean).pop() ?? ''
+}
+
 const phone = mediaBody(PHONE_PRELUDE)
 
 /**
@@ -105,6 +150,26 @@ function flexShrinkOf(flex: string): string {
 describe('ConversationRoot.module.css phone header', () => {
   // This file already carries the phone block, so its presence is asserted by
   // `phoneDeclarations` inside every case rather than by a case of its own.
+  it('never hides the lineage slot inside the breadcrumbs on phones', () => {
+    expect(phone, `${PHONE_PRELUDE} is missing from ConversationRoot.module.css`).toBeDefined()
+    // The slot stays: on a subagent session it renders the `switcher` variant,
+    // whose trigger carries that session's own title, and it is the only phone
+    // entry point into the subagent catalog (the drawer tree and the session
+    // search both filter `origin === 'subagent'` out). Hiding it on phones
+    // deleted the subagent title and the catalog entry together, so no rule of
+    // this block may hide it again. The mount carries `data-slot` (ui-renderer
+    // scoped-slots.tsx); `rulesIn` unwraps `:global(...)` and normalizes both
+    // quote styles, so any spelling of the hider is caught.
+    const hiders = rulesIn(phone as string).filter(rule =>
+      /^none\b/i.test(rule.declarations.get('display') ?? '')
+      && rule.selectors.some(selector => selector.includes(LINEAGE_SLOT)),
+    )
+    expect(hiders.map(rule => rule.selectors.join(', ')),
+      `${PHONE_PRELUDE} must not hide the lineage slot mount (${LINEAGE_SLOT}) with display: none: it `
+      + "carries the subagent session's own title and is the only phone entry point into the subagent catalog")
+      .toEqual([])
+  })
+
   it('shows the session title breadcrumbs again with a width floor', () => {
     const crumbs = phoneDeclarations('.crumbs')
     expect(crumbs.get('display'), '.crumbs must not be hidden on phones').not.toBe('none')
@@ -124,7 +189,7 @@ describe('ConversationRoot.module.css phone header', () => {
     '.headerActions needs min-width: 0 or overflow: hidden to shrink').toBe(true)
   })
 
-  it('never clips the actions box that holds the job popover', () => {
+  it('never clips the actions box that holds the job popover (regression guard, not a RED assertion)', () => {
     const actions = phoneDeclarations('.headerActions')
     // The job badge's menu is absolutely positioned inside `.headerActions`, so
     // a hidden overflow here removes the popover from every phone viewport:
@@ -135,6 +200,18 @@ describe('ConversationRoot.module.css phone header', () => {
         + 'inside this box, so clipping makes the popover invisible on every <=560px viewport')
         .not.toBe('hidden')
     }
+    // Regression guard, not a RED assertion: this scan passes on the tree
+    // before the change as well as on the current one, because no phone rule
+    // ever declared an overflow on `.headerActions`. It stays so a later phone
+    // rule cannot reintroduce the clipping: the same guard over every rule of
+    // the phone block catches a compound or descendant selector reaching this
+    // box exactly as the bare selector above does.
+    const clippers = rulesIn(phone as string).filter(rule =>
+      ['overflow', 'overflow-x', 'overflow-y'].some(property => rule.declarations.get(property) === 'hidden')
+      && rule.selectors.some(selector => /\.headerActions(?![\w-])/.test(subjectCompound(selector))))
+    expect(clippers.map(rule => rule.selectors.join(', ')),
+      'no phone rule may clip `.headerActions`: the job popover is absolutely positioned inside it')
+      .toEqual([])
   })
 
   it('pulls the corner control back inside the phone header padding', () => {

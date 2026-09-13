@@ -38,6 +38,33 @@
   margin: 0 5px;
 }
 
+/* Fork patch (FORK_SURFACE.md): the phone header row gives the badge whatever
+   the session title leaves. The count label must stay on one line and ellipsize
+   — wrapped, "9 background jobs" stacks into a 72px column and grows the header
+   row from 30px to 78px on a 412px viewport. Neither `.root` (the menu's
+   containing block) nor `.trigger` may clip, so both only shrink. */
+@media (max-width: 560px) {
+  .root {
+    min-width: 0;
+  }
+
+  .trigger {
+    min-width: 0;
+    /* The trigger is an inline-flex box inside the shrinking `.root`: without a
+       width bound its shrink-to-fit resolves to the nowrap label's min-content
+       and it overflows the row instead of narrowing. */
+    max-width: 100%;
+  }
+
+  .count {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 .menu {
   position: absolute;
   top: calc(100% + 5px);

@@ -10,6 +10,8 @@ Status: implemented
 
 在 412×905 CSS 像素的手机视口（一加 13：1440×3168 @ DPR 3.5）下打开设置，模态层被渲染在 ui-layout 的移动抽屉内部。抽屉是 `position: fixed` 且打开时携带 `transform: translate(0)`，而 transform 非 none 的元素会成为其 `position: fixed` 后代的包含块，于是该层的 `inset: 0` 解到 320px 的抽屉而非视口。抽屉打开时实测：overlay 319×905、panel 宽 319、导航轨 188、内容列 131——内容列每个标签都折成一两个词一行，panel 的 `overflow: hidden` 裁掉右侧控件，关闭按钮被挤到 16×28，panel 在抽屉里而非视口里居中，遮罩只盖住抽屉，使"模态"背后的页面仍可交互。
 
+同一个 header 在带有后台任务的会话上会长到 78px：job 徽标的文案（"9 background jobs"）在收缩后的操作盒里折成四行列、lineage chip 与 preset chip 被截断在词中、会话标题只剩两个字符。任务开始或结束时该行重新折行，因此有任务运行时 header 高度持续变化。
+
 会话 header 在每个手机宽度上都恒定溢出 4px。`.headerCorner` 带 `margin-right: -16px`，让角落控件探入桌面 header 的 28px 右内边距（28 − 16 = 视口内缩 12px），而 fork 的 ≤560px 块把该内边距设为 12px（12 − 16 = 越出视口 4px）。同一个块还用 `display: none` 隐藏了会话面包屑，使标题行只剩 agent-preset chip。
 
 ## Decision
@@ -18,7 +20,7 @@ Status: implemented
 
 ≤560px 时设置面板以单列铺满视口（`width`/`height` 100%、`max-width`/`max-height` 100%、`border-radius: 0`、`flex-direction: column`）：导航轨变成一行，标题固定、单元横向滚动；关闭控件提升到 36px 拇指底线；导航与选项区带上 `env(safe-area-inset-*)` 内边距。
 
-会话 header 的手机块保留 56px 前导内边距以避开抽屉入口，并把尾部控件之外的空间交给标题行：`.crumbs` 保持可见并获得 88px 底线，经 `.crumb` 既有的省略号截断；`.headerActions` 可收缩（`flex: 0 1 auto`、`min-width: 0`），让自身子项让位——preset chip 省略、job 触发按钮收窄——且不裁切，因为 job 徽标的菜单就绝对定位在这个盒子里；`.headerCorner` 把 `margin-right` 归零，使角落控件落在视口内缩 12px 处，与桌面一致。
+会话 header 的手机块保留 56px 前导内边距以避开抽屉入口，并把尾部控件之外的空间交给标题行：`.crumbs` 保持可见并获得 88px 底线，经 `.crumb` 既有的省略号截断；`.headerActions` 可收缩（`flex: 0 1 auto`、`min-width: 0`），让自身子项让位——job 触发按钮收窄——且不裁切，因为 job 徽标的菜单就绝对定位在这个盒子里；`.headerCorner` 把 `margin-right` 归零，使角落控件落在视口内缩 12px 处，与桌面一致。手机行因此有了元信息预算。会话 header 的 agent-preset 标签在 560px 以下不渲染任何内容：它是无控件的静态上下文，图标对每个 preset 都相同，而 `title` 携带的是 preset 描述而非名称，所以加宽度上限等于两者都看不到（`.label { display: none }`）。job 徽标保持计数单行并省略（计数上用 `white-space: nowrap` 与 `text-overflow: ellipsis`，并在触发按钮上加 `max-width: 100%` 宽度约束——其 inline-flex 的 shrink-to-fit 否则会让它溢出该行而不是收窄）。lineage chip 保留：对子代理会话它承载该会话自己的标题，且它是进入子代理目录的唯一手机入口。会话标题保留 88px 底线并拿走剩余宽度。
 
 ## Alternatives considered
 
@@ -30,16 +32,22 @@ Status: implemented
 
 **继续在手机上隐藏面包屑。** 抽屉会给会话命名，但 header 是唯一的上下文标签；88px 底线加上可收缩的操作簇在 360px 下放得下。
 
+**把 job 徽标压成纯计数。** 纯计数 chip 需要新的 locale 键与随视口变化的文案，客户端 CSS 表达不了；nowrap 文案已保住计数，同一个触发按钮仍能打开完整列表。
+
+**在手机宽度隐藏 lineage chip。** 对普通会话它是最大的元信息，但同一个 slot 在子代理会话里渲染该会话自己的标题，而它同时是进入子代理目录的唯一手机路径：抽屉树与会话搜索都把子代理子节点过滤掉，隐藏它等于同时删掉一个标题和一项能力。
+
+**保留 lineage chip 并把标题截到两个字符。** 标题是会话唯一的上下文标识，而那个状态正是本次要修掉的缺陷。
+
 ## Consequences
 
-设置模态层在任何宽度都相对视口定位，其手机形态是一整列全宽面板，既不折行也不裁切控件。会话 header 在手机上显示被截断的会话标题，并让尾部控件留在视口内。
+设置模态层在任何宽度都相对视口定位，其手机形态是一整列全宽面板，既不折行也不裁切控件。会话 header 在手机上显示被截断的会话标题、让尾部控件留在视口内，并在后台任务运行时保持 30px 的单行：徽标既不折行也不撑高 header，其菜单也不被裁切。
 
 portal 把弹窗移出侧栏子树，因此依赖该 DOM 邻近关系的选择器或查询必须从文档根访问它；弹窗自身的标记、角色、焦点处理与 slot 渲染都未改变。由于该层是 `document.body` 的子节点，它落在 onboarding 标记为 `inert` 的 `#root` 之外：设置触发按钮在 `#root` 内，因此 onboarding 进行时弹窗仍不可达；两者同时打开时 onboarding 表面（z-index 1100）绘制在弹窗（z-index 1000）之上。
 
-窄宽度下优先保证面包屑底线而非尾部控件：360px 时操作盒收缩到约 74px，preset chip 因此省略、job 触发按钮收窄为很小的目标。操作盒不裁切，所以 job 徽标的菜单仍可达；320px 视口下该触发按钮过窄而难以稳定操作，而任何在售手机宽度都不会到这一步。
+手机 header 的宽度分配顺序是：会话标题、lineage chip、job 徽标。560px 以下 lineage chip 可能被面包屑盒子裁切，但可见部分仍可点，且子代理会话自己的标题仍渲染在其中。preset 标签不进入手机 header，因此给出 preset 名称的是设置页（新建会话处的座位在自身标签没有空间时会退化为纯图标）。操作盒仍不裁切，所以徽标菜单在任何宽度都可达；360px 下徽标计数省略、触发按钮仍可操作。
 
 字面量 88px 底线、560px 断点与 36px 拇指底线并入 fork 的手机语汇；fork 的客户端 CSS 断点仍是 560px 与 767.98px。`FORK_CHANGES.md` 记录的 2026-08-27 移动端治理所描述的规则在本版本树中并不存在，因此承载实际交付的手机 header 与设置弹窗规则的是本笔记，而非那条记录。
 
 ## Testing
 
-`settings-root.client.spec.tsx` 打开弹窗并断言模态层的父节点是 `document.body`、触发区子树不含它，且弹窗保留 `role="dialog"`、`aria-modal="true"` 与其 slot 提供的可访问名称。两个 CSS 契约测试用括号配平的提取器解析媒体块并钉住手机声明：`settings-root-phone-styles.client.spec.ts`（全屏面板、横向导航轨、36px 关闭）与 `header-phone-styles.client.spec.ts`（面包屑底线、可收缩操作簇、角落外边距、header 内边距）。实机校验在 3099 端口以 412×905 运行第二个 dsh 实例，针对重建后的客户端 bundle。
+`settings-root.client.spec.tsx` 打开弹窗并断言模态层的父节点是 `document.body`、触发区子树不含它，且弹窗保留 `role="dialog"`、`aria-modal="true"` 与其 slot 提供的可访问名称。多个 CSS 契约测试用括号配平的提取器解析媒体块并钉住手机声明：`settings-root-phone-styles.client.spec.ts`（全屏面板、横向导航轨、36px 关闭）、`header-phone-styles.client.spec.ts`（面包屑底线、不裁切的操作簇、角落外边距、header 内边距，以及「手机块不得隐藏 lineage slot」守卫）、`job-list-action-phone-styles.client.spec.ts`（计数 nowrap 与省略号、让省略号生效的触发按钮宽度约束、可收缩且不裁切的徽标盒子）与 `agent-preset-label-phone-styles.client.spec.ts`（手机上标签不渲染）。实机校验在 3099 端口以 412×905 运行第二个 dsh 实例，针对重建后的客户端 bundle。

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-12-phone-settings-dialog-and-header.md
-2026-09-12-phone-settings-dialog-and-header.md: adf3a5891350121d91769d182ad00a199a676da2
-2026-09-12-phone-settings-dialog-and-header.zh.md: 7d1c3a97fa84ee158841fc3431d0756dcc65b93d
+2026-09-12-phone-settings-dialog-and-header.md: 09428f7f6d5e96c3aef7df819244ab9b303fc115
+2026-09-12-phone-settings-dialog-and-header.zh.md: 8ad7c4423fbb33790a7b907900c29d45da8670ed
