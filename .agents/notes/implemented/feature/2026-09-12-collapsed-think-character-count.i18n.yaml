@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-12-collapsed-think-character-count.md
-2026-09-12-collapsed-think-character-count.md: 304042daa31058b2a9521c8d9964cad4a5947865
-2026-09-12-collapsed-think-character-count.zh.md: 58c3f64a06e411ff879376f55a7fcb9144b197ab
+2026-09-12-collapsed-think-character-count.md: 39a4f2615b239143f6f52787fdbac43ec39631f1
+2026-09-12-collapsed-think-character-count.zh.md: 6a2a7a93190f59dac8675f0657da4b2c4fddaa63
