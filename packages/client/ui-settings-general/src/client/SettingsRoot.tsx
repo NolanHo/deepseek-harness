@@ -19,6 +19,8 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ConnectionIndicatorState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsRootComponentProps, SettingsSectionRow } from './shell-contract.ts'
+// Fork patch (FORK_SURFACE.md): modal layer mounts at the document root.
+import { SettingsPortal } from './fork/portal.tsx'
 import css from './SettingsRoot.module.css'
 
 const RECOVERY_CONFIRMATION_MS = 2_000
@@ -202,14 +204,19 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
           onReconnect={reconnect}
         />
       </div>
+      {/* Fork patch (FORK_SURFACE.md): mount the modal layer at the document
+          root; inside the transform-animated mobile drawer it resolves against
+          the drawer box instead of the viewport. */}
       {open && (
-        <SettingsPanel
-          rows={rows}
-          renderSlot={renderSlot}
-          activeId={activeId}
-          onSelect={setActiveId}
-          onClose={close}
-        />
+        <SettingsPortal>
+          <SettingsPanel
+            rows={rows}
+            renderSlot={renderSlot}
+            activeId={activeId}
+            onSelect={setActiveId}
+            onClose={close}
+          />
+        </SettingsPortal>
       )}
       {/* Dialog chrome and `#root` inert ownership live inside each step's
           visible branch. A step still deciding (private facts loading)

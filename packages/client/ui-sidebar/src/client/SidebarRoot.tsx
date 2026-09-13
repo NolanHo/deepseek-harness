@@ -137,12 +137,13 @@ export function SidebarRoot({
     lingerTimer.current = undefined
   }
   // Leaving is decided by the column's BOX, not by DOM containment, and only
-  // while the bars are drawn. ui-settings renders its full-viewport panel as a
-  // fixed-position DESCENDANT of this column, so a pointer moved onto that
-  // panel — or onto the conversation once it closes — fires no `pointerleave`
-  // here, and the bars would stay drawn over a column nobody is pointing at.
-  // The element's own leave stays as the one signal geometry cannot give: a
-  // pointer that leaves the window emits no further moves.
+  // while the bars are drawn. Surfaces that cover the column without leaving it
+  // — the conversation replacing this column's content — fire no `pointerleave`
+  // here, so geometry is what stops the bars staying drawn over a column nobody
+  // is pointing at. The settings panel needs no cover: it is portalled to the
+  // document root (Fork patch (FORK_SURFACE.md)), so pointing at it does leave
+  // this column. The element's own leave stays as the one signal geometry
+  // cannot give: a pointer that leaves the window emits no further moves.
   useEffect(() => {
     if (!pointerInside) return
     const onMove = (event: PointerEvent): void => {

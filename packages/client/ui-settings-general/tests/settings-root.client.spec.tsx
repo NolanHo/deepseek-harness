@@ -352,3 +352,27 @@ describe('SettingsPanel navigation', () => {
     expect(listeners.size).toBe(0)
   })
 })
+
+// Fork patch (FORK_SURFACE.md): the modal layer mounts under document.body.
+describe('SettingsPanel modal layer', () => {
+  it('escapes the trigger subtree onto document.body and keeps the modal semantics', () => {
+    const { view } = mount()
+    const trigger = openPanel()
+    const dialog = screen.getByRole('dialog')
+    const overlay = dialog.parentElement
+
+    // The trigger's subtree is the sidebar drawer, and a non-none transform on
+    // an ancestor makes it the containing block for position:fixed
+    // descendants — the overlay's `inset: 0` would resolve to the drawer
+    // instead of the viewport.
+    expect(overlay).not.toBeNull()
+    expect(overlay?.parentElement).toBe(document.body)
+    expect(view.container.contains(overlay)).toBe(false)
+    expect(trigger.parentElement?.contains(overlay)).toBe(false)
+
+    // The portal moves the DOM parent only; the dialog keeps its semantics.
+    expect(screen.getByRole('dialog')).toBe(dialog)
+    expect(dialog.getAttribute('aria-modal')).toBe('true')
+    expect(screen.getByRole('dialog', { name: 'Settings Title' })).toBe(dialog)
+  })
+})

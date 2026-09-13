@@ -506,17 +506,35 @@
   }
 }
 
-/* Fork patch (FORK_SURFACE.md): narrow viewports (~412px). Tighten the header
-   and tab rhythm so the breadcrumb row and tab labels keep their single line:
-   phone headers keep the drawer opener and tabs, and the session title (with
-   its lineage chip) lives in the drawer instead of crowding the row. */
+/* Fork patch (FORK_SURFACE.md): narrow viewports (phones, ~360-560px). The
+   drawer opener occupies the header's top-left corner, so the header keeps its
+   56px leading pad and hands the title row what is left after the trailing
+   controls: the breadcrumb stays visible and truncates through `.crumb`'s
+   ellipsis, and the actions shrink instead of pushing the corner seat past the
+   viewport — the corner's -16px margin is tuned for the desktop 28px right
+   padding, while this block's padding is 12px, which landed the control 4px
+   off-screen at every phone width. */
 @media (max-width: 560px) {
   .header {
     padding: 8px 12px 0 56px;
   }
 
   .crumbs {
-    display: none;
+    display: flex;
+    min-width: 88px;
+  }
+
+  /* The actions give way by shrinking their own content (the preset chip
+     ellipsizes, the job trigger narrows). They must NOT clip: the job badge's
+     menu is absolutely positioned inside this box, so `overflow: hidden` here
+     would remove the popover from every phone header. */
+  .headerActions {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .headerCorner {
+    margin-right: 0;
   }
 
   .tabs {

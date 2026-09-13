@@ -234,3 +234,72 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* Fork patch (FORK_SURFACE.md): phone presentation. The desktop dialog is 800
+   wide with a fixed 188px rail, so a 412px phone leaves the content column
+   ~131px and every label wraps. Below 560px the panel fills the viewport as a
+   single column (dropping the desktop max-width clamp that kept it 48px short)
+   and the rail becomes a horizontal scroller under its title. */
+@media (max-width: 560px) {
+  .panel {
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
+
+  /* The rail keeps its title pinned; only the cell list scrolls sideways. */
+  .nav {
+    flex: none;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: calc(10px + env(safe-area-inset-top)) 12px 0;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .navTitle {
+    flex: none;
+    padding: 0 4px;
+  }
+
+  .navList {
+    flex: 1;
+    min-width: 0;
+    flex-direction: row;
+    gap: 8px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .navCell {
+    flex: none;
+    padding: 9px 14px 9px 12px;
+  }
+
+  .content {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* The 36px close starts at the header's 20px top padding, so the desktop
+     54px box would spill 2px into the scrolling options area. */
+  .header {
+    height: 64px;
+  }
+
+  /* Thumb floor for the one control that closes the full-screen panel. */
+  .close {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* The panel is the viewport now, so the scroll body owns the gesture bar. */
+  .options {
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+}

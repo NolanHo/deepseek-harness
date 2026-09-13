@@ -23,6 +23,10 @@ Status: implemented
 - **移动端精简（追加）**：手机 chrome 去掉两块桌面专属表面——header utilities 里的 session log 导出胶囊（≤560px `display: none`；`/export` 命令与共享弹窗仍可用），以及侧栏品牌行的 commit hash 徽标（≤560px `display: none`；开发者遥测信息，非用户 chrome）。工作区行拖拽无需改动：HTML5 DnD 在触屏上从不激活，行在手机上本来就是惰性的。
 - **测试契约**：`ui-workspace` 的 browser-styles 套件钉住顶层 CSS 声明值；其解析器现在跳过 `@media` 块（括号配平扫描），因为断点覆盖不属于被钉住的契约。
 
+## 本版本的实际情况
+
+上文七组规则中有六组不在交付树里：`git log --all -S 'min-width: 88px'` 为空，没有任何客户端源码带 ≤560px 拇指底线，job 弹层仍锚在触发按钮上，HoverCard 没有触控路径，侧栏品牌行仍带 commit 徽标，设置包既没有 portal 也没有手机块。另有两项在此期间由别处重解：会话面包屑在 ≤560px 下是被隐藏而非加底线，导出胶囊改为上游的省略号菜单按钮。[手机端设置弹窗笔记](../bug-fix/2026-09-12-phone-settings-dialog-and-header.zh.md) 恢复了经 portal 的全屏设置弹窗，并把带底线、可截断的面包屑还给手机 header；当下实际交付的规则记录在那里。下文的验证一节描述的是产生这轮治理的那次运行，而不是本树的状态。
+
 ## 后果
 
 - 桌面布局不变：每条新规则都在 ≤560px（或已有 header 让位规则使用的 ≤767.98px）之下，1280px 回归检查无溢出。

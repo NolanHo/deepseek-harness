@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-27-oneplus-13-mobile-ux-pass.md
-2026-08-27-oneplus-13-mobile-ux-pass.md: db17908596fabd920316730f942f52992fe79f8d
-2026-08-27-oneplus-13-mobile-ux-pass.zh.md: 27da440afea7e60dba6c7aa8321ed93364d1e9c2
+2026-08-27-oneplus-13-mobile-ux-pass.md: 4133120aa763ce20f92ed849cdae64d8042d920e
+2026-08-27-oneplus-13-mobile-ux-pass.zh.md: 3e5cf0679ae990bd2e8c872056080514428853f2

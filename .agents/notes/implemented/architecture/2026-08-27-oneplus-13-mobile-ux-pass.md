@@ -23,6 +23,10 @@ At a 412px viewport the conversation header crushed the session breadcrumb to 16
 - **Mobile trim (follow-up)**: phone chrome drops two desktop-only surfaces — the session-log export capsule in the header utilities (`display: none` ≤560px; the `/export` command and its shared dialog stay available) and the sidebar brand row's commit-hash badge (`display: none` ≤560px; developer telemetry, not user chrome). Workspace row drag-and-drop needs no change: HTML5 DnD never activates on touch, so the rows were already inert on phones.
 - **Test contract**: `ui-workspace`'s browser-styles suite pins top-level CSS declaration values; its parser now skips `@media` bodies (balanced-brace scan) because breakpoint overrides are not the pinned contract.
 
+## Status at this revision
+
+Six of the seven rule groups above are absent from the shipped tree: `git log --all -S 'min-width: 88px'` is empty, no client source carries the ≤560px thumb floors, the job popover stays anchored to its trigger, HoverCard has no touch path, the sidebar brand row keeps its commit badge, and the settings package carried neither the portal nor a phone block. Two items were re-solved elsewhere in the meantime: the session breadcrumb is hidden at ≤560px rather than floored, and the export capsule became upstream's ellipsis-menu button. [The phone settings dialog note](../bug-fix/2026-09-12-phone-settings-dialog-and-header.md) restores the portaled, full-screen settings dialog and returns a floored, truncated breadcrumb to the phone header; the rules that ship today are recorded there. The Verification section below describes the round that produced this pass, not the state of this tree.
+
 ## Consequences
 
 - Desktop layouts are unchanged: every new rule sits under ≤560px (or ≤767.98px where the existing header clearance already applies) and the 1280px regression check shows no overflow.
