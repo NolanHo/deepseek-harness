@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarkdownFileMentions, MarkdownPathImages } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeOwnerProps, ChatViewSlotProps } from '../contract/slots.ts'
+import type { ReasoningSpan } from '../contract/chat-nodes.ts'
 import type { AssistantBlock } from '../contract/snapshot.ts'
 import { markdownLabels } from '../markdown-labels.ts'
 import { ReasoningRow } from './ReasoningRow.tsx'
@@ -25,11 +26,24 @@ export function localPathMediaUrl(protocol: string, origin: string, value: strin
   return `${origin}/api/file?path=${encodeURIComponent(value)}`
 }
 
+/**
+ * Settled reasoning duration in milliseconds; absent while the block streams or
+ * when the attempt recorded no span.
+ * @param span - per-block reasoning span from the message's timed stream.
+ * @param running - whether this block is the streaming tail.
+ * @returns the span length, or undefined when no duration may render.
+ */
+function reasoningDurationMs(span: ReasoningSpan | undefined, running: boolean): number | undefined {
+  return span === undefined || running ? undefined : Math.max(0, span[1] - span[0])
+}
+
 export interface AssistantMarkdownProps {
   blocks: readonly AssistantBlock[]
   streaming: boolean
   /** Frozen partial of an aborted turn: rendered with a stopped marker. */
   interrupted?: boolean | undefined
+  /** Per-block reasoning spans recorded from the settled message's timed stream. */
+  reasoningSpans?: readonly (ReasoningSpan | undefined)[] | undefined
   /** Render consecutive image blocks through the attachment slot. */
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
   /** Hide reasoning that belongs to the Turn-level process disclosure. */
@@ -44,7 +58,7 @@ export interface AssistantMarkdownProps {
 
 /** Reasoning block as the Think variant summary row (figma 39:28304). */
 export const AssistantMarkdown = memo(function AssistantMarkdown({
-  blocks, streaming, interrupted, renderMessageImages,
+  blocks, streaming, interrupted, reasoningSpans, renderMessageImages,
   reasoningHidden = false, revealProcess, mentions, t,
 }: AssistantMarkdownProps) {
   // Stable per locale revision (t identity changes on switch): a fresh object
@@ -89,7 +103,12 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
             hidden={reasoningHidden}
             reveal={revealProcess}
           >
-            <ReasoningRow text={block.text} running={streaming && i === last} t={t} />
+            <ReasoningRow
+              text={block.text}
+              running={streaming && i === last}
+              durationMs={reasoningDurationMs(reasoningSpans?.[i], streaming && i === last)}
+              t={t}
+            />
           </ProcessReasoning>,
         )
         break

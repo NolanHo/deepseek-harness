@@ -33,10 +33,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 908 characters":
+- button "Think 908 characters · {{duration}}":
   - img
   - img
-  - text: Think 908 characters
+  - text: Think 908 characters · {{duration}}
 - button "Bash List package directories deterministically":
   - img
   - img
@@ -45,41 +45,41 @@
   - img
   - img
   - text: "Tool call get_goal · {}"
-- button "Think 86 characters":
+- button "Think 86 characters · {{duration}}":
   - img
   - img
-  - text: Think 86 characters
+  - text: Think 86 characters · {{duration}}
 - button "Bash List packages directory contents":
   - img
   - img
   - text: Bash List packages directory contents
-- button "Think 308 characters":
+- button "Think 308 characters · {{duration}}":
   - img
   - img
-  - text: Think 308 characters
+  - text: Think 308 characters · {{duration}}
 - button "Failed Bash Randomly pick one package directory":
   - img
   - text: Failed Bash Randomly pick one package directory
-- button "Think 138 characters":
+- button "Think 138 characters · {{duration}}":
   - img
   - img
-  - text: Think 138 characters
+  - text: Think 138 characters · {{duration}}
 - button "Bash Randomly select one package with Python":
   - img
   - img
   - text: Bash Randomly select one package with Python
-- button "Think 129 characters":
+- button "Think 129 characters · {{duration}}":
   - img
   - img
-  - text: Think 129 characters
+  - text: Think 129 characters · {{duration}}
 - button "Bash List all files in session-reference package":
   - img
   - img
   - text: Bash List all files in session-reference package
-- button "Think 531 characters":
+- button "Think 531 characters · {{duration}}":
   - img
   - img
-  - text: Think 531 characters
+  - text: Think 531 characters · {{duration}}
 - paragraph:
   - strong: Turn 1 / 2
   - text: — 随机选中的包：
@@ -113,18 +113,18 @@
   - img
   - img
   - text: Context injection goal
-- button "Think 204 characters":
+- button "Think 204 characters · {{duration}}":
   - img
   - img
-  - text: Think 204 characters
+  - text: Think 204 characters · {{duration}}
 - button "Bash Randomly select another package with Python":
   - img
   - img
   - text: Bash Randomly select another package with Python
-- button "Think 213 characters":
+- button "Think 213 characters · {{duration}}":
   - img
   - img
-  - text: Think 213 characters
+  - text: Think 213 characters · {{duration}}
 - button "Bash Re-roll excluding the package from turn 1":
   - img
   - img
@@ -133,10 +133,10 @@
   - img
   - img
   - text: Bash List all files in token-meter package
-- button "Think 205 characters":
+- button "Think 205 characters · {{duration}}":
   - img
   - img
-  - text: Think 205 characters
+  - text: Think 205 characters · {{duration}}
 - paragraph:
   - strong: Turn 2 / 2
   - text: — 随机选中的包：

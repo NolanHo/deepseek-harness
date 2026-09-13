@@ -3,10 +3,10 @@ import type {
   AssistantBlock, AssistantMessageNode, ConversationLocation, ConversationMatch,
   ConversationNodeContext, ConversationNodeDefinition,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { AssistantStreamRecord, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
-import type { AssistantChatData } from '../contract/chat-nodes.ts'
+import type { AssistantChatData, ReasoningSpan } from '../contract/chat-nodes.ts'
 import { CHAT_SYNTHETIC_SEQ_OFFSETS, chatNode } from './common.ts'
 import {
   emptyAssistantBlock, isTokenDelta, toAssistantBlock, toAssistantBlocks,
@@ -37,6 +37,7 @@ interface AssistantState {
   readonly hidden: boolean
   readonly final: ConversationMatch | undefined
   readonly usage: unknown
+  readonly reasoningSpans: readonly (ReasoningSpan | undefined)[]
 }
 
 function initialState(turn: number, step: number): AssistantState {
@@ -51,6 +52,7 @@ function initialState(turn: number, step: number): AssistantState {
     hidden: false,
     final: undefined,
     usage: undefined,
+    reasoningSpans: [],
   }
 }
 
@@ -161,6 +163,27 @@ function updateChunk(
   }
 }
 
+/**
+ * Collapse one attempt's packed reasoning runs into per-block spans. Each run
+ * records its first delta time in `time0` and the gap to every later delta in
+ * `dt`, so a block's span is its earliest `time0` through its latest
+ * reconstructed delta time; several runs for one block union.
+ * @param stream - packed timed stream embedded in the settled message.
+ * @returns the span of each reasoning block, indexed by block index.
+ */
+function reasoningSpans(stream: readonly AssistantStreamRecord[]): readonly (ReasoningSpan | undefined)[] {
+  const spans: (ReasoningSpan | undefined)[] = []
+  for (const record of stream) {
+    if (record.type !== 'reasoning-chunks') continue
+    const end = record.time0 + record.dt.reduce((sum, gap) => sum + gap, 0)
+    const previous = spans[record.index]
+    spans[record.index] = previous === undefined
+      ? [record.time0, end]
+      : [Math.min(previous[0], record.time0), Math.max(previous[1], end)]
+  }
+  return spans
+}
+
 function settleMessage(
   state: AssistantState,
   match: ConversationMatch,
@@ -174,6 +197,7 @@ function settleMessage(
     hidden: false,
     final: match,
     usage: event.data.usage,
+    reasoningSpans: reasoningSpans(event.data.stream),
   }
 }
 
@@ -277,6 +301,7 @@ function projectAssistant(context: ConversationNodeContext<AssistantState>): Ass
       blocks,
       time,
       ...state.usage === undefined ? {} : { usage: state.usage },
+      ...state.reasoningSpans.length === 0 ? {} : { reasoningSpans: state.reasoningSpans },
       ...settled === undefined ? {} : { finalNode: settled },
     },
   }

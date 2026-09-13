@@ -24,10 +24,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 1,306 characters":
+- button "Think 1,306 characters · {{duration}}":
   - img
   - img
-  - text: Think 1,306 characters
+  - text: Think 1,306 characters · {{duration}}
 - text: Failed
 - 'button "Code Error: code run failed (exception): AFTER_PRESENT"':
   - img
@@ -42,10 +42,10 @@
 - button "Present files Delivered report.txt, 说明.txt":
   - img
   - text: Present files Delivered report.txt, 说明.txt
-- button "Think 507 characters":
+- button "Think 507 characters · {{duration}}":
   - img
   - img
-  - text: Think 507 characters
+  - text: Think 507 characters · {{duration}}
 - paragraph:
   - text: "The single program ran exactly as ordered:"
   - code: present

@@ -24,18 +24,18 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 69 characters":
+- button "Think 69 characters · {{duration}}":
   - img
   - img
-  - text: Think 69 characters
+  - text: Think 69 characters · {{duration}}
 - button "Bash Echo the test string":
   - img
   - img
   - text: Bash Echo the test string
-- button "Think 92 characters":
+- button "Think 92 characters · {{duration}}":
   - img
   - img
-  - text: Think 92 characters
+  - text: Think 92 characters · {{duration}}
 - paragraph: DONE
 - button "Copy":
   - img

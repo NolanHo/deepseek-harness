@@ -24,20 +24,20 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 101 characters":
+- button "Think 101 characters · {{duration}}":
   - img
   - img
-  - text: Think 101 characters
+  - text: Think 101 characters · {{duration}}
 - button "Ask question 1/1 answered" [expanded]:
   - img
   - text: Ask question 1/1 answered
 - term: Which color do you prefer?
 - definition: Blue Include accessibility notes
 - button "Inspect"
-- button "Think 80 characters":
+- button "Think 80 characters · {{duration}}":
   - img
   - img
-  - text: Think 80 characters
+  - text: Think 80 characters · {{duration}}
 - paragraph: DONE
 - button "Copy":
   - img

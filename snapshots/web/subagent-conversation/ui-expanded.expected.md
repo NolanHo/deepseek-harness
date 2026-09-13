@@ -32,10 +32,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 167 characters":
+- button "Think 167 characters · {{duration}}":
   - img
   - img
-  - text: Think 167 characters
+  - text: Think 167 characters · {{duration}}
 - paragraph: Event sourcing is a pattern where all changes to an application's state are stored as an immutable, append-only sequence of events, rather than persisting only the current state, enabling full auditability, temporal queries, and event-driven architectures.
 - button "Copy":
   - img
@@ -59,10 +59,10 @@
 - button "Thought for a while · {{duration}}" [expanded]:
   - img
   - text: Thought for a while · {{duration}}
-- button "Think 167 characters":
+- button "Think 167 characters · {{duration}}":
   - img
   - img
-  - text: Think 167 characters
+  - text: Think 167 characters · {{duration}}
 - paragraph: Event sourcing is a pattern where all changes to an application's state are stored as an immutable, append-only sequence of events, rather than persisting only the current state, enabling full auditability, temporal queries, and event-driven architectures.
 - button "Copy":
   - img

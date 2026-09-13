@@ -31,6 +31,7 @@ export const AssistantNodeView = memo(function AssistantNodeView({
       blocks={data.blocks}
       streaming={data.status === 'running'}
       interrupted={data.status === 'interrupted'}
+      reasoningSpans={data.reasoningSpans}
       renderMessageImages={renderMessageImages}
       reasoningHidden={reasoningHidden}
       revealProcess={revealProcess}

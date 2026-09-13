@@ -16,13 +16,18 @@ Status: implemented
 
 计数取块文本的 UTF-16 码元长度（`text.length`），与本包既有 `json.truncated` 文案同一约定。
 
+块落定后，摘要会在计数后追加其流式耗时（`1,234 字符 · 12.3s`），取值自落定消息内嵌的带时间戳流：跨度从该块首个推理增量到末个推理增量。块仍在运行、或没有记录到跨度时，耗时有意不显示，因此运行中的行只保留一个跳动中的数字。
+
 ## Surface
 
 - `packages/client/ui-chat/src/client/chat/ReasoningRow.tsx`——折叠摘要为 `t('message.think.chars', { count: formatExactCount(text.length, t) })`；两个取行辅助函数已删除；摘要 span 不再携带 `data-follow-end` 属性；展开后的 `thinkBody` 渲染完整文本。
 - `packages/client/ui-chat/src/client/chat/ReasoningRow.module.css`——上游那两条 `[data-follow-end]` 规则随该属性一并删除，留下一处 `/* Fork patch (FORK_SURFACE.md) */` 标记。
 - `packages/client/ui-chat/src/client/chat/token-format.ts`——`formatExactCount(value, t)` 经 `number.groupSeparator` 负责按区域分组的精确整数格式化；`formatExactTokens` 委托给它。
-- `packages/client/ui-chat/src/client/locale.ts`——新增的 `message.think.chars` 为 `{count} characters`（en）与 `{count} 字符`（zh）。
-- 测试——`tests/reasoning-row.client.spec.tsx` 覆盖计数、分组、流式期间实时增长，以及从标题或计数展开；`tests/coverage-tails.client.spec.tsx` 与 `tests/chat-view.client.spec.tsx` 中过期的折叠预览断言已替换，`tests/chat-branch-tails.client.spec.tsx` 删除一个过期用例，`apps/web/tests/lifecycle-chrome.e2e.ts` 去掉 `[data-follow-end]` 视口钉住轮询，选择性压力泳道 `apps/web/stress-tests/reasoning-chunks.stress.ts` 断言显示计数等于 fixture 实际发出的推理长度（`packages/client/connection/src/client/fixture.ts` 中 fixture storm 状态上的 `reasoningCharacters`）。19 个可比较、含 Think 行的 `snapshots/web/**/*.expected.md` golden 只取一次 `DSH_SNAPSHOT=refresh` 运行中这些行的计数，使该刷新夹带的无关注成差异（被移除的访问模式 chip、TurnProcess 标签、与本机相关的会话行）留在本次改动之外。另有 8 个含 Think 行的 golden 有意保留散文形态、不计入上述 19 个：三个 `snapshots/web/seeded-history/*.expected.md`（6 行）属于本 fork 从该泳道排除的套件；两个 `apps/web/tests/expected/steer-all/*.expected.md`（2 行）所属场景缺少 `session.jsonl` fixture，因此该推理块在预览首行之后的完整长度未知。
+- `packages/client/ui-chat/src/client/locale.ts`——新增的 `message.think.chars` 为 `{count} characters`（en）与 `{count} 字符`（zh），`message.think.charsWithDuration`（`{chars} · {duration}`）将其与共享的紧凑时长格式化器组合。
+- `packages/client/ui-chat/src/client/contract/chat-nodes.ts`——`AssistantChatData.reasoningSpans` 按推理块索引携带跨度。
+- `packages/client/ui-chat/src/client/conversation-nodes/assistant.ts`——`settleMessage` 从落定消息内嵌的带时间戳流折出跨度；同一索引的多段 packed `reasoning-chunks` 合并为一段跨度，重试时随该步骤状态其余部分一并重置。
+- `packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx` 与 `AssistantNodeView.tsx`——按块推导落定耗时，并在该块为流式尾部时保持隐藏。
+- 测试——`tests/reasoning-row.client.spec.tsx` 覆盖计数、分组、流式期间实时增长，以及从标题或计数展开；`tests/coverage-tails.client.spec.tsx` 与 `tests/chat-view.client.spec.tsx` 中过期的折叠预览断言已替换，`tests/chat-branch-tails.client.spec.tsx` 删除一个过期用例，`apps/web/tests/lifecycle-chrome.e2e.ts` 去掉 `[data-follow-end]` 视口钉住轮询，选择性压力泳道 `apps/web/stress-tests/reasoning-chunks.stress.ts` 断言显示计数等于 fixture 实际发出的推理长度（`packages/client/connection/src/client/fixture.ts` 中 fixture storm 状态上的 `reasoningCharacters`）。含 Think 行的 `snapshots/web/**/*.expected.md` golden 只取一次 `DSH_SNAPSHOT=refresh` 运行中这些行的计数与耗时，使该刷新夹带的无关注成差异（被移除的访问模式 chip、TurnProcess 标签、与本机相关的会话行）留在本次改动之外：18 个文件带上 `· {{duration}}`，而 `cordis-tool-round` 保持只显示计数，因为其录制流里没有任何可度量的推理增量。另有 8 个含 Think 行的 golden 有意保留散文形态、不计入上述 19 个：三个 `snapshots/web/seeded-history/*.expected.md`（6 行）属于本 fork 从该泳道排除的套件；两个 `apps/web/tests/expected/steer-all/*.expected.md`（2 行）所属场景缺少 `session.jsonl` fixture，因此该推理块在预览首行之后的完整长度未知。
 - Fork 登记——这一处对上游的有意分叉登记为 `FORK_SURFACE.md` 的 Tier C 行与 `FORK_CHANGES.md` 的一条记录。
 
 ## Alternatives considered
@@ -38,6 +43,7 @@ Status: implemented
 - 展开后的行仍是推理文本唯一可读之处。
 - 因为折叠行不渲染任何推理文本，Think 行处于折叠状态时浏览器页内查找无法定位推理正文。接受：计数仍报告其存在与大小，展开即恢复文本。
 - 折叠行能报告推理仍在到达，却无法显示哪段正文到了：该信号只由扫光动画与 `data-state` 属性承载。
+- 耗时度量的是已送达的推理流本身，而非回合墙钟时间：它不含首个推理增量之前的等待，也不含末个增量之后的间隔；消息未携带流记录的块只显示计数。
 - 选择性压力泳道在当前树上无法执行：`vitest.web-stress.config.ts` 是唯一缺少共享 `standardDecoratorPlugin` 的浏览器配置，套件在加载阶段即报 `SyntaxError: Invalid or unexpected token`（用未改动的文件复现）。其断言已改为显示的字符数，但在该配置补上插件之前保持未执行状态。
 - 归档的上游注记 [`2026-08-02-web-thinking-tail-scroll`](../../archived/feature/2026-08-02-web-thinking-tail-scroll.md) 与 [`2026-08-14-web-turn-process-folding`](../../archived/feature/2026-08-14-web-turn-process-folding.md) 作为本次分叉所替代的上游折叠预览与尾部跟随行为的冻结历史保留。
 - [帧合并的推理块发布与浏览器压力验证](../testing/2026-08-03-opt-in-reasoning-chunk-browser-stress.zh.md) 对发布调度仍然有效；其钉住水平尾部的对齐方式由本注记取代。

@@ -12,10 +12,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 350 characters":
+- button "Think 350 characters · {{duration}}":
   - img
   - img
-  - text: Think 350 characters
+  - text: Think 350 characters · {{duration}}
 - button "Tool call workflow ·":
   - img
   - img
@@ -23,10 +23,10 @@
 - button "snapshot-flow 1 member Completed":
   - img
   - text: snapshot-flow 1 member Completed
-- button "Think 123 characters":
+- button "Think 123 characters · {{duration}}":
   - img
   - img
-  - text: Think 123 characters
+  - text: Think 123 characters · {{duration}}
 - paragraph: WORKFLOW_DONE
 - button "Copy":
   - img

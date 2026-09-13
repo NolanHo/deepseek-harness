@@ -24,10 +24,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 61 characters":
+- button "Think 61 characters · {{duration}}":
   - img
   - img
-  - text: Think 61 characters
+  - text: Think 61 characters · {{duration}}
 - paragraph: LIGHTHOUSE
 - button "Copy":
   - img

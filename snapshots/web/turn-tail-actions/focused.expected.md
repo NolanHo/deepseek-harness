@@ -24,10 +24,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 183 characters":
+- button "Think 183 characters · {{duration}}":
   - img
   - img
-  - text: Think 183 characters
+  - text: Think 183 characters · {{duration}}
 - paragraph: Reading the workspace now.
 - button "Bash Print alpha to stdout":
   - img

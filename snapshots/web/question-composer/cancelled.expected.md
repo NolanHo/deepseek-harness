@@ -19,10 +19,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 101 characters":
+- button "Think 101 characters · {{duration}}":
   - img
   - img
-  - text: Think 101 characters
+  - text: Think 101 characters · {{duration}}
 - button "Ask question cancelled" [expanded]:
   - img
   - text: Ask question cancelled

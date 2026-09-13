@@ -1087,6 +1087,42 @@ describe('built-in conversation node Definitions', () => {
     })
   })
 
+  it('records each reasoning block span from the durable packed attempt', () => {
+    const start = 5_000
+    const history = [
+      at(1, 'turn/start', { turn: 1 }),
+      at(2, 'step/start', { turn: 1, step: 1 }),
+      at(3, 'assistant/live-chunk', {
+        turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: 'think' },
+      }, { time: start }),
+      // A text block between two reasoning runs splits them into two packed
+      // records for index 0, which the span must union.
+      at(4, 'assistant/live-chunk', {
+        turn: 1, step: 1, chunk: { type: 'text-delta', index: 1, text: 'answer' },
+      }, { time: start + 100 }),
+      at(5, 'assistant/live-chunk', {
+        turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: 'ing' },
+      }, { time: start + 2_000 }),
+      at(6, 'assistant/message', {
+        turn: 1,
+        step: 1,
+        message: {
+          id: 'reasoned',
+          role: 'assistant',
+          content: [{ type: 'reasoning', text: 'thinking' }, { type: 'text', text: 'answer' }],
+          source: { kind: 'model', provider: 'fake', model: 'fake' },
+        },
+      }, { surfaceOp: 'append' }),
+    ]
+    const inputs = packedInputs(history)
+    const settled = inputs.find(input => input.event.type === 'assistant/message')?.event
+    if (settled?.type !== 'assistant/message') throw new Error('expected the packed settled message')
+    expect(settled.data.stream.filter(record => record.type === 'reasoning-chunks')).toHaveLength(2)
+
+    const data = node(snapshot(assembler(inputs)), 'assistant-step')?.data as AssistantChatData
+    expect(data.reasoningSpans).toEqual([[start, start + 2_000]])
+  })
+
   it('keeps one keyed Tool node from running through settlement and replays nested dispatch after prepend', () => {
     const value = assembler([
       at(1, 'turn/start', { turn: 1 }),

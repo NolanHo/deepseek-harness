@@ -13,12 +13,13 @@ afterEach(() => {
 const t = makeTranslate(zh, commonZh)
 const renderMessageImages: AssistantMarkdownProps['renderMessageImages'] = () => null
 
-function renderReasoning(text: string, streaming: boolean) {
+function renderReasoning(text: string, streaming: boolean, reasoningSpans?: AssistantMarkdownProps['reasoningSpans']) {
   return render(
     <AssistantMarkdown
       t={t}
       blocks={[{ kind: 'reasoning', text }]}
       streaming={streaming}
+      reasoningSpans={reasoningSpans}
       renderMessageImages={renderMessageImages}
     />,
   )
@@ -32,6 +33,30 @@ describe('ReasoningRow', () => {
     expect(view.getByText(`${text.length} 字符`)).toBeTruthy()
     expect(view.queryByText('Inspect the session')).toBeNull()
     expect(view.queryByText(/Newest reasoning tokens/)).toBeNull()
+  })
+
+  it('appends the recorded stream duration only once the block stops running', () => {
+    const text = 'Inspect the session\nNewest reasoning tokens'
+    const view = renderReasoning(text, true, [[5_000, 17_345]])
+    expect(view.getByText(`${text.length} 字符`)).toBeTruthy()
+
+    view.rerender(
+      <AssistantMarkdown
+        t={t}
+        blocks={[{ kind: 'reasoning', text }]}
+        streaming={false}
+        reasoningSpans={[[5_000, 17_345]]}
+        renderMessageImages={renderMessageImages}
+      />,
+    )
+    expect(view.getByText(`${text.length} 字符 · 12.3秒`)).toBeTruthy()
+  })
+
+  it('omits the duration when the attempt recorded no reasoning span', () => {
+    const view = renderReasoning('x'.repeat(1_234), false)
+
+    expect(view.getByText('1,234 字符')).toBeTruthy()
+    expect(view.queryByText(/字符 ·/)).toBeNull()
   })
 
   it('groups long counts and follows the streaming length, dropping the running status at settlement', () => {

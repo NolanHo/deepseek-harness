@@ -26,10 +26,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 204 characters":
+- button "Think 204 characters · {{duration}}":
   - img
   - img
-  - text: Think 204 characters
+  - text: Think 204 characters · {{duration}}
 - paragraph:
   - text: Since the user has explicitly asked me not to read or write any files and to go straight to planning, I'll proceed with
   - code: exit_plan_mode
@@ -42,10 +42,10 @@
   - img
   - img
   - text: System prompt
-- button "Think 170 characters":
+- button "Think 170 characters · {{duration}}":
   - img
   - img
-  - text: Think 170 characters
+  - text: Think 170 characters · {{duration}}
 - paragraph: DONE
 - button "Copy":
   - img

@@ -2,24 +2,37 @@
 import { useState } from 'react'
 import { DisclosureRow, IconThinkOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
+import { formatDuration } from './StatsPills.tsx'
 import { formatExactCount } from './token-format.ts'
 import a11yCss from './accessibility.module.css'
 import css from './ReasoningRow.module.css'
 
 /**
  * Render one assistant reasoning block as the Think disclosure row. The
- * collapsed summary carries the reasoning character count; expanded content
+ * collapsed summary carries the reasoning character count and, once the block
+ * settled with a recorded span, its streaming duration; expanded content
  * preserves the complete text.
  * @param props.text - complete or streaming reasoning text.
  * @param props.running - whether this block is the streaming tail.
- * @param props.t - conversation locale seat for the collapsed count and the running status.
+ * @param props.durationMs - recorded span of a settled block; absent while streaming or unrecorded.
+ * @param props.t - conversation locale seat for the collapsed summary and the running status.
  * @returns the reasoning disclosure.
  */
-export function ReasoningRow({ text, running, t }: { text: string; running: boolean; t: ChatViewSlotProps['t'] }) {
+export function ReasoningRow({
+  text, running, durationMs, t,
+}: {
+  text: string
+  running: boolean
+  durationMs?: number | undefined
+  t: ChatViewSlotProps['t']
+}) {
   const [expanded, setExpanded] = useState(false)
   // Fork patch (FORK_SURFACE.md): the collapsed row carries the reasoning
-  // character count instead of upstream's first-line / streaming-tail preview.
-  const summary = t('message.think.chars', { count: formatExactCount(text.length, t) })
+  // character count and settled duration instead of upstream's preview.
+  const chars = t('message.think.chars', { count: formatExactCount(text.length, t) })
+  const summary = durationMs === undefined || running
+    ? chars
+    : t('message.think.charsWithDuration', { chars, duration: formatDuration(durationMs, t) })
 
   return (
     <div

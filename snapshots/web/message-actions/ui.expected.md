@@ -19,10 +19,10 @@
 - button "Copy":
   - img
 - tooltip "Copy"
-- button "Think 100 characters":
+- button "Think 100 characters · {{duration}}":
   - img
   - img
-  - text: Think 100 characters
+  - text: Think 100 characters · {{duration}}
 - paragraph: I will read both files before answering.
 - button "Copy":
   - img

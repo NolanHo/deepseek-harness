@@ -12,10 +12,10 @@
   - img
   - img
   - text: 上下文注入 @deepseek-ai/dsh-system-prompt
-- button "思考 242 字符":
+- button "思考 242 字符 · {{duration}}":
   - img
   - img
-  - text: 思考 242 字符
+  - text: 思考 242 字符 · {{duration}}
 - paragraph: 我来创建一个冯诺依曼架构的 SVG 示意图。
 - button "写入 von-neumann.svg +83 -0":
   - img
@@ -23,10 +23,10 @@
   - text: 写入
   - button "von-neumann.svg"
   - text: +83 -0
-- button "思考 56 字符":
+- button "思考 56 字符 · {{duration}}":
   - img
   - img
-  - text: 思考 56 字符
+  - text: 思考 56 字符 · {{duration}}
 - button "交付文件 已交付 von-neumann.svg":
   - img
   - text: 交付文件 已交付 von-neumann.svg

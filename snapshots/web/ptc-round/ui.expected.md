@@ -24,10 +24,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think 277 characters":
+- button "Think 277 characters · {{duration}}":
   - img
   - img
-  - text: Think 277 characters
+  - text: Think 277 characters · {{duration}}
 - button "Code Run bash echo and catch missing file read":
   - img
   - img
@@ -43,10 +43,10 @@
 - 'button "Read Error: cannot read \"{{cwd}}/workspace/missing.txt\": not found"':
   - img
   - text: "Read Error: cannot read \"{{cwd}}/workspace/missing.txt\": not found"
-- button "Think 66 characters":
+- button "Think 66 characters · {{duration}}":
   - img
   - img
-  - text: Think 66 characters
+  - text: Think 66 characters · {{duration}}
 - paragraph: DONE
 - button "Copy":
   - img
