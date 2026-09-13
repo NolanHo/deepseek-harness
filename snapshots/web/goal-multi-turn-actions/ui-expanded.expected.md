@@ -33,10 +33,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- 'button "Think The user''s goal is: \"做两个turn，每个turn输出随机一个包的文件结构。注意你做完一个turn之后，直接输出内容，停止，我们的系统会帮你再开一个turn，你看着做一个类似的\" — which translates to: \"Do two turns, each turn output the file structure of a random package. Note that after you finish one turn, directly output the content and stop; our system will help you open another turn, and you just do something similar.\""':
+- button "Think 908 characters":
   - img
   - img
-  - text: "Think The user's goal is: \"做两个turn，每个turn输出随机一个包的文件结构。注意你做完一个turn之后，直接输出内容，停止，我们的系统会帮你再开一个turn，你看着做一个类似的\" — which translates to: \"Do two turns, each turn output the file structure of a random package. Note that after you finish one turn, directly output the content and stop; our system will help you open another turn, and you just do something similar.\""
+  - text: Think 908 characters
 - button "Bash List package directories deterministically":
   - img
   - img
@@ -45,41 +45,41 @@
   - img
   - img
   - text: "Tool call get_goal · {}"
-- 'button "Think There''s a `packages` directory. Let me look inside to see what packages are available."':
+- button "Think 86 characters":
   - img
   - img
-  - text: "Think There's a `packages` directory. Let me look inside to see what packages are available."
+  - text: Think 86 characters
 - button "Bash List packages directory contents":
   - img
   - img
   - text: Bash List packages directory contents
-- button "Think There are 4 packages:":
+- button "Think 308 characters":
   - img
   - img
-  - text: "Think There are 4 packages:"
+  - text: Think 308 characters
 - button "Failed Bash Randomly pick one package directory":
   - img
   - text: Failed Bash Randomly pick one package directory
-- 'button "Think shuf is not available on macOS. I''ll use a different approach for random selection. Let me use $RANDOM in bash or use `sort -R` or Python."':
+- button "Think 138 characters":
   - img
   - img
-  - text: "Think shuf is not available on macOS. I'll use a different approach for random selection. Let me use $RANDOM in bash or use `sort -R` or Python."
+  - text: Think 138 characters
 - button "Bash Randomly select one package with Python":
   - img
   - img
   - text: Bash Randomly select one package with Python
-- 'button "Think The random pick for turn 1 is `packages/context/session-reference`. Now I''ll output its file structure. Let me get the file tree."':
+- button "Think 129 characters":
   - img
   - img
-  - text: "Think The random pick for turn 1 is `packages/context/session-reference`. Now I'll output its file structure. Let me get the file tree."
+  - text: Think 129 characters
 - button "Bash List all files in session-reference package":
   - img
   - img
   - text: Bash List all files in session-reference package
-- 'button "Think Turn 1 is done. Per the objective: \"你做完一个turn之后，直接输出内容，停止\" — after finishing a turn, directly output the content and stop. The system will open another turn."':
+- button "Think 531 characters":
   - img
   - img
-  - text: "Think Turn 1 is done. Per the objective: \"你做完一个turn之后，直接输出内容，停止\" — after finishing a turn, directly output the content and stop. The system will open another turn."
+  - text: Think 531 characters
 - paragraph:
   - strong: Turn 1 / 2
   - text: — 随机选中的包：
@@ -113,18 +113,18 @@
   - img
   - img
   - text: Context injection goal
-- 'button "Think This is turn 2 of 2. I need to randomly pick another package and output its file structure. In the first turn I picked `packages/context/session-reference`. Let me pick a different one randomly this time."':
+- button "Think 204 characters":
   - img
   - img
-  - text: "Think This is turn 2 of 2. I need to randomly pick another package and output its file structure. In the first turn I picked `packages/context/session-reference`. Let me pick a different one randomly this time."
+  - text: Think 204 characters
 - button "Bash Randomly select another package with Python":
   - img
   - img
   - text: Bash Randomly select another package with Python
-- 'button "Think The random pick returned the same package as turn 1. Since turn 1 already covered `session-reference`, it would be better to pick a different one for variety. Let me re-roll, excluding the already-covered package."':
+- button "Think 213 characters":
   - img
   - img
-  - text: "Think The random pick returned the same package as turn 1. Since turn 1 already covered `session-reference`, it would be better to pick a different one for variety. Let me re-roll, excluding the already-covered package."
+  - text: Think 213 characters
 - button "Bash Re-roll excluding the package from turn 1":
   - img
   - img
@@ -133,10 +133,10 @@
   - img
   - img
   - text: Bash List all files in token-meter package
-- 'button "Think This is turn 2 of 2. I''ve output the file structure for `packages/llm/token-meter`. Both turns are done. I should output the content, stop, and then mark the goal as complete since both turns are finished."':
+- button "Think 205 characters":
   - img
   - img
-  - text: "Think This is turn 2 of 2. I've output the file structure for `packages/llm/token-meter`. Both turns are done. I should output the content, stop, and then mark the goal as complete since both turns are finished."
+  - text: Think 205 characters
 - paragraph:
   - strong: Turn 2 / 2
   - text: — 随机选中的包：

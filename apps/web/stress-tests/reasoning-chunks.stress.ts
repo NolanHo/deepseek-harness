@@ -22,6 +22,7 @@ interface ReasoningChunkStormState {
   intervalMs: number
   emitted: number
   marker: string
+  reasoningCharacters: number
   emitting: boolean
 }
 
@@ -92,10 +93,10 @@ it('keeps the browser responsive while rendering 100,000 reasoning chunks', asyn
       ;(window as StressWindow).__reasoningStressProbe = probe
     })
 
-    const marker = await activePage.evaluate(({ chunkCount, chunksPerInterval, intervalMs }) => {
+    await activePage.evaluate(({ chunkCount, chunksPerInterval, intervalMs }) => {
       const hooks = (window as StressWindow).__fxTiming
       if (hooks === undefined) throw new Error('reasoning stress fixture hooks unavailable')
-      return hooks.startReasoningChunkStorm('fx-alpha', chunkCount, chunksPerInterval, intervalMs)
+      hooks.startReasoningChunkStorm('fx-alpha', chunkCount, chunksPerInterval, intervalMs)
     }, {
       chunkCount: CHUNK_COUNT,
       chunksPerInterval: CHUNKS_PER_INTERVAL,
@@ -108,7 +109,16 @@ it('keeps the browser responsive while rendering 100,000 reasoning chunks', asyn
       const hooks = (window as StressWindow).__fxTiming
       return hooks?.reasoningChunkStormState()?.emitted ?? 0
     }), { timeout: 540_000, interval: 100 }).toBe(CHUNK_COUNT)
-    await expect.poll(() => liveThink.textContent(), { timeout: 60_000, interval: 100 }).toContain(marker)
+    // The collapsed row carries the reasoning character count, so the painted
+    // number is the DOM-visible proof that the final delta rendered.
+    const reasoningCharacters = await activePage.evaluate(() => {
+      const hooks = (window as StressWindow).__fxTiming
+      return hooks?.reasoningChunkStormState()?.reasoningCharacters ?? 0
+    })
+    await expect.poll(async () => {
+      const displayed = /[\d,]+/.exec((await liveThink.textContent()) ?? '')
+      return displayed === null ? -1 : Number(displayed[0].replaceAll(',', ''))
+    }, { timeout: 60_000, interval: 100 }).toBe(reasoningCharacters)
 
     const report = await activePage.evaluate(() => {
       const win = window as StressWindow

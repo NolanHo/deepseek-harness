@@ -510,6 +510,7 @@ interface TimingHooks {
     intervalMs: number
     emitted: number
     marker: string
+    reasoningCharacters: number
     emitting: boolean
   } | null
   beginModelRetry(id: string): void
@@ -1602,6 +1603,7 @@ describe('createFixtureApi', () => {
         && frame.frame.chunk.text.includes('REASONING_STRESS_COMPLETE')
       )))
       const marker = hooks.startReasoningChunkStorm('fx-alpha', 3, 2, 16)
+      const reasoningChunks = ['推理', '推理', `\n${marker}`]
       expect(() => hooks.startReasoningChunkStorm('fx-alpha', 1, 1, 16)).toThrow(/already running/)
       expect(hooks.reasoningChunkStormState()).toMatchObject({ emitted: 0, emitting: true, marker })
 
@@ -1610,7 +1612,7 @@ describe('createFixtureApi', () => {
       await vi.advanceTimersByTimeAsync(16)
       expect(hooks.reasoningChunkStormState()).toEqual({
         sessionId: 'fx-alpha', chunkCount: 3, chunksPerInterval: 2, intervalMs: 16,
-        emitted: 3, marker, emitting: false,
+        emitted: 3, marker, reasoningCharacters: reasoningChunks.join('').length, emitting: false,
       })
 
       const frames = await streamed

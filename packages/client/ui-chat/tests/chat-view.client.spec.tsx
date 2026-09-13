@@ -1356,7 +1356,7 @@ describe('ChatView', () => {
     expect(members).toHaveLength(3)
     expect(members.map(member => member.getAttribute('hidden')))
       .toEqual(['until-found', 'until-found', 'until-found'])
-    expect(members[0]?.textContent).toContain('inspect the repository')
+    expect(members[0]?.textContent).toContain('22 字符')
     expect(members[1]?.textContent).toContain('bash:a')
     expect(members[2]?.textContent).toContain('subagent:b')
     expect(view.getByText('final answer')).toBeTruthy()
@@ -1583,6 +1583,8 @@ describe('ChatView', () => {
     expect(reasoning?.getAttribute('hidden')).toBe('until-found')
     expect(view.getByText('final answer')).toBeTruthy()
     fireEvent.click(toggle)
+    expect(view.getByText('16 字符')).toBeTruthy()
+    fireEvent.click(view.getByText('思考'))
     expect(view.getByText('private analysis')).toBeTruthy()
   })
 

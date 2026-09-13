@@ -24,10 +24,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think The user wants me to begin with \"Reading the workspace now.\" and call bash with \"echo alpha\" in the same message. Then after the tool result, reply with the single word DONE and stop.":
+- button "Think 183 characters":
   - img
   - img
-  - text: Think The user wants me to begin with "Reading the workspace now." and call bash with "echo alpha" in the same message. Then after the tool result, reply with the single word DONE and stop.
+  - text: Think 183 characters
 - paragraph: Reading the workspace now.
 - button "Bash Print alpha to stdout":
   - img

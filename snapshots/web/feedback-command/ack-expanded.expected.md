@@ -24,10 +24,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think The user wants me to reply with a single word. Let me comply.":
+- button "Think 61 characters":
   - img
   - img
-  - text: Think The user wants me to reply with a single word. Let me comply.
+  - text: Think 61 characters
 - paragraph: LIGHTHOUSE
 - button "Copy":
   - img

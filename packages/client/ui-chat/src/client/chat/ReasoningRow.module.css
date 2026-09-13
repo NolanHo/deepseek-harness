@@ -74,19 +74,8 @@
   text-overflow: ellipsis;
 }
 
-.summary[data-follow-end] {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.summary[data-follow-end] .summaryText {
-  flex: 0 0 auto;
-  width: max-content;
-  min-width: 100%;
-  overflow: visible;
-  text-align: start;
-  text-overflow: clip;
-}
+/* Fork patch (FORK_SURFACE.md): upstream's `[data-follow-end]` rules that kept
+   the streaming tail visible are removed with the collapsed text preview. */
 
 .thinkBody {
   /* Indent under the title, which starts at leading (16 + delta) + gap 6. */

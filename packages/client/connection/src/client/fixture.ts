@@ -1759,6 +1759,8 @@ interface ReasoningChunkStormState {
   intervalMs: number
   emitted: number
   marker: string
+  /** Length of the reasoning text emitted so far, the count the collapsed row renders. */
+  reasoningCharacters: number
   emitting: boolean
 }
 
@@ -2889,6 +2891,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         intervalMs,
         emitted: 0,
         marker,
+        reasoningCharacters: 0,
         emitting: true,
       }
       activeReasoningChunkStorm = state
@@ -2912,6 +2915,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
           const chunkText = index === chunkCount - 1
             ? `\n${marker}`
             : index % 64 === 63 ? '推理\n' : '推理'
+          state.reasoningCharacters += chunkText.length
           pushAssistant(sessionId, { type: 'reasoning-delta', index: 0, text: chunkText })
         }
         state.emitted = end

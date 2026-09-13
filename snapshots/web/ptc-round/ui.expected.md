@@ -24,10 +24,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- 'button "Think The user wants me to write a single `run_code` program that:"':
+- button "Think 277 characters":
   - img
   - img
-  - text: "Think The user wants me to write a single `run_code` program that:"
+  - text: Think 277 characters
 - button "Code Run bash echo and catch missing file read":
   - img
   - img
@@ -43,10 +43,10 @@
 - 'button "Read Error: cannot read \"{{cwd}}/workspace/missing.txt\": not found"':
   - img
   - text: "Read Error: cannot read \"{{cwd}}/workspace/missing.txt\": not found"
-- button "Think The program ran successfully. Let me now reply DONE as instructed.":
+- button "Think 66 characters":
   - img
   - img
-  - text: Think The program ran successfully. Let me now reply DONE as instructed.
+  - text: Think 66 characters
 - paragraph: DONE
 - button "Copy":
   - img

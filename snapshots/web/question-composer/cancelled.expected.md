@@ -19,10 +19,10 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think The user wants me to use the ask_user_question tool with specific parameters. Let me do exactly that.":
+- button "Think 101 characters":
   - img
   - img
-  - text: Think The user wants me to use the ask_user_question tool with specific parameters. Let me do exactly that.
+  - text: Think 101 characters
 - button "Ask question cancelled" [expanded]:
   - img
   - text: Ask question cancelled

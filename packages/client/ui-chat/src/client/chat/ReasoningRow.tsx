@@ -2,32 +2,24 @@
 import { useState } from 'react'
 import { DisclosureRow, IconThinkOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
+import { formatExactCount } from './token-format.ts'
 import a11yCss from './accessibility.module.css'
 import css from './ReasoningRow.module.css'
 
-function firstLine(text: string): string {
-  const newline = text.indexOf('\n')
-  return newline === -1 ? text : text.slice(0, newline)
-}
-
-function latestLine(text: string): string {
-  const visible = text.trimEnd()
-  const newline = visible.lastIndexOf('\n')
-  return newline === -1 ? visible : visible.slice(newline + 1)
-}
-
 /**
  * Render one assistant reasoning block as the Think disclosure row. The
- * collapsed summary omits double-asterisk markers; expanded content preserves
- * the complete text.
+ * collapsed summary carries the reasoning character count; expanded content
+ * preserves the complete text.
  * @param props.text - complete or streaming reasoning text.
  * @param props.running - whether this block is the streaming tail.
- * @param props.t - conversation locale seat for the running status.
+ * @param props.t - conversation locale seat for the collapsed count and the running status.
  * @returns the reasoning disclosure.
  */
 export function ReasoningRow({ text, running, t }: { text: string; running: boolean; t: ChatViewSlotProps['t'] }) {
   const [expanded, setExpanded] = useState(false)
-  const summary = (running ? latestLine(text) : firstLine(text)).replaceAll('**', '')
+  // Fork patch (FORK_SURFACE.md): the collapsed row carries the reasoning
+  // character count instead of upstream's first-line / streaming-tail preview.
+  const summary = t('message.think.chars', { count: formatExactCount(text.length, t) })
 
   return (
     <div
@@ -51,7 +43,7 @@ export function ReasoningRow({ text, running, t }: { text: string; running: bool
         collapsedContent={(
           <>
             <span className={css.separator} aria-hidden />
-            <span className={css.summary} data-follow-end={running || undefined}>
+            <span className={css.summary}>
               <span className={css.summaryText}>{summary}</span>
             </span>
           </>

@@ -15,18 +15,28 @@ export function formatTokens(value: number, t: ChatViewSlotProps['t']): string {
 }
 
 /**
- * Exact integer token count with locale-owned digit grouping.
- * @param value - non-negative safe integer token count.
+ * Exact integer with locale-owned digit grouping.
+ * @param value - non-negative safe integer.
  * @param t - Chat locale seat.
  * @returns an unrounded display string.
  */
-export function formatExactTokens(value: number, t: ChatViewSlotProps['t']): string {
+export function formatExactCount(value: number, t: ChatViewSlotProps['t']): string {
   const digits = String(value)
   const groups: string[] = []
   for (let end = digits.length; end > 0; end -= 3) {
     groups.unshift(digits.slice(Math.max(0, end - 3), end))
   }
   return groups.join(t('number.groupSeparator'))
+}
+
+/**
+ * Exact token count, grouped by the shared exact-integer rule.
+ * @param value - non-negative safe integer token count.
+ * @param t - Chat locale seat.
+ * @returns an unrounded display string.
+ */
+export function formatExactTokens(value: number, t: ChatViewSlotProps['t']): string {
+  return formatExactCount(value, t)
 }
 
 /** Round a cache-read ratio to exact percentage units, with positive ties rounded up. */

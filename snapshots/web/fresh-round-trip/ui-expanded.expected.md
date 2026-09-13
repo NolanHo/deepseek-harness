@@ -24,18 +24,18 @@
   - img
   - img
   - text: Context injection @deepseek-ai/dsh-system-prompt
-- button "Think The user wants me to run a simple bash command and reply with \"DONE\".":
+- button "Think 69 characters":
   - img
   - img
-  - text: Think The user wants me to run a simple bash command and reply with "DONE".
+  - text: Think 69 characters
 - button "Bash Echo the test string":
   - img
   - img
   - text: Bash Echo the test string
-- button "Think The command executed successfully and output \"WEB_E2E_OK\". I just need to reply with \"DONE\".":
+- button "Think 92 characters":
   - img
   - img
-  - text: Think The command executed successfully and output "WEB_E2E_OK". I just need to reply with "DONE".
+  - text: Think 92 characters
 - paragraph: DONE
 - button "Copy":
   - img
