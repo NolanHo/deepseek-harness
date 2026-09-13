@@ -648,4 +648,44 @@ describe('sessions.prompt in-place rewrite', () => {
     expect(after).toEqual(before)
     expect(harness.ctx.agents.get(sessionId)).toBe(agent)
   })
+
+  it('rebuilds the live Agent without announcing a Session removal', async () => {
+    const harness = await rewriteHarness('reply text')
+    const sessionId = sid('session-rewrite-quiet')
+    await harness.seedSession(sessionId, seedTurn(0, 1, 'first prompt'))
+    const removals: SessionId[] = []
+    harness.ctx.on('api-session/removed', (removed) => { removals.push(removed) })
+    // The rewrite tears down a LIVE Agent, so one complete turn must run first;
+    // its teardown is the announcement the clients must never see.
+    const adopted = await harness.remote.prompt({
+      sessionId,
+      mode: 'queue',
+      content: editedPrompt('second prompt'),
+      requestId: 'quiet-admit-1' as SessionRequestId,
+    })
+    expect(adopted.ok).toBe(true)
+    const firstAgent = harness.ctx.agents.get(sessionId)
+    if (firstAgent === undefined) throw new Error('prompt did not resume the agent')
+    await firstAgent.whenIdle()
+    await harness.ctx.sessionPersistence.flush()
+    const armed = (await harness.stored(sessionId)).events.filter(event => event.type === 'user/message').at(-1)
+    if (armed?.type !== 'user/message') throw new Error('the seeded turn left no user message to arm')
+    expect(removals).toEqual([])
+
+    const response = await harness.remote.prompt({
+      sessionId,
+      mode: 'queue',
+      rewriteFrom: Number(armed.seq),
+      content: editedPrompt('edited prompt'),
+      requestId: 'quiet-admit-2' as SessionRequestId,
+    })
+
+    expect(response.ok).toBe(true)
+    if (!response.ok) throw new Error(`rewrite prompt failed: ${JSON.stringify(response.error)}`)
+    expect(response.value).toEqual({ accepted: true, rewrote: true })
+    // A client that never saw a removal keeps the row, the selection, and the
+    // conversation: the rebuilt Agent is live under the same Session id.
+    expect(removals).toEqual([])
+    expect(harness.ctx.agents.get(sessionId)).toBeDefined()
+  })
 })

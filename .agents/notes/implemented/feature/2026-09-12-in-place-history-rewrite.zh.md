@@ -21,6 +21,7 @@ Status: implemented
 - **客户端**：`ClientSession.prompt` 把 `rewriteFrom` 放上 wire 请求，在 `rewrote === true` 时先重建再结算；follow 流会静默丢弃不高于自身游标的事件，因此显式 `resync()` 是唯一可信的重建路径。
 - **Inbox 中和**：`planInboxRepair` 按与 inbox 投影完全相同的语义折叠保留前缀的 splice，找到武装消息的 pending 下标，返回一条带 `outcome: 'canceled'` 的移除 splice；重写通过 `SessionHandle.truncate` 的 `append` 选项把它落在切点——截断与该批次在同一事务内提交，因为把中和留给第二次 append 会在崩溃后暴露一段没有被中和的短日志。被替换文本本身仍留在保留下来的 insert 里（连续截断删不掉中间事件），但它已被中和：没有 pending 项、没有 `user/message`、不会被重放。
 - **投影缓存**：重写在截断后调用 `SessionProjectionCache.discard(id)`（为没有日志可校验的零 I/O 列表读做尽力失效），而种子读（`hydratePrepared`、`coldSnapshot`）会把已存行与它将要折叠进的 durable prefix 对照校验。水位在该 prefix 之上的行是从当前日志已不存在的事件折叠出来的，不能作为种子：种下它会把已删除的消息恢复成排队项并重放成新轮次（本条规则落地前，第二实例上实测复现）。
+- **客户端可见生命周期**：拆除 Agent 会把它的 session 从 store 中移除，控制器将其中继为 `api-session/removed`；移除 hold（`src/fork/rewrite-hold.ts`）在 dispose 到 rebuild 的整段窗口内推迟该公告，于是客户端保留列表行、selection 与已渲染的对话，而不是退回新会话画面（[原因](../bug-fix/2026-09-13-rewrite-removal-hold.zh.md)）。
 
 ## Alternatives considered
 

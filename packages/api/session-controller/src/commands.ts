@@ -38,6 +38,7 @@ import {
 } from './agent.ts'
 import { planInboxRepair, resolveRewriteCut } from './fork/rewrite-history.ts'
 import type { RewriteInboxRepair } from './fork/rewrite-history.ts'
+import { RewriteRemovalHold } from './fork/rewrite-hold.ts'
 import type {
   RewriteUnavailableReason,
   SessionAttachmentRequest,
@@ -84,7 +85,25 @@ export class SessionCommandController {
     private readonly ctx: Context,
     private readonly agents: ApiSessionAgentController,
     private readonly defaultCwd: string,
-  ) {}
+  ) {
+    this.removalHold = new RewriteRemovalHold({
+      isLive: sessionId => ctx.agents.get(sessionId) !== undefined,
+      // The controller relay is the announcer; a hold that ends without the
+      // rebuild lands here so clients still learn the Session is gone.
+      announceRemoved: (sessionId) => { ctx.emit('api-session/removed', sessionId) },
+    })
+  }
+
+  private readonly removalHold: RewriteRemovalHold
+
+  /**
+   * Take one `session/disposed` announcement into an in-flight rewrite's hold.
+   * @param sessionId - disposed Session identity.
+   * @returns true when the caller must not announce the removal itself.
+   */
+  deferRemoval(sessionId: SessionId): boolean {
+    return this.removalHold.defer(sessionId)
+  }
 
   /**
    * Create or idempotently adopt one ordinary Session.
@@ -337,10 +356,23 @@ export class SessionCommandController {
     if (alreadyLive !== undefined && hasPromptRequest(alreadyLive, request.requestId)) {
       return { accepted: true }
     }
-    const rewrote = request.rewriteFrom === undefined
-      ? false
-      : await this.rewriteHistory(request, request.rewriteFrom)
-    const agent = await this.resolveAgent(request.sessionId)
+    // The rewrite disposes this Session's Agent only to rebuild it at the same
+    // id inside this request. Holding the removal announcement keeps every
+    // client's list row and selection intact across that window; a rewrite that
+    // ends without the rebuild releases it into the real removal.
+    const releaseRemoval = request.rewriteFrom === undefined
+      ? undefined
+      : this.removalHold.hold(request.sessionId)
+    let rewrote = false
+    let agent: Agent
+    try {
+      rewrote = request.rewriteFrom === undefined
+        ? false
+        : await this.rewriteHistory(request, request.rewriteFrom)
+      agent = await this.resolveAgent(request.sessionId)
+    } finally {
+      releaseRemoval?.()
+    }
     if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
     const selection = this.agents.selectionFor(agent).current
     if (!routeServed(this.ctx, selection.provider)) {

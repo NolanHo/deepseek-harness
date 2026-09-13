@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-12-in-place-history-rewrite.md
-2026-09-12-in-place-history-rewrite.md: b5a061aa200b7f8355094df4e814b683fcb1e56a
-2026-09-12-in-place-history-rewrite.zh.md: 2c148e644b317628d38eaf26e1c50eba8c2c5e10
+2026-09-12-in-place-history-rewrite.md: 8590f961bedc6156f0e6c4ecd3076ab0f3e44f3b
+2026-09-12-in-place-history-rewrite.zh.md: 719d9d3fe6e9ffc96a84720476a7eb91fe62c0e5

@@ -153,6 +153,10 @@ export class SessionController extends TypertRemoteService {
       ctx.emit('api-session/added', this.listState.summaryFor(session))
     })
     ctx.on('session/disposed', (session) => {
+      // An in-place rewrite disposes this Session's Agent only to rebuild it at
+      // the same id inside the same request; the rewrite's hold keeps that
+      // internal teardown from reading as a Session removal in every client.
+      if (this.commands.deferRemoval(session.id)) return
       ctx.emit('api-session/removed', session.id)
     })
     ctx.on('agent/status', ({ agent, status }) => {
