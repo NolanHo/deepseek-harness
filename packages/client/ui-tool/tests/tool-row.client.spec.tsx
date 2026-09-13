@@ -280,6 +280,45 @@ describe('ToolRow', () => {
     expect(view.queryByText(/"a": 1/)).toBeNull()
   })
 
+  it('a custom body makes the row expandable and takes the argument section’s place', () => {
+    const withArgs = render(<ToolRow {...rowProps} />)
+    fireEvent.click(withArgs.getByRole('button'))
+    expect(withArgs.getByText('输入')).toBeTruthy()
+    withArgs.unmount()
+
+    // No argument body and no output: the custom content alone expands the row.
+    const view = render(
+      <ToolRow {...rowProps} bodyRaw={null} bodyContent={<div data-testid="live-body">live panel</div>} />,
+    )
+    const row = view.getByRole('button', { name: /Bash/ })
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    expect(view.queryByTestId('live-body')).toBeNull()
+
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-expanded')).toBe('true')
+    expect(view.getByTestId('live-body')).toBeTruthy()
+    // The default INPUT section is replaced outright, card included.
+    expect(view.queryByText('输入')).toBeNull()
+    expect(view.container.querySelector('[class*="ioCard"]')).toBeNull()
+  })
+
+  it('a custom body leaves the arguments unformatted', () => {
+    const view = render(<ToolRow {...rowProps} bodyContent={<div>live panel</div>} />)
+    fireEvent.click(view.getByRole('button', { name: /Bash/ }))
+    expect(view.queryByText(/"a": 1/)).toBeNull()
+  })
+
+  it('a custom body keeps the result’s Output section beside it', () => {
+    const view = render(
+      <ToolRow {...rowProps} bodyRaw={null} output="result text" bodyContent={<div>live panel</div>} />,
+    )
+    fireEvent.click(view.getByRole('button', { name: /Bash/ }))
+    expect(view.getByText('live panel')).toBeTruthy()
+    expect(view.queryByText('输入')).toBeNull()
+    expect(view.getByText('输出')).toBeTruthy()
+    expect(view.getByText('result text')).toBeTruthy()
+  })
+
   it('running keeps the icon (row sweep carries the signal); error swaps in a StateDot', () => {
     const runningView = render(<ToolRow {...rowProps} state="running" />)
     expect(runningView.queryByTestId('tool-icon')).not.toBeNull()
@@ -493,5 +532,23 @@ describe('GenericToolCard', () => {
     const bashView = render(<GenericToolCard {...bash} />)
     fireEvent.click(bashView.getByText('List files'))
     expect(bash.openFile).not.toHaveBeenCalled()
+  })
+
+  it('forwards a custom expanded body in place of the argument section', () => {
+    const settled = result({
+      call: { name: 'todo_write', argsRaw: '{"note":"x"}' },
+      content: [{ type: 'text', text: 'done' }],
+    })
+    const view = render(
+      <GenericToolCard
+        {...props('todo_write', settled)}
+        bodyContent={<div data-testid="live-body">live panel</div>}
+      />,
+    )
+    fireEvent.click(view.getByRole('button', { name: /工具调用/ }))
+    expect(view.getByTestId('live-body')).toBeTruthy()
+    expect(view.queryByText('输入')).toBeNull()
+    expect(view.getByText('输出')).toBeTruthy()
+    expect(view.getByText('done')).toBeTruthy()
   })
 })

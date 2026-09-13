@@ -43,6 +43,14 @@ export interface ToolRowProps {
   summarySuffix?: string | null | undefined
   /** Original argument JSON formatted only while the row is expanded. */
   bodyRaw?: string | null | undefined
+  /**
+   * Custom expanded-body content. When present it replaces the default
+   * "Input" (arguments) section and makes the row expandable on its own; the
+   * Output section and every card are unaffected. The value is a block-level
+   * ReactNode rendered as the body's first child, outside the Input/Output
+   * card, and the caller owns its layout.
+   */
+  bodyContent?: ReactNode
   /** Flattened result text for the expanded Output section; null/absent = no output section. */
   output?: string | null | undefined
   /** Ask-user transcript card; card fields are mutually exclusive and replace text sections. */
@@ -117,6 +125,7 @@ export function ToolRow({
   summary,
   summarySuffix,
   bodyRaw,
+  bodyContent,
   output,
   askQuestion,
   errorSummary,
@@ -153,11 +162,12 @@ export function ToolRow({
   const askQuestionBody = askQuestion ?? null
   const outputText = output ?? null
   const card = askQuestionBody ?? terminalBody ?? diffBody ?? readBody ?? imageBody ?? searchBody ?? webBody
-  const expandable = bodyRaw != null || outputText !== null || card !== null
+  const hasBodyContent = bodyContent != null
+  const expandable = hasBodyContent || bodyRaw != null || outputText !== null || card !== null
   const open = expanded && expandable
   const bodyText = useMemo(
-    () => open && card === null && bodyRaw != null ? formatToolBody(variant, bodyRaw) : null,
-    [bodyRaw, card, open, variant],
+    () => open && !hasBodyContent && card === null && bodyRaw != null ? formatToolBody(variant, bodyRaw) : null,
+    [bodyRaw, card, hasBodyContent, open, variant],
   )
   const status = stateStatus(state, t)
   // A failure must replace, not supplement, the normal summary.
@@ -192,6 +202,9 @@ export function ToolRow({
   // The code variant's program renders through CodeBlock (shiki), so only its
   // output joins the IN/OUT card; every other variant's input does too.
   const cardBody = variant === 'code' ? null : bodyText
+  // A caller-supplied body takes the arguments section's place; a result's
+  // OUTPUT section still renders beside it.
+  const inputBody = hasBodyContent ? null : cardBody
   return (
     <div className={css.root} data-variant={variant} data-tool={toolName} data-state={state}>
       {status !== null && <span className={css.visuallyHidden}>{status}</span>}
@@ -235,6 +248,7 @@ export function ToolRow({
         )}
       >
         <div className={css.bodyWrap}>
+          {hasBodyContent ? bodyContent : null}
           {askQuestionBody !== null
             ? <AskQuestionCard card={askQuestionBody} />
             : terminalBody !== null
@@ -295,15 +309,15 @@ export function ToolRow({
                                 <CodeBlock code={bodyText} lang="typescript" copyLabel={t('copy')} copiedLabel={t('copied')} className={css.codeBody} />
                               </div>
                             )}
-                            {(cardBody !== null || outputText !== null) && (
+                            {(inputBody !== null || outputText !== null) && (
                               <div className={css.ioCard}>
-                                {cardBody !== null && (
+                                {inputBody !== null && (
                                   <div className={css.ioSection}>
                                     <span className={css.ioLabel}>{t('row.input')}</span>
-                                    <span className={css.ioText}>{cardBody}</span>
+                                    <span className={css.ioText}>{inputBody}</span>
                                   </div>
                                 )}
-                                {cardBody !== null && outputText !== null && (
+                                {inputBody !== null && outputText !== null && (
                                   <span className={css.ioDivider} aria-hidden />
                                 )}
                                 {outputText !== null && (

@@ -25,9 +25,18 @@ const VARIANT_ICONS: Record<ToolRowVariant, ReactNode> = {
 /** Card props: the owner payload plus the render site's locale seat (plain prop). */
 export interface GenericToolCardProps extends ToolCallOwnerProps {
   t: ToolTreeProps['t']
+  /**
+   * Custom expanded-body content forwarded to `ToolRow.bodyContent`: it
+   * replaces the default "Input" (arguments) section and makes the row
+   * expandable on its own, while the Output section and every card render
+   * unchanged.
+   */
+  bodyContent?: ReactNode
 }
 
-export function GenericToolCard({ toolName, block, cwd, home, openFile, inspect, t }: GenericToolCardProps) {
+export function GenericToolCard({
+  toolName, block, cwd, home, openFile, inspect, t, bodyContent,
+}: GenericToolCardProps) {
   const model = toolRowModel(toolName, block, cwd, home)
   const terminal = terminalCardModel(block, cwd)
   const read = readCardModel(block, cwd, home)
@@ -52,6 +61,7 @@ export function GenericToolCard({ toolName, block, cwd, home, openFile, inspect,
       // args interaction. A card is not an args body: a read/write/edit row is
       // single-file AND carries a card, so the card expands under the path link.
       bodyRaw={singleFile ? null : model.bodyRaw}
+      bodyContent={bodyContent}
       output={model.output}
       errorSummary={model.errorSummary}
       terminal={terminal}
