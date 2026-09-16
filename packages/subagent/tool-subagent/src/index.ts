@@ -35,6 +35,13 @@ import {
 import type { DelegationModelRequest, ModelSelectionPolicy } from './model-selection.ts'
 import { registerListSubagentModels } from './list-models.ts'
 import type {} from './model-selection-settings.ts'
+// Fork patch (FORK_SURFACE.md): per-instance model-alias faces and per-child
+// workspace/skill scope. Both resolvers are inert while their config keys are
+// omitted, so the upstream face and route resolution stay byte-for-byte.
+import { aliasChildAgentOptions, resolveAliasRoute, resolveModelAliasFace } from './fork/model-alias.ts'
+import type { AliasRouteConfig } from './fork/model-alias.ts'
+import { resolveDelegationScope } from './fork/delegation-scope.ts'
+import { allowedConfigKeys, assertKnownConfigKeys } from './fork/config-surface.ts'
 import {
   recordSubagentModelSelection,
   subagentModelSelectionProjectionDefinition,
@@ -100,6 +107,43 @@ export interface Config {
    * budget belongs to the child runtime or its own deployment.
    */
   maxDepth?: number | 'provider-managed'
+  // --- Fork patch (FORK_SURFACE.md) ---
+  /**
+   * Model-alias table for this tool instance (default: omit, keeping upstream's
+   * face). When present it REPLACES the model-facing `provider`/`model`/
+   * `reasoning_effort` parameters with one optional `model` alias parameter, and
+   * the table itself is this instance's whole child-model authorization: the
+   * session-level `subagent-model-selection` policy does not apply to an alias
+   * instance, so `models` and `modelSelectionSettings: true` are mutually
+   * exclusive (mount fails loud on both). Each alias resolves to an exact
+   * `{provider, model, reasoningEffort}` child route that overrides the route
+   * fields of `agentOptions` and is preflighted against the live adapter before
+   * the child starts. At least one entry; `alias`/`provider`/`model` are non-empty
+   * strings, aliases are unique, and `provider`/`model` ids never reach the model
+   * surface.
+   */
+  models?: AliasRouteConfig[]
+  /** Default alias when a call omits `model` (default: the first entry); must be in `models`. */
+  defaultModel?: string
+  /**
+   * Child working directory: an existing absolute directory at load (a relative
+   * or missing path fails mount). In-process providers stamp it over the
+   * parent's workspace in the child session header; out-of-process providers
+   * ignore it.
+   */
+  cwd?: string
+  /**
+   * Per-child skill scope: exactly one of `allow` or `deny`, each an array of
+   * skill names (an empty `allow` restricts every skill away). Restricted-away
+   * names read as nonexistent in the child's catalog. Requires the skill
+   * registry in the child's composition.
+   */
+  skillFilter?: {
+    /** Skill names the child keeps; everything else is restricted away. */
+    allow?: string[]
+    /** Skill names restricted away from the child. */
+    deny?: string[]
+  }
 }
 
 export const Config: z<Config> = z.object({
@@ -127,7 +171,33 @@ export const Config: z<Config> = z.object({
     deny: z.array(z.string()).default(undefined as unknown as string[]),
   }).default(undefined as unknown as { allow: string[]; deny: string[] }),
   maxDepth: z.union([z.natural().max(Number.MAX_SAFE_INTEGER), z.const('provider-managed' as const)]).default(3),
+  // Fork patch (FORK_SURFACE.md): every fork key preserves omission. Schemastery
+  // would otherwise materialize `models: []` — read as "aliases configured, none
+  // allowed" — and an empty `skillFilter` object that names no direction.
+  models: z.array(z.object({
+    alias: z.string().required(),
+    provider: z.string().required(),
+    model: z.string().required(),
+    reasoningEffort: z.string(),
+  })).default(undefined as unknown as {
+    alias: string
+    provider: string
+    model: string
+    reasoningEffort: string
+  }[]),
+  defaultModel: z.string(),
+  cwd: z.string(),
+  skillFilter: z.object({
+    allow: z.array(z.string()).default(undefined as unknown as string[]),
+    deny: z.array(z.string()).default(undefined as unknown as string[]),
+  }).default(undefined as unknown as { allow: string[]; deny: string[] }),
 })
+
+// Fork patch (FORK_SURFACE.md): the loader accepts undeclared top-level keys
+// (Schemastery's object resolve is non-strict), so the accepted surface is
+// derived from the schema's own declared-key map right here — an upstream key
+// added to `Config` above is accepted with no second list to maintain.
+const configKeys = allowedConfigKeys(Config.dict)
 
 /** Render text blocks from the canonical JSON block array without trusting arbitrary values. */
 function outputValueText(values: JsonValue[]): string {
@@ -311,6 +381,24 @@ function resolveDelegationRun(
  * @param session - unpublished Session supplied by a direct Agent setup; omit for a standing composition.
  */
 export function apply(ctx: Context, config: Config, session?: Session): void {
+  // Fork patch (FORK_SURFACE.md): reject an undeclared top-level key before
+  // anything reads the config. A misspelled fork key (`modelz`, `defaltModel`)
+  // would otherwise mount the upstream face silently — no `model` parameter, no
+  // fixed child route, children inheriting the parent's route.
+  assertKnownConfigKeys(config, configKeys)
+  // Fork patch (FORK_SURFACE.md): the alias table and the per-child scope are
+  // resolved and validated here, so a misconfiguration fails at plugin load
+  // instead of at the first delegation.
+  const aliasFace = resolveModelAliasFace(config)
+  const delegationScope = resolveDelegationScope(config)
+  if (aliasFace !== undefined && config.modelSelectionSettings === true) {
+    // Two model-authorization paths with different semantics: the alias table is
+    // this instance's own face, the setting is a per-Session route policy.
+    throw new Error(
+      'tool-subagent: `models` and `modelSelectionSettings: true` both authorize child model routes '
+      + '— remove one (`models` is this instance\'s own alias face)',
+    )
+  }
   // Direct apply() bypasses Schemastery's numeric constraints. A direct-apply
   // omission stays capless (the schema default only runs through the loader).
   if (config.maxDepth !== 'provider-managed') assertSubagentMaxDepth(config.maxDepth)
@@ -335,6 +423,14 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
     if (config.agentOptions !== undefined && !subagentProvider.capabilities.agentOptions) {
       throw new Error(
         `tool-subagent: provider "${subagentProvider.name}" does not support child agentOptions`,
+      )
+    }
+    // Fork patch (FORK_SURFACE.md): the alias whitelist always sets a child
+    // route, so a provider without agentOptions cannot serve this instance.
+    if (aliasFace !== undefined && !subagentProvider.capabilities.agentOptions) {
+      throw new Error(
+        `tool-subagent: provider "${subagentProvider.name}" does not support child agentOptions `
+        + '(the `models` alias whitelist always sets a child route)',
       )
     }
     if (modelSelectionCapable && !subagentProvider.capabilities.agentOptions) {
@@ -370,12 +466,16 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
       const selectionDescription = providerRouteDefaults !== undefined
         ? ' Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and this provider\'s route defaults. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model\'s default effort.'
         : ' Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and inherit compatible missing values from the parent Agent. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model\'s default effort.'
-      const choiceDescription = !modelSelectionEnabled
-        ? ''
-        : selectionDescription
-          + (subagentProvider.inheritsParentContext
-            ? ' Changing the route can prevent provider-side reuse of the inherited conversation prefix.'
-            : '')
+      const choiceDescription = aliasFace !== undefined
+        // Fork patch (FORK_SURFACE.md): an alias instance advertises its own
+        // whitelist instead of upstream's session-authorized route fields.
+        ? aliasFace.descriptionSuffix
+        : !modelSelectionEnabled
+          ? ''
+          : selectionDescription
+            + (subagentProvider.inheritsParentContext
+              ? ' Changing the route can prevent provider-side reuse of the inherited conversation prefix.'
+              : '')
       const disposeTool = runtimeCtx.tools.register(defineTool({
         name: toolName,
         description: wording.description + (backgroundEnabled
@@ -397,7 +497,14 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
             required: true,
             description: wording.promptDescription,
           },
-          ...modelSelectionEnabled ? {
+          ...aliasFace !== undefined ? {
+            // Fork patch (FORK_SURFACE.md): one alias parameter replaces
+            // upstream's provider/model/reasoning_effort face.
+            model: {
+              type: 'string' as const,
+              description: aliasFace.parameterDescription,
+            },
+          } : modelSelectionEnabled ? {
             provider: {
               type: 'string' as const,
               description: providerRouteDefaults !== undefined
@@ -476,18 +583,30 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
           }
 
           const modelRequest = args as DelegationModelRequest
+          // Fork patch (FORK_SURFACE.md): an alias instance resolves the
+          // model-facing `model` value into one exact route here; the
+          // session-level selection policy plays no part, because this
+          // instance's `models` table IS its authorization face. The parameter
+          // set is conditional, so the alias field is read through its own cast
+          // like the route fields above.
+          const aliasRoute = aliasFace === undefined
+            ? undefined
+            : resolveAliasRoute(aliasFace, (args as { readonly model?: string }).model)
           const parentOptions = parentAgentOptionsForDelegation(parent)
-          const requiresRoutePreflight = hasDelegationModelRequest(modelRequest)
+          const requiresRoutePreflight = aliasRoute !== undefined
+            || hasDelegationModelRequest(modelRequest)
             || hasConfiguredLlmSelection(config.agentOptions)
           const configuredChildAgentOptions = requiresRoutePreflight && providerRouteDefaults !== undefined
             ? { ...providerRouteDefaults, ...config.agentOptions }
             : config.agentOptions
-          const requestedChildAgentOptions = requestedAgentOptions(
-            parentOptions,
-            configuredChildAgentOptions,
-            modelRequest,
-            modelSelectionEnabled,
-          )
+          const requestedChildAgentOptions = aliasRoute === undefined
+            ? requestedAgentOptions(
+              parentOptions,
+              configuredChildAgentOptions,
+              modelRequest,
+              modelSelectionEnabled,
+            )
+            : aliasChildAgentOptions(configuredChildAgentOptions, aliasRoute)
           assertAllowedModelSelection(
             modelSelectionPolicy,
             parentOptions,
@@ -520,6 +639,11 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
             ...config.persona !== undefined ? { persona: config.persona } : {},
             ...config.toolFilter !== undefined ? { toolFilter: config.toolFilter } : {},
             ...maxDepth !== undefined ? { maxDepth } : {},
+            // Fork patch (FORK_SURFACE.md): per-child workspace and skill scope.
+            // One request object feeds all three start paths below (foreground,
+            // one-shot background, continuable), so the scope rides each of them.
+            ...delegationScope.cwd === undefined ? {} : { cwd: delegationScope.cwd },
+            ...delegationScope.skillFilter === undefined ? {} : { skillFilter: delegationScope.skillFilter },
           }
 
           const runSpec = resolveDelegationRun(args, { backgroundEnabled, continuable })
