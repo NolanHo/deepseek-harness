@@ -3,6 +3,11 @@
  * `cwd` overrides the inherited parent workspace in the child session header,
  * and request `skillFilter` reaches the skill registry's scoped restriction
  * in the child's creation window.
+ *
+ * Fork patch (FORK_SURFACE.md): this spec covers the driver's pair of marked
+ * call sites (`request.cwd` into `childSessionMeta`, `request.skillFilter` into
+ * `applyChildComposition`); it fails when either wiring is dropped, which is
+ * how the two were once lost silently.
  */
 
 import { afterEach, describe, expect, it } from 'vitest'

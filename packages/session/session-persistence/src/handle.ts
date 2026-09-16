@@ -42,6 +42,8 @@ export interface SessionHandleFlushOptions {
   readonly signal?: AbortSignal
 }
 
+// Fork patch (FORK_SURFACE.md): the optional committed-log rewrite capability the
+// fork's in-place history rewrite consumes; upstream's shipped JSONL backend omits it.
 /** Options for {@link SessionHandle.truncate}. */
 export interface SessionHandleTruncateOptions {
   /** Optional cancellation observed before the rewrite starts. */

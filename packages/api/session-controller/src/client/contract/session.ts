@@ -59,6 +59,8 @@ export interface ProjectionsFace {
   faceOf(key: string): ObservableSnapshot<unknown>
 }
 
+// Fork patch (FORK_SURFACE.md): the client-side carrier of the in-place rewrite cut;
+// `ClientSession.prompt` rebuilds the window when the Host answers `rewrote === true`.
 /** Optional in-place history rewrite applied to one prompt's admission. */
 export interface SessionPromptOptions {
   /**

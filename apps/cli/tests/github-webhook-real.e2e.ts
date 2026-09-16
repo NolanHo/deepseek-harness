@@ -412,7 +412,8 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('GitHub webhook through the real 
       const admitted = await eventually(
         child,
         observation.text,
-        // Fork (FORK_CHANGES.md 2026-09-05): the `permission/preset read-only`
+        // Fork patch (FORK_SURFACE.md): fork decision 2026-09-05, recorded in
+        // FORK_CHANGES.md — the `permission/preset read-only`
         // event this test used to pin is produced by permission-presets,
         // which the fork disables with the sandbox capability; the fork keeps
         // the provenance and title checks. Restore the conjunct on re-enable.

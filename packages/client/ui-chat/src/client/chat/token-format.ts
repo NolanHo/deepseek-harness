@@ -14,6 +14,8 @@ export function formatTokens(value: number, t: ChatViewSlotProps['t']): string {
   return t('number.million', { value: scaled(value / 1_000_000) })
 }
 
+// Fork patch (FORK_SURFACE.md): `formatExactCount` owns the exact-integer grouping the
+// fork's collapsed Think row needs; `formatExactTokens` delegates to it.
 /**
  * Exact integer with locale-owned digit grouping.
  * @param value - non-negative safe integer.

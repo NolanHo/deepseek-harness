@@ -1,3 +1,5 @@
+// Fork-owned rewrite-removal hold (see FORK_SURFACE.md): the in-place rewrite's
+// Agent teardown would otherwise publish `api-session/removed` mid-rewrite.
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
 /**

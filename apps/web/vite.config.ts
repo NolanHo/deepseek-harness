@@ -9,6 +9,8 @@ const src = (rel: string): string => fileURLToPath(new URL(rel, import.meta.url)
 const STANDALONE_ERROR = 'apps/web is not a standalone application: bare Vite cannot inject window.__DSH_BOOT__. '
   + 'From a repository checkout, run `pnpm dsh web`; an installed package uses `dsh web`. '
   + 'For client-plugin HMR, run `pnpm dsh web` together with `pnpm run dev:web`.'
+// Fork patch (FORK_SURFACE.md): the fork's generic client brand is plain `DSH`
+// (upstream: `DSH Local Build`); `DSH_CLIENT_TITLE` still overrides the build default.
 const DEFAULT_CLIENT_TITLE = 'DSH'
 
 /** Escape build-time text before placing it in the HTML title element. */

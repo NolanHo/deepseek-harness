@@ -233,6 +233,8 @@ export class ConversationController extends Service implements IConversation {
     attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal?: AbortSignal,
+    // Fork patch (FORK_SURFACE.md): null/omitted sends a plain append; the rewrite
+    // option is the fork's in-place history rewrite carrier.
     rewriteFrom?: number | null,
   ): Promise<SubmitOutcome> {
     const attachments = this.resolveDraftAttachments(attachmentIds)
@@ -292,6 +294,8 @@ export class ConversationController extends Service implements IConversation {
       submission.abandon()
       throw error
     }
+    // Fork patch (FORK_SURFACE.md): the armed rewrite becomes the prompt's `rewriteFrom`
+    // option, so the Host truncates before admitting this submission.
     const rewriteOptions = rewriteFrom === undefined || rewriteFrom === null ? undefined : { rewriteFrom }
     const result = await session.prompt(
       content, mode, signal, submission.requestId, ...(rewriteOptions === undefined ? [] : [rewriteOptions]),

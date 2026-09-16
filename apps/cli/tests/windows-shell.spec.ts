@@ -63,7 +63,8 @@ describe('the shipped shell composition (real bundle layers)', () => {
     // their own rows instead.
     expect(byId.get('tool-bash')?.disabled).toBe(true)
     expect(byId.get('tool-pwsh')?.disabled).toBe(true)
-    // Fork decision (FORK_CHANGES.md 2026-09-05): the sandbox rows and the
+    // Fork patch (FORK_SURFACE.md): fork decision 2026-09-05, recorded in
+    // FORK_CHANGES.md — the sandbox rows and the
     // permission switcher are `disabled: true` in the fork composition (the
     // base bundle deploys danger-full-access only; dsh-permission-presets
     // cannot load over the local executor), so the upstream "permission

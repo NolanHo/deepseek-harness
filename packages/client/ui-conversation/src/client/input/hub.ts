@@ -41,6 +41,7 @@ interface ConversationAttachmentFace {
     attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal?: AbortSignal,
+    // Fork patch (FORK_SURFACE.md): the armed rewrite seq rides the session send face.
     rewriteFrom?: number | null,
   ): Promise<SubmitOutcome>
   serializeDraftAttachments(attachmentIds: readonly DraftAttachmentId[]): Promise<DraftAttachmentSerializationResult>
@@ -187,6 +188,8 @@ export class InputHub implements SessionInputResolver {
     rewriteFrom: number | null,
   ): Promise<SubmitOutcome> {
     if (text === '' && attachmentIds.length === 0) return Promise.resolve({ kind: 'success' })
+    // Fork patch (FORK_SURFACE.md): an armed rewrite rides the default sink; the
+    // subagent-addressed continuation branch ignores the option.
     return this.conversation().sendSession(session, text, attachmentIds, mode, signal, rewriteFrom)
   }
 

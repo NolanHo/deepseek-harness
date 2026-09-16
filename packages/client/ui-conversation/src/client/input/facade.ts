@@ -66,6 +66,7 @@ export interface SessionInputDeps {
     attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal: AbortSignal,
+    // Fork patch (FORK_SURFACE.md): the armed rewrite seq threads through the sink face.
     rewriteFrom?: number | null,
   ): Promise<SubmitOutcome>
   /** Command-plane attachment plumbing (the hub owns the conversation face and the copy). */
@@ -122,6 +123,10 @@ interface DetachedDraft {
   /** Armed in-place rewrite seq captured at detach (null = plain append). */
   readonly rewriteFrom: number | null
 }
+
+// Fork patch (FORK_SURFACE.md): the facade's rewrite state — `InputState.rewriteFrom` is
+// published beside the draft, armed through `setRewriteFrom`, consumed by the default
+// send, and restored with the draft on a failed send.
 
 /**
  * The per-session input facade: scoped-event application verbs +

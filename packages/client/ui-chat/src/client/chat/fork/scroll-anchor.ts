@@ -1,3 +1,6 @@
+// Fork-owned reflow-stable scroll anchor (see FORK_SURFACE.md): ChatView's
+// marked injections arm and re-hold the reader row this module records.
+
 /**
  * Reflow-stable reader position for non-prepend height changes. The paging
  * anchor (ChatView's PagingAnchor) restores the reader's row across prepends;

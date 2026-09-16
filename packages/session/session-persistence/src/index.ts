@@ -126,6 +126,10 @@ declare module '@deepseek-ai/cordis' {
  * `append` persists best-effort; `flush` — per handle or service-wide — is
  * the durability barrier.
  *
+ * Fork patch (FORK_SURFACE.md): the paragraph above drops upstream's absolute
+ * never-rewritten claim for this one truncation path (`append` still never
+ * rewrites committed events).
+ *
  * Visibility: a created session is observable through `stat`/`list`/`open`
  * in this process from the moment `create` resolves, even while a backend
  * defers physical materialization (a pure optimization); other processes see

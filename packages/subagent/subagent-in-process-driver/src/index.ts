@@ -124,6 +124,8 @@ export async function startInProcessRun(
     applyChildComposition(childCtx, parent, {
       persona: request.persona,
       toolFilter: request.toolFilter,
+      // Fork patch (FORK_SURFACE.md): the request's per-child skill scope reaches the
+      // fork-owned composition; dropped once at the 0.1.5-rc.2 sync, so it stays marked.
       skillFilter: request.skillFilter,
     })
     if (request.outputSchema !== undefined) {
@@ -135,6 +137,8 @@ export async function startInProcessRun(
   const handle = await parent.ctx.agents.create({
     sessionId: childId,
     parentAgent: parent,
+    // Fork patch (FORK_SURFACE.md): the request's per-child cwd overrides the inherited
+    // parent workspace in the child session header; the second half of the dropped pair.
     meta: childSessionMeta(parent, childDepth, seed !== undefined, request.cwd),
     ...seed !== undefined ? { seed } : {},
     ...seed === undefined ? {} : { inheritedEventCount: activationBoundary },

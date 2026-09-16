@@ -1,3 +1,7 @@
+// Fork-owned settings-modal portal (see FORK_SURFACE.md): SettingsRoot's marked
+// injection wraps the panel in this layer so the phone drawer's transform cannot
+// become the modal's containing block.
+
 /**
  * Settings modal mount point. The trigger lives in ui-layout's sidebar, which
  * on phones renders inside the transform-animated mobile drawer; a non-none

@@ -164,6 +164,8 @@ describe('dsh-tool-team', () => {
   })
 
   it('renders an empty Team policy instead of failing the request when membership disappears', async () => {
+    // Fork patch (FORK_SURFACE.md): regression coverage for the fork's
+    // `tryMembership` render in `team:policy` (upstream's section throws here).
     // Delegation depth 2 can admit an agent before its subagent descriptor is
     // visible, so the install probe (`maybeInstall`) reads an implicit Lead and
     // scoped Team registrations land on a worker that is not a member. Every

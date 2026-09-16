@@ -53,3 +53,10 @@ pre-push:
   jobs:
     - name: typecheck
       run: pnpm run typecheck
+
+    # Read-only, under a second, and no globs: it guards the push rather than the
+    # commit, because a fork patch or a reverted marker only reaches origin here.
+    # Register the divergence (or restore the marker) instead of widening
+    # scripts/fork-surface-baseline.txt when it fails.
+    - name: fork surface
+      run: node_modules/.bin/tsx scripts/verify-fork-surface.ts

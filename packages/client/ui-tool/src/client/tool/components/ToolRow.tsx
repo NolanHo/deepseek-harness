@@ -49,6 +49,9 @@ export interface ToolRowProps {
    * Output section and every card are unaffected. The value is a block-level
    * ReactNode rendered as the body's first child, outside the Input/Output
    * card, and the caller owns its layout.
+   *
+   * Fork patch (FORK_SURFACE.md): the `bodyContent` extension the fork's
+   * out-of-tree `dsh-apollo` toolview uses; upstream's row has no such prop.
    */
   bodyContent?: ReactNode
   /** Flattened result text for the expanded Output section; null/absent = no output section. */

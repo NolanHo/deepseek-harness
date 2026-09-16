@@ -26,6 +26,8 @@ type LayoutInfo = {
   /** Last positive frame measurement; window width bootstraps the first render. */
   viewportWidth: number
   narrowExpanded: boolean
+  // Fork patch (FORK_SURFACE.md): the mobile drawer regime's two fields — the frame
+  // owns them for the fork's phone breakpoint (upstream has no phone regime).
   /**
    * Whether the frame is in the mobile drawer regime (viewport below the phone
    * breakpoint) and whether that drawer is open. Mobile is a narrower subset of
@@ -69,6 +71,8 @@ type LayoutActions = {
   setSidebar: (draft: LayoutState, px: number) => void
   toggleSidebar: (draft: LayoutState) => void
   setViewportWidth: (draft: LayoutState, width: number) => void
+  // Fork patch (FORK_SURFACE.md): the drawer's two actions, plus the mobile arm of
+  // `toggleSidebar` below.
   setMobile: (draft: LayoutState, mobile: boolean) => void
   setDrawerOpen: (draft: LayoutState, open: boolean) => void
   setRightbar: (draft: LayoutState, px: number) => void
@@ -121,6 +125,8 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
       // drawer's, and the re-expand override stays untouched.
       toggleSidebar: (d) => {
         d.layoutInfo.rightbarInstant = false
+        // Fork patch (FORK_SURFACE.md): the mobile arm — in the phone drawer regime the
+        // toggle drives the drawer, never the narrow/wide width preference.
         if (d.layoutInfo.mobile) d.layoutInfo.drawerOpen = !d.layoutInfo.drawerOpen
         else if (d.layoutInfo.viewportWidth < SIDEBAR_AUTO_COLLAPSE) d.layoutInfo.narrowExpanded = !d.layoutInfo.narrowExpanded
         else d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? SIDEBAR_DEFAULT : 0

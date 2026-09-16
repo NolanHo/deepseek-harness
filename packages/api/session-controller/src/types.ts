@@ -204,6 +204,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'session/steer-unavailable': { readonly itemId: MessageId }
     'session/title-invalid': { readonly sessionId: SessionId }
     'session/fork-unavailable': { readonly sessionId: SessionId }
+    // Fork patch (FORK_SURFACE.md): the in-place rewrite's own refusal surface.
     'session/rewrite-unavailable': { readonly sessionId: SessionId; readonly reason: RewriteUnavailableReason }
     'session/rewrite-unsupported': { readonly sessionId: SessionId }
     'subagent/not-found': {
@@ -317,6 +318,8 @@ export interface SessionPromptRequest {
   /** At least one non-whitespace text part or attachment. */
   readonly content: readonly PromptContentPart[]
   readonly clientTimeZone?: string
+  // Fork patch (FORK_SURFACE.md): the in-place rewrite's wire fields — the armed cut
+  // on the request, the host's "the log was rewritten" flag on the value.
   /**
    * Durable seq of one `user/message` event this prompt replaces: the Host
    * discards that message's turn and every event after it before admitting

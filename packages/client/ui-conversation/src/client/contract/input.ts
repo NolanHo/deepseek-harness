@@ -350,6 +350,8 @@ export interface InputState {
   readonly occurrences: readonly Occurrence[]
   /** Read-only transient inbox projection from Session control, including pending steering. */
   readonly queue: readonly QueuedMessage[]
+  // Fork patch (FORK_SURFACE.md): the composer input machine's armed in-place rewrite
+  // seq — it rides the default send path and commits/restores with the draft.
   /**
    * Durable seq of the `user/message` event an armed in-place rewrite
    * replaces; `null` when no rewrite is armed. Cleared with the draft when a

@@ -30,6 +30,9 @@ export interface GenericToolCardProps extends ToolCallOwnerProps {
    * replaces the default "Input" (arguments) section and makes the row
    * expandable on its own, while the Output section and every card render
    * unchanged.
+   *
+   * Fork patch (FORK_SURFACE.md): the `bodyContent` forward and the `summary`
+   * override below are the fork's additions for its out-of-tree toolview.
    */
   bodyContent?: ReactNode
   /**

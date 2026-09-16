@@ -1,3 +1,7 @@
+// Fork-owned activity-coalescing module (see FORK_SURFACE.md): ambient
+// `api-session/activity` streams buffer per session instead of rebuilding the
+// list on every event render.
+
 /**
  * Coalesce ambient session-activity events before they reach the list
  * mutation channel. A lone activity applies immediately (zero added

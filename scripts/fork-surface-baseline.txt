@@ -1,0 +1,29 @@
+# Fork surface baseline — frozen findings for scripts/verify-fork-surface.ts.
+#
+# Every line freezes one finding the checker reports today, so the runbook step can
+# gate syncs before the backlog is cleared. Format:
+#
+#   <finding-id>  # <why this finding is allowed to stay>
+#
+# Ids: unregistered:<path> (marked file no inventory row registers),
+#      unmarked:<path>     (tier C row names the file, the file has no marker),
+#      lost:<path>         (tier C row names a path no tracked file matches).
+#
+# `real gap` entries are registration or marker debt: the file carries fork work
+# that FORK_SURFACE.md does not point at, or points at without a marker in the
+# file. `matcher` entries are rows that register the surface by role, package or
+# context instead of by a path the checker recognises — accepted, not debt.
+# Remove an entry once the gap is really closed: a stale entry only warns, it never
+# fails the run. Regenerate with `--update-baseline` after reviewing the printed
+# findings, and keep the reasons.
+
+# --- Marked files no inventory row registers (2) ---
+unregistered:packages/session/session-persistence-sqlite/src/index.ts  # matcher: the whole package is a Tier A row ("8 files", upstream will never have them) and the runbook re-applies Tier A by copying the directory, so the row registers the package rather than enumerating it; `index` is also a generic stem the coverage rule deliberately refuses to anchor
+unregistered:packages/session/session-persistence-sqlite/src/store.ts  # matcher: same Tier A whole-package row; `store`/`stores` are generic stems the coverage rule deliberately refuses to anchor
+
+# --- Tier C rows naming a file that carries no marker (5) ---
+unmarked:apps/cli/tests/profiles/acp/tests/escalation.e2e.ts  # matcher: false positive — row 90 cites this upstream suite as one the fork no longer collects (vitest.e2e.config.ts exclude); the file itself is upstream's and carries no fork patch, so it must not be marked
+unmarked:apps/web/tests/sidebar-right.e2e.ts  # matcher: false positive — row 52 cites this upstream suite as the seven cases a blanket transition override breaks; the file is not patched by the fork
+unmarked:packages/client/ui-layout/src/client/columns.ts  # matcher: false positive — row 68 cites upstream's dropped `MOBILE_VIEWPORT` constant as background; the fork's own constant lives in `src/client/fork/mobile-shell.tsx`
+unmarked:snapshots/acp/acp.snapshot.ts  # matcher: false positive — row 93 cites this upstream-recorded corpus as the file the fork stops collecting; the corpus itself is not patched
+unmarked:vendor/schemastery/src/index.ts  # matcher: false positive — row 101 quotes the vendored `Schema.resolve(..., strict = false)` behaviour as evidence for the fork's config guard; vendored code is never patched

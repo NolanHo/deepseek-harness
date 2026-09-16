@@ -162,7 +162,7 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
   } finally {
     await handle.dispose()
   }
-  // Fork patch (FORK_SURFACE.md 2026-09-05): upstream pinned the sandbox
+  // Fork patch (FORK_SURFACE.md): fork decision 2026-09-05 — upstream pinned the sandbox
   // policy default and the permission preset here, but this fork disables the
   // sandbox-policy and permission rows (packages/bundle/base/cordis.patch.yml
   // sets both to `disabled: true`), so the shipped composition mounts neither
