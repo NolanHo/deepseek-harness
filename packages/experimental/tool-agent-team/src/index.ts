@@ -165,7 +165,16 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
       name: 'team:policy',
       order: scoped.systemPrompt.getSectionOrder('TEAM_POLICY'),
       text: () => {
-        const membership = ctx.agentTeams.membership(agent)
+        // Fork patch (FORK_SURFACE.md): a worker can reach this renderer even
+        // though it is not a member. `maybeInstall` admits an agent whose
+        // subagent descriptor is not visible yet (observed at delegation depth
+        // 2), and every later request then renders this section. The throwing
+        // `membership()` killed that render: the child turn ended with
+        // `reason.kind = 'error'`, the run settled as `stopReason=error`, and
+        // the delegating parent reported "subagent run failed" for a child that
+        // had actually run. A non-member has no Team policy to state.
+        const membership = ctx.agentTeams.tryMembership(agent)
+        if (membership === undefined) return ''
         return `${POLICY}\n\nYour Team role is ${membership.role}; your Team name is ${membership.name}; Team id is ${membership.id}.`
       },
     }))

@@ -163,6 +163,28 @@ describe('dsh-tool-team', () => {
     await vi.waitFor(() => { expect(ctx.agents.get(childId)).toBeUndefined() }, { timeout: 5_000 })
   })
 
+  it('renders an empty Team policy instead of failing the request when membership disappears', async () => {
+    // Delegation depth 2 can admit an agent before its subagent descriptor is
+    // visible, so the install probe (`maybeInstall`) reads an implicit Lead and
+    // scoped Team registrations land on a worker that is not a member. Every
+    // later request then renders `team:policy`, whose text used to call the
+    // throwing `membership()`: the render failed, the child turn ended with
+    // `reason.kind = 'error'`, and the delegating parent reported
+    // "subagent run failed" for a child that had actually run.
+    const { ctx, lead } = await setup(['hang'])
+    expect(renderPrompt(await assembly(ctx, lead))).toContain('Your Team role is lead')
+
+    const seen = vi.spyOn(ctx.agentTeams, 'tryMembership').mockReturnValue(undefined)
+    const gone = vi.spyOn(ctx.agentTeams, 'membership').mockImplementation(() => {
+      throw new Error('agent "tool-team-lead" is not a member of an active Agent Team')
+    })
+    const assembled = await assembly(ctx, lead)
+    expect(renderPrompt(assembled)).not.toContain('Your Team role is')
+
+    gone.mockRestore()
+    seen.mockRestore()
+  })
+
   it('returns actionable no-progress output and renders structured wait cancellation', async () => {
     const inactiveSetup = await setup([textResponse('worker done')])
     const inactiveSpawn = await execute(inactiveSetup.ctx, inactiveSetup.lead, 'spawn_teammate', {
