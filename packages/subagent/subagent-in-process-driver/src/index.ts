@@ -124,6 +124,7 @@ export async function startInProcessRun(
     applyChildComposition(childCtx, parent, {
       persona: request.persona,
       toolFilter: request.toolFilter,
+      skillFilter: request.skillFilter,
     })
     if (request.outputSchema !== undefined) {
       structured = attachStructuredRuntime(childCtx, request.outputSchema)
@@ -134,7 +135,7 @@ export async function startInProcessRun(
   const handle = await parent.ctx.agents.create({
     sessionId: childId,
     parentAgent: parent,
-    meta: childSessionMeta(parent, childDepth, seed !== undefined),
+    meta: childSessionMeta(parent, childDepth, seed !== undefined, request.cwd),
     ...seed !== undefined ? { seed } : {},
     ...seed === undefined ? {} : { inheritedEventCount: activationBoundary },
     agentOptions: resolveChildAgentOptions(parent, request.agentOptions, childDepth),
