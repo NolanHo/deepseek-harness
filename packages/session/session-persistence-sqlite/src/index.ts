@@ -58,7 +58,8 @@ export interface Config {
   /** Maximum wait for another SQLite connection's lock; defaults to 5,000 ms. */
   busyTimeoutMs?: number
   /**
-   * SQLite page cache per connection, in KiB. Omitted executes no pragma and
+   * SQLite page cache per connection, in KiB. Omitting the field, or leaving
+   * its `cordis.yml` value empty (an explicit null), executes no pragma and
    * keeps SQLite's default suggestion of 2,000 KiB (`-2000`, about 1.95 MiB);
    * `0` applies `-0`, a zero-page suggestion SQLite floors to its 10-page
    * minimum rather than its default.
@@ -109,7 +110,12 @@ export class SqliteSessionPersistence extends SessionPersistence {
       path: config.path,
       journalMode: config.journalMode ?? 'wal',
       busyTimeoutMs: config.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
-      ...config.cacheSizeKib === undefined ? {} : { cacheSizeKib: config.cacheSizeKib },
+      // A YAML `cacheSizeKib:` left valueless arrives as null through the
+      // schema — outside the field's declared type, hence the widening — and
+      // keeps SQLite's default exactly like an omitted field.
+      ...config.cacheSizeKib === undefined || (config.cacheSizeKib as unknown) === null
+        ? {}
+        : { cacheSizeKib: config.cacheSizeKib },
       asyncCodec: config.asyncCodec ?? false,
     })
     this.tracker = new SqliteBackendTracker(this.name)

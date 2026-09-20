@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-20-sqlite-page-cache-config.md
-2026-09-20-sqlite-page-cache-config.md: c72402fa6d68fedcf7538a49b5b8a1289824e0af
-2026-09-20-sqlite-page-cache-config.zh.md: aa6a61476b31065bed3273e2ded8721951a12042
+2026-09-20-sqlite-page-cache-config.md: 78c3ad866ad9e387fa8c5083b0be5766fc3429e4
+2026-09-20-sqlite-page-cache-config.zh.md: 414ad3d48ea61712cbf504a7b36af588d696c2c2

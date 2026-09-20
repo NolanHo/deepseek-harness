@@ -14,7 +14,7 @@ provider 打开的每条连接都只携带 SQLite 编译期的页缓存建议值
 
 `cacheSizeKib?: number` 是 `SqliteSessionPersistence` 上的 `Config` 字段，按 `z.number().step(1).min(0).max(MAX_CACHE_SIZE_KIB)` 校验。`configurePageCache` 在 `openDatabase` 内、journal 模式与持久化设置之后施加它，因此 provider 交出的每条连接各自携带自己的值。
 
-**缺省不执行任何 pragma**，所以不设该字段的部署保持 SQLite 的默认建议值、行为与之前一致；该字段是开关的开启态，而不是新的默认值。
+**缺省或留空不执行任何 pragma**，所以不设该字段的部署 —— 或把 `cordis.yml` 中的值留空（以 null 传入）—— 保持 SQLite 的默认建议值，对连接不做任何改变；该字段是开关的开启态，而不是新的默认值。
 
 **该值替换进语句，绝不绑定。** SQLite 的 pragma 语法不接受参数 —— 在 Node 随包的 SQLite 3.51.3 上 `PRAGMA cache_size = ?` 以 `near "?": syntax error` 失败 —— 因此 `resources/sql/cache-size.sql` 声明 `PRAGMA cache_size = -?`，由 `sql('cache-size', n)` 替换该 token。替换仅限这一处：`sql()` 重载只允许 `'cache-size'` 带实参，其他资源名带实参是编译错误，`tests/sql-resource-boundary.spec.ts` 拒绝 `src` 与 `tests` 中任何实参未跟在 `'cache-size'` 名称之后的 `sql`/`testSql` 调用。
 
@@ -24,7 +24,7 @@ provider 打开的每条连接都只携带 SQLite 编译期的页缓存建议值
 
 **字段上限为 `MAX_CACHE_SIZE_KIB = 2_147_483_647`**，即它承载的 INT32_MAX 量级。SQLite 也接受字面量 `-2147483648`（比该量级大 1），而字段永远不会发出它。
 
-**三项物理设置刻意未动**：`mmap_size = 0`（内存映射 I/O 相对截断带有 SIGBUS 语义，且连接的读回钉住该值）、`synchronous = FULL`、64 KiB 的 `page_size`。三者各自牵动自己的持久化论证，因此把它们做成可配置是另一件事。
+**三项物理设置刻意未动**：`mmap_size = 0`（内存映射 I/O 相对截断带有 SIGBUS 语义，且连接的读回在文件支撑的连接上钉住该值）、`synchronous = FULL`、64 KiB 的 `page_size`。三者各自牵动自己的持久化论证，因此把它们做成可配置是另一件事。
 
 ## 备选方案
 
@@ -40,11 +40,11 @@ provider 打开的每条连接都只携带 SQLite 编译期的页缓存建议值
 
 ## 影响
 
-部署可以从 `cordis.yml` 按连接设定页缓存，取消该字段即把连接恢复为先前的设置 —— 不设它什么都不变。SQLite 接受但 schema 不接受的值（负数、小数、越过上限）在挂载时失败；连接未保持的值让本次打开失败，而不是静默跑在另一个缓存上。`0` 会被接受，且几乎不会是调优想要的取值，因为它落到 10 页下限。
+部署可以从 `cordis.yml` 按连接设定页缓存，取消该字段即让连接留在 SQLite 的默认建议值上 —— 不设它什么都不变。SQLite 接受但 schema 不接受的值（负数、小数、越过上限）在挂载时失败；连接未保持的值让本次打开失败，而不是静默跑在另一个缓存上。`0` 会被接受，且几乎不会是调优想要的取值，因为它落到 10 页下限。
 
 ## 测试
 
-`tests/page-cache.spec.ts` 记录 provider 打开的每条连接，钉住：以 `1_048_576` 挂载的连接收到 `-1_048_576`；省略字段保持 `-2000`；`0`、`64` 与 `MAX_CACHE_SIZE_KIB` 各自落为自己的相反数；`-1`、`1.5`、`2_147_483_648` 在挂载时被拒。`tests/sql-resource-boundary.spec.ts` 在整个包的 TypeScript 源码上钉住替换的笼子。
+`tests/page-cache.spec.ts` 记录 provider 打开的每条连接，钉住：以 `1_048_576` 挂载的连接收到 `-1_048_576`；省略字段或显式 null 保持 `-2000` 且不执行任何 `cache_size` 语句；`0`、`64` 与 `MAX_CACHE_SIZE_KIB` 各自落为自己的相反数；`-1`、`1.5`、`2_147_483_648` 在挂载时被拒。`tests/sql-resource-boundary.spec.ts` 在整个包的 TypeScript 源码上钉住替换的笼子。`tests/page-cache-async-composition.spec.ts` 把该字段与 `asyncCodec` 挂在一起，钉住组合后的 store 在连接上保持所配置的缓存。
 
 ## 相关
 

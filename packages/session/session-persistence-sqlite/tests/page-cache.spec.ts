@@ -7,6 +7,8 @@ import type { DatabaseSync, DatabaseSyncOptions } from 'node:sqlite'
 
 /** Every connection the recording driver hands out, in creation order. */
 const connections: { path: string; db: DatabaseSync }[] = []
+/** Every statement the recording driver executes, in call order. */
+const statements: string[] = []
 
 vi.mock('node:sqlite', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:sqlite')>()
@@ -14,6 +16,14 @@ vi.mock('node:sqlite', async (importOriginal) => {
     constructor(path: string, options?: DatabaseSyncOptions) {
       super(path, ...(options === undefined ? [] : [options]))
       connections.push({ path, db: this })
+    }
+
+    override exec(statement: string): void {
+      statements.push(statement)
+      // The base method by reference, not `super.exec`: the SQL resource
+      // boundary (`sql-resource-boundary.spec.ts`) admits only resource-owned
+      // statements as that argument.
+      actual.DatabaseSync.prototype.exec.call(this, statement)
     }
   }
   return { ...actual, DatabaseSync: RecordingDatabaseSync }
@@ -26,6 +36,7 @@ import { testSql } from './test-sql.ts'
 const directories: string[] = []
 afterEach(async () => {
   connections.splice(0)
+  statements.splice(0)
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true })
 })
 
@@ -34,6 +45,13 @@ async function freshDbPath(): Promise<string> {
   directories.push(directory)
   return join(directory, 'sessions.db')
 }
+
+/**
+ * The value a `cordis.yml` line `cacheSizeKib:` with no value reaches the
+ * plugin as: the schema hands the field through as null, outside the declared
+ * type.
+ */
+const YAML_NULL = null as unknown as number
 
 /** Mount one provider, force its lazy open, and report its connection's page cache. */
 async function mountedCacheSize(path: string, cacheSizeKib?: number): Promise<number> {
@@ -60,6 +78,14 @@ describe('SQLite page cache configuration', () => {
 
   it('keeps the SQLite default 2,000 KiB page cache when the field is omitted', async () => {
     expect(await mountedCacheSize(await freshDbPath())).toBe(-2_000)
+  })
+
+  it('treats an explicit null page cache exactly like the omitted field', async () => {
+    const path = await freshDbPath()
+    const executedBefore = statements.length
+    expect(await mountedCacheSize(path, YAML_NULL)).toBe(-2_000)
+    const executed = statements.slice(executedBefore)
+    expect(executed.filter(statement => statement.includes('cache_size'))).toEqual([])
   })
 
   it('applies each connection its own configured size, zero included', async () => {

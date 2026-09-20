@@ -14,7 +14,7 @@ Every connection the provider opened carried SQLite's compiled page-cache sugges
 
 `cacheSizeKib?: number` is a `Config` field on `SqliteSessionPersistence`, validated as `z.number().step(1).min(0).max(MAX_CACHE_SIZE_KIB)`. `configurePageCache` applies it inside `openDatabase` after the journal mode and the durability settings, so every connection the provider hands out carries its own value.
 
-**Omitted executes no pragma**, so a deployment that sets nothing keeps SQLite's default suggestion and behaves as before; the field is the switch's on state rather than a new default.
+**Omitted or empty executes no pragma**, so a deployment that sets nothing — or leaves the `cordis.yml` value empty, which arrives as null — keeps SQLite's default suggestion and changes nothing about the connection; the field is the switch's on state rather than a new default.
 
 **The value is substituted into the statement, never bound.** SQLite's pragma grammar takes no parameter — `PRAGMA cache_size = ?` fails with `near "?": syntax error` on the SQLite 3.51.3 that Node ships — so `resources/sql/cache-size.sql` declares `PRAGMA cache_size = -?` and `sql('cache-size', n)` replaces that one token. The substitution is confined to it: the `sql()` overloads accept an argument only for `'cache-size'`, any other resource name with an argument is a compile error, and `tests/sql-resource-boundary.spec.ts` rejects every `sql`/`testSql` call in `src` or `tests` whose argument does not follow the `'cache-size'` name.
 
@@ -24,7 +24,7 @@ Every connection the provider opened carried SQLite's compiled page-cache sugges
 
 **The field's ceiling is `MAX_CACHE_SIZE_KIB = 2_147_483_647`**, the INT32_MAX magnitude it carries. SQLite also accepts the literal `-2147483648`, one past that magnitude, which the field never emits.
 
-**Three physical settings stay untouched on purpose**: `mmap_size = 0` (memory-mapped I/O carries SIGBUS semantics against truncation, and the connection read-back pins the value), `synchronous = FULL`, and the 64 KiB `page_size`. Each one reopens its own durability argument, so configuring them is separate work.
+**Three physical settings stay untouched on purpose**: `mmap_size = 0` (memory-mapped I/O carries SIGBUS semantics against truncation, and the connection read-back pins the value on a file-backed connection), `synchronous = FULL`, and the 64 KiB `page_size`. Each one reopens its own durability argument, so configuring them is separate work.
 
 ## Alternatives considered
 
@@ -40,11 +40,11 @@ Every connection the provider opened carried SQLite's compiled page-cache sugges
 
 ## Consequences
 
-A deployment can size the page cache per connection from `cordis.yml`, and unsetting the field returns the connection to its previous setup — nothing changes until it is set. A value SQLite accepts but the schema does not (negative, fractional, past the ceiling) fails at mount, and a value the connection does not retain fails the open instead of silently running a different cache. `0` is accepted and is almost never what a tuning pass wants, since it yields the 10-page floor.
+A deployment can size the page cache per connection from `cordis.yml`, and unsetting the field leaves the connection on SQLite's default suggestion — nothing changes until it is set. A value SQLite accepts but the schema does not (negative, fractional, past the ceiling) fails at mount, and a value the connection does not retain fails the open instead of silently running a different cache. `0` is accepted and is almost never what a tuning pass wants, since it yields the 10-page floor.
 
 ## Testing
 
-`tests/page-cache.spec.ts` records every connection the provider opens and pins that a mount with `1_048_576` receives `-1_048_576`, an omitted field keeps `-2000`, `0`, `64`, and `MAX_CACHE_SIZE_KIB` each land as their own negation, and `-1`, `1.5`, and `2_147_483_648` reject at mount. `tests/sql-resource-boundary.spec.ts` pins the substitution cage across the package's TypeScript sources.
+`tests/page-cache.spec.ts` records every connection the provider opens and pins that a mount with `1_048_576` receives `-1_048_576`, an omitted field or an explicit null keeps `-2000` with no `cache_size` statement executed, `0`, `64`, and `MAX_CACHE_SIZE_KIB` each land as their own negation, and `-1`, `1.5`, and `2_147_483_648` reject at mount. `tests/sql-resource-boundary.spec.ts` pins the substitution cage across the package's TypeScript sources. `tests/page-cache-async-composition.spec.ts` mounts this field beside `asyncCodec` and pins that the composed store keeps the configured cache on its connection.
 
 ## Related
 
