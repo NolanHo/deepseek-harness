@@ -36,7 +36,7 @@ The paged cold read ([paged cold history reads](../architecture/2026-08-26-paged
 
 ## Consequences
 
-Off is the released behavior. On, a cold read yields between rows and concurrent cold reads share the pool; decoding costs the same CPU, but off the reading thread, and concurrent reads overlap instead of queuing behind each other. There is no format fork to migrate: both settings write identical rows and each reads logs the other wrote, so the field is the entire rollback. A thread-pool scan holds more memory than a synchronous scan of the same rows, and a write path's stall is unchanged, because compression and in-transaction decodes still run on the calling thread.
+Off is the released behavior. On, a cold read yields between rows and concurrent cold reads share the pool; the decompression itself costs the same CPU, but off the reading thread, and concurrent reads overlap instead of queuing behind each other. On this deployment's 63,762-event Session, a GUI cold open with the pooled decoder measured 88–109 CPU·s against 26–29 CPU·s with the synchronous one (two runs per state, interleaved, one snapshot; both opened the Session, and only the pooled runs kept the event loop ticking), which the package-level scan benchmark does not predict — so this deployment keeps the switch off, and the amplification is not yet attributed. There is no format fork to migrate: both settings write identical rows and each reads logs the other wrote, so the field is the entire rollback. A thread-pool scan holds more memory than a synchronous scan of the same rows, and a write path's stall is unchanged, because compression and in-transaction decodes still run on the calling thread.
 
 ## Testing
 
