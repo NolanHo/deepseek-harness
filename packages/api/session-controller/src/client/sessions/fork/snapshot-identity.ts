@@ -52,8 +52,10 @@ export class SessionSnapshotIdentity {
       this.entryCache.set(entry.sessionId, entry)
       return entry
     })
+    const live = new Set<SessionId>()
+    for (const entry of items) live.add(entry.sessionId)
     for (const id of this.entryCache.keys()) {
-      if (!items.some(e => e.sessionId === id)) this.entryCache.delete(id)
+      if (!live.has(id)) this.entryCache.delete(id)
     }
     const sameOrder = items.length === this.itemsCache.length && items.every((e, i) => e === this.itemsCache[i])
     if (!sameOrder) this.itemsCache = items
