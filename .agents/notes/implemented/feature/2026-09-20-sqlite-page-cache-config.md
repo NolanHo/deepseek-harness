@@ -50,3 +50,4 @@ A deployment can size the page cache per connection from `cordis.yml`, and unset
 
 - The package README owns the operator-facing field table and startup behavior: [session-persistence-sqlite](../../../../packages/session/session-persistence-sqlite/README.md)
 - The fork inventory row this provider lives under: [FORK_SURFACE.md](../../../../FORK_SURFACE.md)
+- The pooled decoder this field composes with: [async codec note](2026-09-20-async-session-codec.md)

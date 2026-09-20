@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-20-async-session-codec.md
-2026-09-20-async-session-codec.md: f4bb39a5aae84e33f407024bf5c10089925c7ddc
-2026-09-20-async-session-codec.zh.md: dba296e6badaa454aa6d6e10e37ad62974bf3142
+2026-09-20-async-session-codec.md: d9df136a099fae1ec3a021f7029623d8dd3e98b0
+2026-09-20-async-session-codec.zh.md: 10b4d83c87bf6c36a2ac2afa6d2454d230d4e0cd

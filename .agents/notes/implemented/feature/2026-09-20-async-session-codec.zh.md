@@ -16,7 +16,7 @@ Status: implemented
 
 **只有解压离开线程。** 压缩仍在调用方线程上用 `zstdCompressSync`，事务持有的每次解码也一样。
 
-**只在读事务返回之后 await 线程池。** `loadStoredLog` 与 `loadStoredFrom` 在同步的 `readTransaction` 内选出各自的行，之后才水合。同一条 `DatabaseSync` 连接无法承载两个打开的事务，而在事务内 await 会打开窗口：另一个操作的 `BEGIN` 以 `cannot start a transaction within a transaction` 失败，它的 `ROLLBACK` 终止写方仍以为持有的事务 —— 该回滚之前写入的行全部被丢弃，之后写入的一行在事务之外 autocommit，写方的 `COMMIT` 随后以 `cannot commit - no transaction is active` 失败。因此即使开关打开，每条写路径仍用同步解码器。
+**只在读事务返回之后 await 线程池。** `loadStoredLog` 与 `loadStoredFrom` 在同步的 `readTransaction` 内选出各自的行，之后才水合。同一条 `DatabaseSync` 连接无法承载两个打开的事务，而在事务内 await 会让其他操作在事务打开期间触达该连接：它们的 `BEGIN` 以 `cannot start a transaction within a transaction` 失败——需要原子性的操作在那里失败，而已打开事务自身的行与提交不受影响。因此即使开关打开，每条写路径仍用同步解码器。
 
 **压缩不异步，因为两种帧不同。** Node 的异步 zstd 入口是流式的那个（`ZSTD_compressStream2`，写出 window descriptor），而 `zstdCompressSync` 是一次性的 `ZSTD_compress2`，其 single-segment 帧携带 `Frame_Content_Size`。用存储编解码器自己的选项 —— 它的字典与 level 3 —— 5 个探测输入在 Node 25.9.0 上全部不同：同步帧以 `28 b5 2f fd 60` 开头，异步帧以 `28 b5 2f fd 00` 开头。压缩改为异步会改变每个存储行的内容；而 `worker_thread` 要恢复逐字节相同，就得给一个前提为"不额外增加 isolate 与堆"的开关加上第二个 isolate 与堆。正是压缩保持同步，才让两种设置写出逐字节相同的物理行，`tests/async-codec.spec.ts` 逐列比对这一点。
 
@@ -30,13 +30,13 @@ Status: implemented
 
 **压缩也放到线程池上。** 因上述帧差异被拒：要么两种设置不再写同样的字节，必须指定其中一个为存储格式；要么把 zstd 搬进 `worker_thread`，用额外的 isolate、堆和一份要同步维护的第二份编解码器副本换取逐字节相同。
 
-**在读事务内 await 线程池。** 被拒：`readTransaction(async () => …)` 是自然的写法，而它产生的正是上面的事务危害而非变慢 —— 无法开始的嵌套 `BEGIN`、来自另一个操作并丢弃写方行的 `ROLLBACK`、以及随后失败的写方 `COMMIT`。
+**在读事务内 await 线程池。** 被拒：`readTransaction(async () => …)` 是自然的写法，而它产生的正是上面的事务危害而非变慢——已打开的事务在整个解码期间让其他操作的 `BEGIN` 全部以嵌套事务错误失败，而不是照常执行。
 
 **把开关默认设为 `true`。** 被拒：`false` 让已发布的路径在字节与行为上完全一致，这正是本次改动可以二分、可以只靠配置回滚的原因；想要池化解码的部署自己设该字段。
 
 ## 影响
 
-关闭即已发布行为。打开后，冷读在行与行之间让出，并发冷读共享线程池；解压本身的 CPU 开销不变，只是离开了读取线程，并发读之间互相重叠而不是排成一列。在本部署 63,762 事件的会话上，开启池化解码的 GUI 冷开实测 88~109 CPU·秒，关闭时为 26~29 CPU·秒（每态两次、交替进行、同一份快照；两种状态都成功打开了会话，且只有池化那两次让事件循环保持跳动）——这一结果无法由包级扫描基准预测，因此本部署保持开关关闭，放大原因尚未归因。没有需要迁移的格式分叉：两种设置写出相同的行，并各自能读对方写的日志，因此该字段就是回滚的全部。线程池扫描比同行的同步扫描占用更多内存；写路径的停顿不变，因为压缩与事务内解码仍在调用方线程上运行。
+关闭即已发布行为。打开后，冷读在行与行之间让出，并发冷读共享线程池；解压本身的 CPU 开销不变，只是离开了读取线程，并发读之间互相重叠而不是排成一列。在本部署 63,762 事件的会话上，开启池化解码的 GUI 冷开实测 88~109 CPU·秒，关闭时为 26~29 CPU·秒（每态两次、交替进行、同一份快照；两种状态都成功打开了会话，且只有池化那两次让事件循环保持跳动）——这一结果无法由一次性同行扫描对比（同步 490~526 ms 对池化 966~1072 ms，非仓库内基准）预测，因此本部署保持开关关闭，放大原因尚未归因。没有需要迁移的格式分叉：两种设置写出相同的行，并各自能读对方写的日志，因此该字段就是回滚的全部。线程池扫描比同行的同步扫描占用更多内存；写路径的停顿不变，因为压缩与事务内解码仍在调用方线程上运行。
 
 ## 测试
 
@@ -46,3 +46,4 @@ Status: implemented
 
 - 塑造了这一代价的分页读取：[分页冷历史读取](../architecture/2026-08-26-paged-cold-history-reads.zh.md)
 - 包 README 承载面向运维的字段表与冷读行为：[session-persistence-sqlite](../../../../packages/session/session-persistence-sqlite/README.zh.md)
+- 与本开关组合的页缓存 `Config` 字段：[SQLite 页缓存 Config 字段记录](2026-09-20-sqlite-page-cache-config.zh.md)

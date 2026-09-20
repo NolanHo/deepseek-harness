@@ -50,3 +50,4 @@ provider 打开的每条连接都只携带 SQLite 编译期的页缓存建议值
 
 - 包 README 承载面向运维的字段表与启动行为：[session-persistence-sqlite](../../../../packages/session/session-persistence-sqlite/README.zh.md)
 - 该 provider 所在的 fork 清单行：[FORK_SURFACE.md](../../../../FORK_SURFACE.md)
+- 与本字段组合的池化解码器：[异步编解码记录](2026-09-20-async-session-codec.zh.md)
