@@ -1999,15 +1999,36 @@ export interface Config {
   journalMode?: JournalMode
   /** Maximum wait for another SQLite connection's lock; defaults to 5,000 ms. */
   busyTimeoutMs?: number
+  /**
+   * SQLite page cache per connection, in KiB. Omitted executes no pragma and
+   * keeps SQLite's default suggestion of 2,000 KiB (`-2000`, about 1.95 MiB);
+   * `0` applies `-0`, a zero-page suggestion SQLite floors to its 10-page
+   * minimum rather than its default.
+   */
+  cacheSizeKib?: number
   /** Fixed live-event coalescing window; not a backend completion deadline. */
   writeBatchMaxDelayMs?: number
+  /**
+   * Decompress stored session logs on the libuv thread pool instead of the
+   * thread that reads them; defaults to `false`. Fork patch (FORK_SURFACE.md).
+   *
+   * A cold read decompresses every packed data column of the log, and the
+   * synchronous decoder blocks the event loop for as long as that takes. This
+   * switch hands those columns to `zlib.zstdDecompress` — same dictionary, same
+   * result bytes, same stored rows — so the read yields between rows and
+   * concurrent cold reads decompress in parallel up to the pool size
+   * (`UV_THREADPOOL_SIZE`). Compression and the decodes a write transaction
+   * holds stay synchronous, which keeps both states writing identical rows and
+   * lets this switch be bisected or rolled back on its own.
+   */
+  asyncCodec?: boolean
 }
 
 /** Durable journal modes accepted by the backend. */
 export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 ```
 
-来源：[`packages/session/session-persistence-sqlite/src/index.ts:51`](../packages/session/session-persistence-sqlite/src/index.ts)
+来源：[`packages/session/session-persistence-sqlite/src/index.ts:53`](../packages/session/session-persistence-sqlite/src/index.ts)
 
 <a id="deepseek-aidsh-session-projection-cache"></a>
 
@@ -3127,12 +3148,61 @@ export interface Config {
    * budget belongs to the child runtime or its own deployment.
    */
   maxDepth?: number | 'provider-managed'
+  // --- Fork patch (FORK_SURFACE.md) ---
+  /**
+   * Model-alias table for this tool instance (default: omit, keeping upstream's
+   * face). When present it REPLACES the model-facing `provider`/`model`/
+   * `reasoning_effort` parameters with one optional `model` alias parameter, and
+   * the table itself is this instance's whole child-model authorization: the
+   * session-level `subagent-model-selection` policy does not apply to an alias
+   * instance, so `models` and `modelSelectionSettings: true` are mutually
+   * exclusive (mount fails loud on both). Each alias resolves to an exact
+   * `{provider, model, reasoningEffort}` child route that overrides the route
+   * fields of `agentOptions` and is preflighted against the live adapter before
+   * the child starts. At least one entry; `alias`/`provider`/`model` are non-empty
+   * strings, aliases are unique, and `provider`/`model` ids never reach the model
+   * surface.
+   */
+  models?: AliasRouteConfig[]
+  /** Default alias when a call omits `model` (default: the first entry); must be in `models`. */
+  defaultModel?: string
+  /**
+   * Child working directory: an existing absolute directory at load (a relative
+   * or missing path fails mount). In-process providers stamp it over the
+   * parent's workspace in the child session header; out-of-process providers
+   * ignore it.
+   */
+  cwd?: string
+  /**
+   * Per-child skill scope: exactly one of `allow` or `deny`, each an array of
+   * skill names (an empty `allow` restricts every skill away). Restricted-away
+   * names read as nonexistent in the child's catalog. Requires the skill
+   * registry in the child's composition.
+   */
+  skillFilter?: {
+    /** Skill names the child keeps; everything else is restricted away. */
+    allow?: string[]
+    /** Skill names restricted away from the child. */
+    deny?: string[]
+  }
+}
+
+/** One `models` entry: a model-facing alias for one exact child LLM route. */
+export interface AliasRouteConfig {
+  /** Alias accepted by the tool's `model` parameter. */
+  readonly alias: string
+  /** Registered LLM provider route, preflighted against the live adapter before the child starts. */
+  readonly provider: string
+  /** Provider-owned exact model id. */
+  readonly model: string
+  /** Adapter-owned reasoning effort; omitted uses the selected model's own default. */
+  readonly reasoningEffort?: string
 }
 ```
 
 依赖：[`AgentOptions`](subsystems/core.zh.md)
 
-来源：[`packages/subagent/tool-subagent/src/index.ts:48`](../packages/subagent/tool-subagent/src/index.ts)
+来源：[`packages/subagent/tool-subagent/src/index.ts:55`](../packages/subagent/tool-subagent/src/index.ts)
 
 <a id="deepseek-aidsh-tool-terminal"></a>
 

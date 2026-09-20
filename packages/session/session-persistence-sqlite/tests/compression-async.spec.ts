@@ -143,7 +143,7 @@ describe('thread-pool row scan', () => {
     }
   })
 
-  it('bounds packed decompression on the pool exactly as the synchronous scan does', async () => {
+  it('passes the packed-row bound into the pool decode and classifies an oversized frame as the synchronous scan does', async () => {
     const start = row(scalar(0))
     const oversized: EventRow = {
       seq: 4,

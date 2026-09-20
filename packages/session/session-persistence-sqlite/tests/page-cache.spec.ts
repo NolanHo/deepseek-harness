@@ -58,7 +58,7 @@ describe('SQLite page cache configuration', () => {
     expect(await mountedCacheSize(await freshDbPath(), 1_048_576)).toBe(-1_048_576)
   })
 
-  it('keeps the SQLite default 2 MiB page cache when the field is omitted', async () => {
+  it('keeps the SQLite default 2,000 KiB page cache when the field is omitted', async () => {
     expect(await mountedCacheSize(await freshDbPath())).toBe(-2_000)
   })
 

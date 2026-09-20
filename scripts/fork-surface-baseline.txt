@@ -17,10 +17,6 @@
 # fails the run. Regenerate with `--update-baseline` after reviewing the printed
 # findings, and keep the reasons.
 
-# --- Marked files no inventory row registers (2) ---
-unregistered:packages/session/session-persistence-sqlite/src/index.ts  # matcher: the whole package is a Tier A row ("8 files", upstream will never have them) and the runbook re-applies Tier A by copying the directory, so the row registers the package rather than enumerating it; `index` is also a generic stem the coverage rule deliberately refuses to anchor
-unregistered:packages/session/session-persistence-sqlite/src/store.ts  # matcher: same Tier A whole-package row; `store`/`stores` are generic stems the coverage rule deliberately refuses to anchor
-
 # --- Tier C rows naming a file that carries no marker (5) ---
 unmarked:apps/cli/tests/profiles/acp/tests/escalation.e2e.ts  # matcher: false positive — row 90 cites this upstream suite as one the fork no longer collects (vitest.e2e.config.ts exclude); the file itself is upstream's and carries no fork patch, so it must not be marked
 unmarked:apps/web/tests/sidebar-right.e2e.ts  # matcher: false positive — row 52 cites this upstream suite as the seven cases a blanket transition override breaks; the file is not patched by the fork

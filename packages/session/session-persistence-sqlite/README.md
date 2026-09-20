@@ -181,7 +181,7 @@ These limits define when the provider is a poor fit or needs special operational
 
 - **Pre-release schema policy** — only the current schema 20 and its schema-19 predecessor open; any other on-disk version is rejected without conversion.
 - **Packing depends on batch boundaries** — a compatible run split by the write-behind window or an explicit flush stays split across physical rows; this avoids rewriting prior rows at the cost of a timing-dependent packing ratio.
-- **Synchronous SQLite and compression** — Node's SQLite driver blocks the JavaScript thread, and so does Zstandard compression. `asyncCodec` moves only the decompression of a stored-log read to the libuv thread pool; a write transaction's compression and decodes stay synchronous, and neither can use the pool while a transaction is open.
+- **Synchronous SQLite and compression** — Node's SQLite driver blocks the JavaScript thread, and so does Zstandard compression. `asyncCodec` moves only the decompression of the two stored-log scans that read outside a transaction to the libuv thread pool; compression never uses the pool, and the decodes a write transaction holds stay synchronous.
 - **Busy waits block the event loop** — SQLite waits inside synchronous calls; a competing writer can stall the thread for up to the configured `busyTimeoutMs`.
 - **External SQL readers must decode physical rows** — a packed `events.type` (`text-chunks`, `reasoning-chunks`, `tool-call-chunks`) is not a logical event type; supported consumers read through this provider.
 - **No deletion or historical compaction** — normal appends are insert-only and nothing removes old rows.
