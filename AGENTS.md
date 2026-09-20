@@ -6,13 +6,14 @@ DeepSeek Harness is an all-plugin Cordis agent harness. Read [docs/architecture.
 
 This checkout is a **personal fork** of [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness): `origin` is `NolanHo/deepseek-harness`, `upstream` is the DeepSeek AI repository. Fork `master` deliberately carries local customizations on top of upstream `master`; it is a customized build, never a mirror.
 
-- **Sync before every change**: `git fetch upstream` and rebase (or merge) `upstream/master` into the fork at the start of every change session, so fork `master` stays mergeable with upstream. Upstream is the authority; the fork only absorbs updates from it.
+- **Sync before every change**: `git fetch upstream` at the start of every change session and check for a newer `dsh-vX.Y-rc*`/stable tag; never merge raw `upstream/master` — its alpha churn is skipped by the cadence rule below, which owns how upstream is absorbed and keeps fork `master` mergeable through tag merges. Upstream is the authority; the fork only absorbs updates from it.
 - **Never contribute back**: do not push to `upstream`, do not open PRs against `upstream`, do not merge fork work into upstream. All changes stay in the fork.
 - **Record every change**: append one entry to `FORK_CHANGES.md` (bilingual, append-only) per change: date, what changed, why. Keep personal changes small and reviewable.
 - **Pick up upstream on a cadence**: merge every `dsh-vX.Y-rc*`/stable tag (skip master's alpha churn); each sync refreshes `FORK_SURFACE.md`. Before merging, read every release note between the fork's base tag and the target tag: they name the protocol, session-format, and API breaks a diff hides (session format V3, the persistence handle seam, the panel API move). Plan each adaptation they imply. After the merge, run `npx tsx scripts/verify-fork-surface.ts` (read-only, under a second): it fails on a marked fork patch that no inventory row registers, on a tier C row whose file lost its marker, and on English/Chinese structure drift, while `scripts/fork-surface-baseline.txt` freezes the gaps accepted today.
 - **Retirement deletes the code**: when a fork surface retires because upstream serves it, the same change deletes its module, injections, locale keys, config rows, and tests, and appends the retirement to `FORK_CHANGES.md`. `FORK_SURFACE.md` keeps one `retired` line per surface as runbook history; no dead `fork/` module, forwarding shim, or feature flag survives, and no behavior keeps a fork path beside an upstream path. Prefer the upstream extension point (`Config` field, service, slot) over a copied implementation in the first place.
 - **Dual-path changes resolve to upstream**: when the fork and upstream changed one behavior — the same file, the same algorithm, or two implementations of one user-visible outcome — the fork deletes its copy and adopts upstream's, even where the fork's version measures better: one implementation to maintain and re-apply at every sync beats a marginal local edge. Keep the fork's version only when upstream's cannot serve a current production consumer or leaves a reproduced defect, and record that reason beside the retained row in `FORK_SURFACE.md`.
 - **Prefer upstream on parity; keep the fork minimal**: at every sync, walk `FORK_SURFACE.md` against the new tag — when upstream ships an equivalent, drop the fork row and adopt upstream's (record the retirement in `FORK_CHANGES.md`); every retained divergence states why upstream cannot serve it. New divergences justify themselves the same way, prefer `Config` fields over patches and `src/fork/` modules over upstream-file edits ([convention](FORK_SURFACE.md#the-fork-module-convention)).
+- **Every row names a live consumer**: at each sync's parity review, confirm every retained `FORK_SURFACE.md` row still has a consumer — the deployment composition, an installed plugin, a recorded defect, or a measured win — and retire the row the day its consumer disappears (first consumer audit: 2026-09-19, outcomes in `FORK_CHANGES.md`).
 
 ## Working tree: branches, never a dirty main checkout
 
@@ -41,8 +42,6 @@ Public APIs are pre-stable; update every consumer. [Session version/status](docs
 ## Pre-release stance: foundation over blast radius
 
 **Remove at the first tagged release.** Until then, prefer correct foundations to compatibility shims: rename or repackage freely and update every reference. Backends reject old on-disk formats. SQLite uses monotonic `SCHEMA_VERSION`; `dsh-session` keeps `SESSION_FORMAT_VERSION` at `0` with no compatibility promise.
-
-**Application launch.** Only `dsh` profiles launch supported Node apps; package bins, demos, and public SDK argv escapes are forbidden ([rule](docs/architecture.md#application-launch)).
 
 ## Repository layout
 
