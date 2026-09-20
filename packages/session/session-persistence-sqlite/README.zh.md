@@ -55,6 +55,7 @@ kind: "package-reference"
 | `journalMode` | `wal` | 持久 journal mode：`wal`、`delete`、`truncate` 或 `persist` |
 | `busyTimeoutMs` | `5,000` | 等待另一连接锁的最长同步时间 |
 | `writeBatchMaxDelayMs` | `200` | 实时事件的固定聚合窗口，单位为毫秒 |
+| `asyncCodec` | `false` | 在 libuv 线程池而非读线程上解压已存储的日志 |
 
 本包接受的字段见[最小配置](#minimal-configuration)表；每个字段及其 JSDoc 的穷尽式真源是生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-session-persistence-sqlite)。
 
@@ -134,6 +135,8 @@ await ctx.sessionPersistence.append(id, events)
 
 完整读取先反向定位最后一个有效 `turn/end`，再按正向顺序把每个物理行解码为其逻辑事件，并拒绝已提交前缀中的缺口或格式错误行。格式错误的最后一行被视为撕裂尾部：执行恢复的加载可以在写锁下删除它，并用合成闭合事件关闭日志。后缀读取（`readFrom`）只检查可能包含目标序列的物理跨度，因此永远不会解析无关的更早行。
 
+`asyncCodec` 选择由哪个线程解压这些行。开启后，`zlib.zstdDecompress` 先在 libuv 线程池上解码每个压缩数据列，再由同一个扫描把行展平，因此冷读会在行与行之间让出，并发的冷读最多按池的规模并行解压。压缩，以及任何在写事务打开期间执行的解码（追加尾部窗口、修复、truncate），都留在调用线程上：在打开的事务中 await，会让另一个操作在同一连接上开启嵌套事务。两种设置写出的行相同、读出的事件也相同；`tests/compression-async.spec.ts` 与 `tests/async-codec.spec.ts` 钉住这一点。
+
 </details>
 
 -----
@@ -177,7 +180,7 @@ await ctx.sessionPersistence.append(id, events)
 
 - **预发布 schema 策略**——只有当前 schema 20 与其 schema-19 前身可以打开；任何其他磁盘版本都会被拒绝，不做转换。
 - **打包依赖批次边界**——被写后窗口或显式 flush 拆开的兼容连续段仍分属不同物理行；这避免了重写先前行，代价是打包比例依赖时序。
-- **同步 SQLite 与压缩**——Node 的 SQLite 驱动与 Zstandard 调用会阻塞 JavaScript 线程。
+- **同步 SQLite 与压缩**——Node 的 SQLite 驱动会阻塞 JavaScript 线程，Zstandard 压缩同样如此。`asyncCodec` 只把已存储日志读取的解压移到 libuv 线程池；写事务中的压缩与解码仍保持同步，事务打开期间两者都不能使用线程池。
 - **忙等待阻塞事件循环**——SQLite 在同步调用内部等待；竞争写入方最长可让线程停顿配置的 `busyTimeoutMs`。
 - **外部 SQL 读取方必须解码物理行**——打包的 `events.type`（`text-chunks`、`reasoning-chunks`、`tool-call-chunks`）不是逻辑事件类型；受支持的消费方通过本提供方读取。
 - **没有删除或历史压缩**——普通追加仅插入，没有任何机制移除旧行。

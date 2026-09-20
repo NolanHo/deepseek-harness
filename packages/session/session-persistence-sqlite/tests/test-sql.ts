@@ -25,6 +25,7 @@ export type TestSqlName =
   | 'select-last-event'
   | 'select-page-size'
   | 'select-session-version'
+  | 'select-event-columns'
   | 'select-event-rowids'
   | 'select-event-rows'
   | 'select-user-version'
