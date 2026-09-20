@@ -104,17 +104,17 @@ describe('web e2e: mid-turn steering lands durably and visibly', () => {
     const settled = scaffold.whenTurnSettled(MODE === 'record' ? 180_000 : 30_000)
     await page.locator('[data-composer-input][contenteditable="true"]').first().waitFor({ timeout: 10_000 })
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await expect.poll(
       () => sessionEvents.some(event => event.type === 'request/context'),
       { timeout: 10_000 },
     ).toBe(true)
 
-    // Enter remains the Queue gesture. In this live window the row action
+    // Cmd/Ctrl+Enter remains the Queue gesture. In this live window the row action
     // atomically moves this exact occurrence into the current turn's steering outbox.
     await page.locator('[data-composer-input][contenteditable="true"]').first().waitFor({ timeout: 10_000 })
     await input.fill(STEER)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const queuedRow = page.getByRole('listitem').filter({ hasText: STEER })
     await queuedRow.waitFor({ timeout: 10_000 })
     const steerButton = queuedRow.getByRole('button', { name: 'Steer queued message' })
@@ -191,7 +191,12 @@ describe('web e2e: mid-turn steering lands durably and visibly', () => {
   })
 })
 
-describe('web e2e: composer shortcut steers directly', () => {
+// Fork patch (FORK_SURFACE.md): upstream's chord-inversion scenarios — under
+// the fork the Cmd/Ctrl chord resolves to the busyEnter preference (never the
+// inverted mode) and plain Enter no longer submits, so these recorded-fixture
+// assertions cannot hold. Restore both describes (converting the prompts back
+// to upstream's gestures) when the fork row retires.
+describe.skip('web e2e: composer shortcut steers directly', () => {
   let scaffold: WebScaffold
   let browser: Browser
   let page: Page
@@ -250,7 +255,12 @@ describe('web e2e: composer shortcut steers directly', () => {
   }, 90_000)
 })
 
-describe('web e2e: composer shortcut follows the swapped busy behavior', () => {
+// Fork patch (FORK_SURFACE.md): upstream's chord-inversion scenarios — under
+// the fork the Cmd/Ctrl chord resolves to the busyEnter preference (never the
+// inverted mode) and plain Enter no longer submits, so these recorded-fixture
+// assertions cannot hold. Restore both describes (converting the prompts back
+// to upstream's gestures) when the fork row retires.
+describe.skip('web e2e: composer shortcut follows the swapped busy behavior', () => {
   let scaffold: WebScaffold
   let browser: Browser
   let page: Page
@@ -311,7 +321,11 @@ describe('web e2e: composer shortcut follows the swapped busy behavior', () => {
   }, 90_000)
 })
 
-describe('web e2e: empty-draft Cmd+Enter steers the whole queue', () => {
+// Fork patch (FORK_SURFACE.md): this describe pinned the empty-draft
+// whole-queue steer gesture itself, which the fork deletes (double-press
+// hazard); its placeholder-hint wait and FIFO-flush assertions cannot hold.
+// Restore (with re-record) when the fork row retires.
+describe.skip('web e2e: empty-draft Cmd+Enter steers the whole queue', () => {
   const releaseReplay = Promise.withResolvers<undefined>()
   let disposeReplayBarrier: (() => void) | undefined
   let scaffold: WebScaffold
@@ -360,13 +374,13 @@ describe('web e2e: empty-draft Cmd+Enter steers the whole queue', () => {
     // question-composer takeover cannot race queue publication or the shortcut.
     await page.locator('[data-composer-input][contenteditable="true"]').first().waitFor({ timeout: 10_000 })
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await page.locator('[data-composer-input][contenteditable="true"]').first().waitFor({ timeout: 10_000 })
     await input.fill(STEER_ONE)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await page.locator('[data-composer-input][contenteditable="true"]').first().waitFor({ timeout: 10_000 })
     await input.fill(STEER_TWO)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const dock = page.locator('[data-queue-dock]')
     // Both messages queued: the two-row dock shows a collapsed count header,
     // and Playwright text matching skips the hidden rows — expand the list,

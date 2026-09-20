@@ -1,6 +1,7 @@
 # Agent Note: One composer submission path — Enter is a newline, Cmd/Ctrl+Enter and the send button share the busy-state policy
 
 Status: implemented
+Archived: 2026-09-19
 
 English | [中文](2026-08-28-composer-submission-chord-and-button.zh.md)
 

@@ -93,7 +93,7 @@ describe('web e2e: queued image submission', () => {
     const input = page.locator('[data-composer-input]').first()
     const firstSettled = scaffold.whenTurnSettled()
     await input.fill(ACTIVE_PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await expect.poll(() => existsSync(readyFile), { timeout: 15_000 }).toBe(true)
 
     // A just-submitted composer is read-only for the prompt round-trip.
@@ -122,7 +122,7 @@ describe('web e2e: queued image submission', () => {
     const dockThumb = page.locator('[data-queue-dock] img[alt="Queued message image"]')
     try {
       await input.fill(QUEUED_TEXT)
-      await input.press('Enter')
+      await input.press('Control+Enter')
       await dockThumb.waitFor({ timeout: 15_000 })
       await expect.poll(() => dockThumb.getAttribute('src'), { timeout: 15_000 }).toMatch(/^blob:/)
       expect(await page.locator('[data-queue-dock] [data-submission-echo]').count()).toBe(1)
@@ -153,7 +153,7 @@ describe('web e2e: queued image submission', () => {
 
     const settled = scaffold.whenTurnSettled()
     await input.fill('Continue with the queued comparison')
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await settled
     // The queued image message and the waking text run as two further turns;
     // wait for both to end so the final snapshot never captures a mid-reply

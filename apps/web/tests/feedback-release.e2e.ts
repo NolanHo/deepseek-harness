@@ -157,7 +157,7 @@ describe.each(MODE === 'record' ? ['deepseek-official'] : ['deepseek-official', 
     if (!official) await selectModel('Feedback mock')
     const settled = scaffold.whenTurnSettled()
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     sessionId = await settled
     const agent = scaffold.ctx.agents.get(sessionId)
     expect(agent?.session.requestHeader()?.config.provider).toBe(provider)
@@ -177,7 +177,7 @@ describe.each(MODE === 'record' ? ['deepseek-official'] : ['deepseek-official', 
     expect(uploads).toEqual([])
     const input = page.locator('[data-composer-input]').first()
     await input.fill('/feedback the diff view is unreadable')
-    await input.press('Enter')
+    await input.press('Control+Enter')
 
     await page.getByText(/Feedback recorded for session/).waitFor({ timeout: 10_000 })
     expect(await page.getByText(/Anonymous user: [0-9a-f-]+\.$/i).count()).toBe(1)
@@ -212,7 +212,7 @@ describe.each(MODE === 'record' ? ['deepseek-official'] : ['deepseek-official', 
     onTestFailed(() => saveFailureShot(page, 'web-e2e-feedback-release-suffix'))
     const input = page.locator('[data-composer-input]').first()
     await input.fill('/feedback the second remark')
-    await input.press('Enter')
+    await input.press('Control+Enter')
     await expect.poll(() => page.getByText(/Feedback recorded for session/).count()).toBe(2)
     await expectFeedbackRelease('feedback/record', 2)
     const like = page.getByRole('button', { name: 'Good response' })
@@ -283,7 +283,7 @@ describe.each(MODE === 'record' ? ['deepseek-official'] : ['deepseek-official', 
     await input.waitFor({ timeout: 15_000 })
     await input.fill('/feedback Feedback before any model request.')
     expect(captured()).toHaveLength(releasedCount)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const findHeaderless = () => scaffold.ctx.sessions.list().find(session => session.id !== sessionId
       && session.snapshotEvents().some(event => event.type === 'feedback/record'))
     // A command-only session keeps the hero view; its durable event confirms submission.

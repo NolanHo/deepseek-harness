@@ -159,7 +159,8 @@ export async function connectFreshWorkspaceZh(page: Page, root: string, name = '
  * @param page - the page under test.
  * @param input - the `[data-composer-input]` surface locator.
  * @param text - the replacement draft; `''` clears the draft. Must not
- * contain a newline: typed Enter submits the composer.
+ * contain a newline: callers submit with ControlOrMeta+Enter, which carries
+ * the line break into the sent message.
  */
 export async function writeComposerDraft(
   page: Page,

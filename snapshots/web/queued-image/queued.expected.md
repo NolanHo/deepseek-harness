@@ -33,7 +33,7 @@
       - img
     - button "Steer queued message":
       - img
-- textbox "Cmd/Ctrl+Enter steers all queued messages"
+- textbox "Message or run a task, / commands, @ files or sessions"
 - button "Commands":
   - img
 - button "Add attachment":

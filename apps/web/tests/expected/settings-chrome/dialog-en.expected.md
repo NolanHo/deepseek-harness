@@ -44,7 +44,7 @@
   - button "Compact":
     - text: Compact
     - img
-  - text: Send behavior while busy What Enter and the Send button do while the agent is running; Cmd/Ctrl+Enter uses the other behavior
+  - text: Send behavior while busy How Cmd/Ctrl+Enter and the Send button deliver while the agent is running
   - button "Queue":
     - text: Queue
     - img
