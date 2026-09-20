@@ -22,6 +22,7 @@ export type TestSqlName =
   | 'insert-schema-19-session'
   | 'measure-write-traffic'
   | 'replace-events-with-nonstrict-table'
+  | 'select-cache-size'
   | 'select-last-event'
   | 'select-page-size'
   | 'select-session-version'

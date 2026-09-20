@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 const SQL_RESOURCES = [
   'begin',
   'begin-immediate',
+  'cache-size',
   'commit',
   'delete-event-row',
   'delete-events-from',
@@ -25,6 +26,7 @@ const SQL_RESOURCES = [
   'rollback',
   'schema',
   'select-application-id',
+  'select-cache-size',
   'select-events',
   'select-events-from',
   'select-mmap-size',
@@ -55,17 +57,28 @@ export type SqlResourceName = typeof SQL_RESOURCES[number]
 const cache = new Map<SqlResourceName, string>()
 
 /**
- * Load an immutable SQL statement by closed resource name.
+ * Load `cache-size` with the validated value substituted for its `?` token:
+ * SQLite's pragma grammar refuses a bound value there.
+ * @param name - the one resource whose token takes a value from the caller.
+ * @param argument - validated page cache in KiB, substituted into `-?`.
+ * @returns the resource text.
+ */
+export function sql(name: 'cache-size', argument: number): string
+/**
+ * Load any other package-owned SQL resource verbatim; the `?` tokens these
+ * resources declare are bound by the caller, never substituted here.
  * @param name - package-owned resource basename.
  * @returns the resource text.
  */
-export function sql(name: SqlResourceName): string {
-  const cached = cache.get(name)
-  if (cached !== undefined) return cached
-  const statement = readFileSync(
-    fileURLToPath(new URL(`../resources/sql/${name}.sql`, import.meta.url)),
-    'utf8',
-  )
-  cache.set(name, statement)
-  return statement
+export function sql(name: Exclude<SqlResourceName, 'cache-size'>): string
+export function sql(name: SqlResourceName, argument?: number): string {
+  let statement = cache.get(name)
+  if (statement === undefined) {
+    statement = readFileSync(
+      fileURLToPath(new URL(`../resources/sql/${name}.sql`, import.meta.url)),
+      'utf8',
+    )
+    cache.set(name, statement)
+  }
+  return argument === undefined ? statement : statement.replace('?', String(argument))
 }

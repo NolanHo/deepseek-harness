@@ -13,6 +13,14 @@ async function filesUnder(path: string): Promise<string[]> {
     : [`${path}/${entry.name}`]))).flat()
 }
 
+/** Every TypeScript file the package owns: implementation and tests. */
+async function packageTypeScriptFiles(): Promise<string[]> {
+  return (await Promise.all([
+    filesUnder(`${PACKAGE_ROOT}/src`),
+    filesUnder(`${PACKAGE_ROOT}/tests`),
+  ])).flat().filter(path => path.endsWith('.ts'))
+}
+
 function sqlLiteralText(node: ts.Node): string | undefined {
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
   if (node.kind === ts.SyntaxKind.TemplateHead) {
@@ -56,10 +64,7 @@ function isOwnedSqlSource(node: ts.Expression | undefined, source: ts.SourceFile
 
 describe('SQLite SQL resource boundary', () => {
   it('keeps statements and query assembly out of TypeScript files', async () => {
-    const files = (await Promise.all([
-      filesUnder(`${PACKAGE_ROOT}/src`),
-      filesUnder(`${PACKAGE_ROOT}/tests`),
-    ])).flat().filter(path => path.endsWith('.ts'))
+    const files = await packageTypeScriptFiles()
     const violations: string[] = []
     for (const path of files) {
       const source = ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true)
@@ -80,6 +85,27 @@ describe('SQLite SQL resource boundary', () => {
           const argument = node.arguments[0]
           if (!isOwnedSqlSource(argument, source)) {
             violations.push(`${path}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}: unowned query source`)
+          }
+        }
+        ts.forEachChild(node, visit)
+      }
+      visit(source)
+    }
+    expect(violations).toEqual([])
+  })
+
+  it('substitutes a caller value only into the cache-size resource', async () => {
+    const violations: string[] = []
+    for (const path of await packageTypeScriptFiles()) {
+      const source = ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true)
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node)
+          && ts.isIdentifier(node.expression)
+          && (node.expression.text === 'sql' || node.expression.text === 'testSql')
+          && node.arguments.length > 1) {
+          const name = node.arguments[0]
+          if (name === undefined || !ts.isStringLiteral(name) || name.text !== 'cache-size') {
+            violations.push(`${path}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}: substituted argument outside cache-size`)
           }
         }
         ts.forEachChild(node, visit)

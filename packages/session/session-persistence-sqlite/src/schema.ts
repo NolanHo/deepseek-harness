@@ -68,6 +68,7 @@ type DatabaseSyncConstructor = typeof import('node:sqlite')['DatabaseSync']
  * @param path - SQLite path, including `:memory:`.
  * @param journalMode - validated journal pragma.
  * @param busyTimeoutMs - validated maximum wait for a competing SQLite lock.
+ * @param cacheSizeKib - validated page cache in KiB; omitted leaves SQLite's default.
  * @returns the configured database handle.
  * @throws when connection settings, schema ownership, or SQLite setup cannot be validated.
  */
@@ -76,6 +77,7 @@ export async function openDatabase(
   path: string,
   journalMode: JournalMode,
   busyTimeoutMs: number,
+  cacheSizeKib?: number,
 ): Promise<DatabaseSync> {
   const deadline = performance.now() + busyTimeoutMs
   const db = new Database(path, { timeout: busyTimeoutMs })
@@ -84,6 +86,7 @@ export async function openDatabase(
     configureDatabase(Database, db, path)
     await selectJournalMode(db, path, journalMode, deadline)
     configureDurability(db, path)
+    configurePageCache(db, path, cacheSizeKib)
     return db
   } catch (error: unknown) {
     db.close()
@@ -185,6 +188,23 @@ function configureDurability(db: DatabaseSync, path: string): void {
   /* v8 ignore next 3 -- supported SQLite versions return the fixed setting. */
   if (synchronous !== 2) {
     throw new Error(`session database at "${path}" retained synchronous=${synchronous}, expected FULL (2)`)
+  }
+}
+
+/**
+ * Apply the configured page cache and verify the connection kept it.
+ * @param db - open owned database connection.
+ * @param path - database location used in ownership diagnostics.
+ * @param cacheSizeKib - validated page cache in KiB, or `undefined` to keep SQLite's default.
+ */
+function configurePageCache(db: DatabaseSync, path: string, cacheSizeKib: number | undefined): void {
+  if (cacheSizeKib === undefined) return
+  db.exec(sql('cache-size', cacheSizeKib))
+  const cacheSize = integerField(db.prepare(sql('select-cache-size')).get(), 'cache_size')
+  // A configured 0 negates to `-0`, which still matches SQLite's read-back of 0 because JS `-0 === 0`.
+  /* v8 ignore next 3 -- supported SQLite versions return the requested KiB value. */
+  if (cacheSize !== -cacheSizeKib) {
+    throw new Error(`session database at "${path}" retained cache_size=${cacheSize}, expected ${-cacheSizeKib} KiB`)
   }
 }
 

@@ -42,6 +42,8 @@ export { SCHEMA_VERSION } from './schema.ts'
 export const DEFAULT_BUSY_TIMEOUT_MS = 5_000
 /** Largest busy timeout accepted by SQLite's signed millisecond interface. */
 export const MAX_BUSY_TIMEOUT_MS = 2_147_483_647
+/** Largest page cache magnitude inside SQLite's signed 32-bit KiB range (INT32_MAX). */
+export const MAX_CACHE_SIZE_KIB = 2_147_483_647
 /** Default live-event coalescing window; not a backend completion deadline. */
 export const DEFAULT_WRITE_BATCH_MAX_DELAY_MS = 200
 /** Largest live-event coalescing window accepted by the fixed timer interface. */
@@ -55,6 +57,13 @@ export interface Config {
   journalMode?: JournalMode
   /** Maximum wait for another SQLite connection's lock; defaults to 5,000 ms. */
   busyTimeoutMs?: number
+  /**
+   * SQLite page cache per connection, in KiB. Omitted executes no pragma and
+   * keeps SQLite's default suggestion of 2,000 KiB (`-2000`, about 1.95 MiB);
+   * `0` applies `-0`, a zero-page suggestion SQLite floors to its 10-page
+   * minimum rather than its default.
+   */
+  cacheSizeKib?: number
   /** Fixed live-event coalescing window; not a backend completion deadline. */
   writeBatchMaxDelayMs?: number
 }
@@ -69,6 +78,7 @@ export class SqliteSessionPersistence extends SessionPersistence {
     path: z.string().required(),
     journalMode: z.union(['wal', 'delete', 'truncate', 'persist'] as const).default('wal'),
     busyTimeoutMs: z.number().step(1).min(0).max(MAX_BUSY_TIMEOUT_MS).default(DEFAULT_BUSY_TIMEOUT_MS),
+    cacheSizeKib: z.number().step(1).min(0).max(MAX_CACHE_SIZE_KIB),
     writeBatchMaxDelayMs: z.number().step(1).min(1).max(MAX_WRITE_BATCH_DELAY_MS)
       .default(DEFAULT_WRITE_BATCH_MAX_DELAY_MS),
   })
@@ -84,6 +94,7 @@ export class SqliteSessionPersistence extends SessionPersistence {
       path: config.path,
       journalMode: config.journalMode ?? 'wal',
       busyTimeoutMs: config.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
+      ...config.cacheSizeKib === undefined ? {} : { cacheSizeKib: config.cacheSizeKib },
     })
     this.tracker = new SqliteBackendTracker(this.name)
     // Registered before the tracker's teardown so disposal closes every open

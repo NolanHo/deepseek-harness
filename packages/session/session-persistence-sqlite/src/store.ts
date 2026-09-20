@@ -50,6 +50,8 @@ export interface SqliteStoreOptions {
   readonly path: string
   readonly journalMode: JournalMode
   readonly busyTimeoutMs: number
+  /** SQLite page cache per connection, in KiB; omitted keeps SQLite's default. */
+  readonly cacheSizeKib?: number
 }
 
 /** One stored log restored and validated to the current logical format. */
@@ -137,6 +139,7 @@ export class SqliteStore {
       this.databasePath,
       this.options.journalMode,
       this.options.busyTimeoutMs,
+      this.options.cacheSizeKib,
     )
     try {
       const row = this.db.prepare(sql('select-store-id')).get()

@@ -54,6 +54,7 @@ kind: "package-reference"
 | `path` | 必填 | SQLite 数据库路径，或 `:memory:` |
 | `journalMode` | `wal` | 持久 journal mode：`wal`、`delete`、`truncate` 或 `persist` |
 | `busyTimeoutMs` | `5,000` | 等待另一连接锁的最长同步时间 |
+| `cacheSizeKib` | SQLite 的 `-2000`（约 1.95 MiB） | 每个连接的 SQLite 页缓存，单位为 KiB；省略时不执行任何 pragma |
 | `writeBatchMaxDelayMs` | `200` | 实时事件的固定聚合窗口，单位为毫秒 |
 
 本包接受的字段见[最小配置](#minimal-configuration)表；每个字段及其 JSDoc 的穷尽式真源是生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-session-persistence-sqlite)。
@@ -75,9 +76,9 @@ await ctx.sessionPersistence.append(id, events)
 
 ### 启动与安全运行
 
-全新数据库直接初始化为 schema 版本 20，并使用 64 KiB page。既有 schema-19 数据库会在打开事务内一次性原地升级：events 表增加 `ignorable` envelope 列，原打包行写入 schema-20 的打包行哨兵值，并删除旧的 `is_packed` 列。任何其他版本、外来应用标识、无版本的非全新 schema 或意外 schema 对象，都会在任何数据暴露或变更之前被拒绝。每条语句和固定 pragma 都来自 `resources/sql/` 下打包的 `.sql` 资源，运行时的值以 SQLite 参数绑定，包代码从不拼装查询文本。
+全新数据库直接初始化为 schema 版本 20，并使用 64 KiB page。既有 schema-19 数据库会在打开事务内一次性原地升级：events 表增加 `ignorable` envelope 列，原打包行写入 schema-20 的打包行哨兵值，并删除旧的 `is_packed` 列。任何其他版本、外来应用标识、无版本的非全新 schema 或意外 schema 对象，都会在任何数据暴露或变更之前被拒绝。每条语句和 pragma 都来自 `resources/sql/` 下打包的 `.sql` 资源，运行时的值以 SQLite 参数绑定，包代码从不拼装查询文本。唯一例外是 `cache_size` 的可选值：SQLite 拒绝绑定它，由经校验的 `cacheSizeKib` 代入其打包语句。
 
-每个连接都会禁用 SQLite trusted schema 与内存映射 I/O、验证所请求的 journal mode，并固定 `synchronous=FULL`，保证成功返回的追加在操作系统崩溃或断电后依然持久。在 POSIX 上，数据库父目录和文件必须属于当前用户，父目录不得允许组或其他用户写入，文件也不得授予任何组或其他用户权限；Windows 还会拒绝符号链接和非普通文件，ACL 限制则由部署方负责。路径与所有权失败会拒绝插件初始化；Node 的 SQLite 驱动在首次持久化操作时才延迟加载。普通 `create` 会保持惰性直到首次 append，而 `ensureMaterialized` 会写入一条没有事件行的会话元数据记录。
+每个连接都会禁用 SQLite trusted schema 与内存映射 I/O、验证所请求的 journal mode，并固定 `synchronous=FULL`，保证成功返回的追加在操作系统崩溃或断电后依然持久。配置 `cacheSizeKib` 时，该连接使用所请求的页缓存，而非 SQLite 默认建议的 2,000 KiB（`-2000`，约 1.95 MiB）；省略该字段则不执行任何 pragma、保持该默认值，而 `0` 会应用 `-0`，即一个零页建议，SQLite 会将其下限钳制为 10 页。在 POSIX 上，数据库父目录和文件必须属于当前用户，父目录不得允许组或其他用户写入，文件也不得授予任何组或其他用户权限；Windows 还会拒绝符号链接和非普通文件，ACL 限制则由部署方负责。路径与所有权失败会拒绝插件初始化；Node 的 SQLite 驱动在首次持久化操作时才延迟加载。普通 `create` 会保持惰性直到首次 append，而 `ensureMaterialized` 会写入一条没有事件行的会话元数据记录。
 
 -----
 
