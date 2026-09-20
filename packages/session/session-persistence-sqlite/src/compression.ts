@@ -6,8 +6,8 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { TextDecoder } from 'node:util'
-import { constants, zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { promisify, TextDecoder } from 'node:util'
+import { constants, zstdCompressSync, zstdDecompress, zstdDecompressSync } from 'node:zlib'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SurfaceEventType } from '@deepseek-ai/dsh-session'
 import {
@@ -29,6 +29,20 @@ export interface BoundRecord {
   readonly surfaceOp: string | null
   readonly ignorable: number | null
 }
+
+/** One scanned physical row set: its contiguous logical prefix and removable tail. */
+export interface ScannedRows {
+  /** Decoded logical events, contiguous from the scan's base sequence. */
+  readonly preserved: StoredLogicalEvent[]
+  /** Physical deletion base of a removable tail, absent from a fully valid scan. */
+  readonly tornFrom?: number
+}
+
+/**
+ * Row scan selected from the store's configuration: the synchronous codec
+ * resolves within the call, the thread-pool codec after the pool decodes.
+ */
+export type StoredRowScan = (rows: readonly EventRow[], base?: number) => ScannedRows | Promise<ScannedRows>
 
 const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true })
 const ZSTD_COMPRESSION_LEVEL = 3
@@ -121,12 +135,28 @@ function encodeData(serialized: string): string | Uint8Array {
   return compressed.length < bytes.length ? compressed : serialized
 }
 
+/** Decompress options shared by every data-column frame. */
+const DATA_ZSTD_DECOMPRESS_OPTIONS = { dictionary: ZSTD_DICTIONARY } as const
+
+/** The asynchronous zstd entry point, which runs on the libuv thread pool. */
+const zstdDecompressAsync = promisify(zstdDecompress)
+
 function decodeData(value: string | Uint8Array, maxOutputLength?: number): string {
   if (typeof value === 'string') return value
   const decoded = maxOutputLength === undefined
-    ? zstdDecompressSync(value, { dictionary: ZSTD_DICTIONARY })
-    : zstdDecompressSync(value, { dictionary: ZSTD_DICTIONARY, maxOutputLength })
+    ? zstdDecompressSync(value, DATA_ZSTD_DECOMPRESS_OPTIONS)
+    : zstdDecompressSync(value, { ...DATA_ZSTD_DECOMPRESS_OPTIONS, maxOutputLength })
   return UTF8_DECODER.decode(decoded)
+}
+
+/** Decompress one data column on the libuv thread pool. */
+function decompressOnThreadPool(value: Uint8Array, maxOutputLength?: number): Promise<Buffer> {
+  return zstdDecompressAsync(
+    value,
+    maxOutputLength === undefined
+      ? DATA_ZSTD_DECOMPRESS_OPTIONS
+      : { ...DATA_ZSTD_DECOMPRESS_OPTIONS, maxOutputLength },
+  )
 }
 
 function encodeSourceEventSeqs(values: readonly number[]): Uint8Array {
@@ -300,7 +330,7 @@ function decodeScalarRow(row: EventRow): StoredLogicalEvent {
 export function scanRows(
   rows: readonly EventRow[],
   base = 0,
-): { preserved: StoredLogicalEvent[]; tornFrom?: number } {
+): ScannedRows {
   let lastTurnEndRow = -1
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     try {
@@ -346,4 +376,67 @@ export function scanRows(
     preserved.push(...logicalEvents)
   }
   return { preserved }
+}
+
+/**
+ * Compressed data columns submitted to the thread pool in one round: twice
+ * libuv's default pool size of 4, since this deployment configures no
+ * `UV_THREADPOOL_SIZE`. The window bounds decodes in flight, not memory —
+ * {@link hydrateDataColumns} accumulates every decoded column into one array
+ * while the caller still holds its compressed rows, so this path peaks above
+ * the synchronous {@link scanRows}, which decodes one row at a time.
+ */
+const HYDRATION_WINDOW = 8
+
+/**
+ * Scan physical rows with the thread-pool codec: `zstdDecompress` decodes each
+ * compressed data column on the libuv pool, then the same scan the synchronous
+ * codec runs flattens the hydrated rows, so the decoded prefix and every
+ * classification (generic data, torn tail, committed corruption, malformed
+ * row) match {@link scanRows}.
+ *
+ * Fork patch (FORK_SURFACE.md): the cold-read arm of the `asyncCodec` switch.
+ * @param rows - physical rows ordered by their first logical sequence.
+ * @param base - logical sequence expected from the first selected row.
+ * @returns the contiguous logical prefix and optional physical deletion base.
+ */
+export async function scanRowsOnThreadPool(
+  rows: readonly EventRow[],
+  base = 0,
+): Promise<ScannedRows> {
+  return scanRows(await hydrateDataColumns(rows), base)
+}
+
+/**
+ * Decompress the compressed data columns of one row set on the libuv thread
+ * pool, one bounded window at a time.
+ * @param rows - physical rows whose compressed data columns this call decodes.
+ * @returns the rows carrying decoded UTF-8 text columns.
+ */
+async function hydrateDataColumns(rows: readonly EventRow[]): Promise<EventRow[]> {
+  const hydrated: EventRow[] = []
+  for (let offset = 0; offset < rows.length; offset += HYDRATION_WINDOW) {
+    hydrated.push(...await Promise.all(
+      rows.slice(offset, offset + HYDRATION_WINDOW).map(hydrateDataColumn),
+    ))
+  }
+  return hydrated
+}
+
+/**
+ * Decode one physical row's data column when it is compressed.
+ * @param row - the physical row to hydrate.
+ * @returns the row carrying decoded text, or unchanged when it is not compressed.
+ */
+async function hydrateDataColumn(row: EventRow): Promise<EventRow> {
+  if (typeof row.data === 'string') return row
+  const bound = row.ignorable === PACKED_ROW_SENTINEL ? MAX_PACKED_DATA_BYTES : undefined
+  try {
+    return { ...row, data: UTF8_DECODER.decode(await decompressOnThreadPool(row.data, bound)) }
+  } catch {
+    // A column this call cannot decode keeps its compressed value, so the
+    // scan's own per-row decode classifies the malformed row where the
+    // synchronous codec classifies it.
+    return row
+  }
 }

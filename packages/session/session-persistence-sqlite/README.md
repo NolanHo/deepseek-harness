@@ -56,6 +56,7 @@ Load the session service first, then mount the provider with a database path. Us
 | `busyTimeoutMs` | `5,000` | Maximum synchronous wait for another connection's lock |
 | `cacheSizeKib` | SQLite's `-2000` (about 1.95 MiB) | SQLite page cache per connection, in KiB; omitted executes no pragma |
 | `writeBatchMaxDelayMs` | `200` | Fixed live-event coalescing window, in milliseconds |
+| `asyncCodec` | `false` | Decompress stored logs on the libuv thread pool instead of the reading thread |
 
 The [minimal configuration](#minimal-configuration) table lists the fields this package accepts, and the generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-session-persistence-sqlite) is the exhaustive source for each field and its JSDoc.
 
@@ -135,6 +136,8 @@ Each append takes an immediate transaction, re-validates schema ownership, check
 
 A full read locates the last valid `turn/end` in a reverse pass, then decodes each physical row into its logical events in forward order, rejecting gaps or malformed rows in the committed prefix. A malformed final row is treated as a torn tail: a mutating load may delete it under the write lock and close the log with synthetic closers. Suffix reads (`readFrom`) examine only the physical span that may contain the requested sequence, so they never parse unrelated earlier rows.
 
+`asyncCodec` selects the thread that decompresses those rows. With it on, `zlib.zstdDecompress` decodes every compressed data column on the libuv thread pool before the same scan flattens the rows, so a cold read yields between rows and concurrent cold reads decompress in parallel up to the pool size. Compression, and any decode that runs while a write transaction is open (the append tail window, repair, truncate), stays on the calling thread: an await inside an open transaction would let another operation start a nested one on the same connection. Both settings write identical rows and read identical events; `tests/compression-async.spec.ts` and `tests/async-codec.spec.ts` pin that.
+
 </details>
 
 -----
@@ -178,7 +181,7 @@ These limits define when the provider is a poor fit or needs special operational
 
 - **Pre-release schema policy** — only the current schema 20 and its schema-19 predecessor open; any other on-disk version is rejected without conversion.
 - **Packing depends on batch boundaries** — a compatible run split by the write-behind window or an explicit flush stays split across physical rows; this avoids rewriting prior rows at the cost of a timing-dependent packing ratio.
-- **Synchronous SQLite and compression** — Node's SQLite driver and Zstandard calls block the JavaScript thread.
+- **Synchronous SQLite and compression** — Node's SQLite driver blocks the JavaScript thread, and so does Zstandard compression. `asyncCodec` moves only the decompression of a stored-log read to the libuv thread pool; a write transaction's compression and decodes stay synchronous, and neither can use the pool while a transaction is open.
 - **Busy waits block the event loop** — SQLite waits inside synchronous calls; a competing writer can stall the thread for up to the configured `busyTimeoutMs`.
 - **External SQL readers must decode physical rows** — a packed `events.type` (`text-chunks`, `reasoning-chunks`, `tool-call-chunks`) is not a logical event type; supported consumers read through this provider.
 - **No deletion or historical compaction** — normal appends are insert-only and nothing removes old rows.

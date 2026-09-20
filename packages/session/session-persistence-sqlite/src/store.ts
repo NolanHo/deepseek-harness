@@ -28,7 +28,9 @@ import {
   bindRecord,
   decodeRow,
   scanRows,
+  scanRowsOnThreadPool,
   type BoundRecord,
+  type StoredRowScan,
 } from './compression.ts'
 import { restoreStoredHeader, restoreStoredLog } from './restore.ts'
 import {
@@ -52,6 +54,12 @@ export interface SqliteStoreOptions {
   readonly busyTimeoutMs: number
   /** SQLite page cache per connection, in KiB; omitted keeps SQLite's default. */
   readonly cacheSizeKib?: number
+  /**
+   * Decompress stored logs on the libuv thread pool instead of the calling
+   * thread; the provider's `asyncCodec` configuration owns the choice, and an
+   * omitted value keeps the synchronous behavior.
+   */
+  readonly asyncCodec?: boolean
 }
 
 /** One stored log restored and validated to the current logical format. */
@@ -95,8 +103,24 @@ export class SqliteStore {
   private opened = false
   private pathReady: Promise<void> | undefined
   private ready: Promise<void> | undefined
+  /**
+   * Row scan for stored logs. Fork patch (FORK_SURFACE.md): only the scans that
+   * read outside a transaction use it. A decode that runs while this store
+   * holds a write transaction stays synchronous, so no await can leave a
+   * transaction open across another statement on the connection.
+   *
+   * Awaiting this scan widens the gap between the read transaction that
+   * selected the rows and the scan that classifies them, so a concurrent
+   * append, repair, or truncate can commit in between. The scan still
+   * classifies exactly the rows that transaction returned, and every mutation
+   * re-reads the stored tail inside its own immediate transaction and rejects a
+   * stale base instead of acting on it.
+   */
+  private readonly scanStoredRows: StoredRowScan
 
-  constructor(private readonly options: SqliteStoreOptions) {}
+  constructor(private readonly options: SqliteStoreOptions) {
+    this.scanStoredRows = options.asyncCodec === true ? scanRowsOnThreadPool : scanRows
+  }
 
   /**
    * Validate filesystem ownership without importing or opening Node SQLite.
@@ -183,7 +207,7 @@ export class SqliteStore {
     })
     signal?.throwIfAborted()
     if (snapshot === undefined) return undefined
-    const scanned = scanRows(snapshot.eventRows)
+    const scanned = await this.scanStoredRows(snapshot.eventRows)
     const restored = restoreStoredLog(storedPhysicalHeaderOf(snapshot.row), scanned.preserved, id)
     if (snapshot.row.version === SESSION_FORMAT_VERSION
       && Number(restored.inheritedEventCount) !== (snapshot.row.seed_length ?? 0)) {
@@ -238,7 +262,7 @@ export class SqliteStore {
       ...this.physicalSpanFrom(this.sessionKey(id), fromSeq),
     }))
     signal?.throwIfAborted()
-    const { preserved } = scanRows(snapshot.eventRows, snapshot.base)
+    const { preserved } = await this.scanStoredRows(snapshot.eventRows, snapshot.base)
     const meta = currentHeaderOf(row)
     const events = preserved.filter(event => event.seq >= fromSeq) as SessionEvent[]
     validateStoredEvents(meta, events)

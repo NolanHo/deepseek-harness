@@ -66,6 +66,20 @@ export interface Config {
   cacheSizeKib?: number
   /** Fixed live-event coalescing window; not a backend completion deadline. */
   writeBatchMaxDelayMs?: number
+  /**
+   * Decompress stored session logs on the libuv thread pool instead of the
+   * thread that reads them; defaults to `false`. Fork patch (FORK_SURFACE.md).
+   *
+   * A cold read decompresses every packed data column of the log, and the
+   * synchronous decoder blocks the event loop for as long as that takes. This
+   * switch hands those columns to `zlib.zstdDecompress` — same dictionary, same
+   * result bytes, same stored rows — so the read yields between rows and
+   * concurrent cold reads decompress in parallel up to the pool size
+   * (`UV_THREADPOOL_SIZE`). Compression and the decodes a write transaction
+   * holds stay synchronous, which keeps both states writing identical rows and
+   * lets this switch be bisected or rolled back on its own.
+   */
+  asyncCodec?: boolean
 }
 
 /**
@@ -81,6 +95,7 @@ export class SqliteSessionPersistence extends SessionPersistence {
     cacheSizeKib: z.number().step(1).min(0).max(MAX_CACHE_SIZE_KIB),
     writeBatchMaxDelayMs: z.number().step(1).min(1).max(MAX_WRITE_BATCH_DELAY_MS)
       .default(DEFAULT_WRITE_BATCH_MAX_DELAY_MS),
+    asyncCodec: z.boolean().default(false),
   })
 
   private readonly store: SqliteStore
@@ -95,6 +110,7 @@ export class SqliteSessionPersistence extends SessionPersistence {
       journalMode: config.journalMode ?? 'wal',
       busyTimeoutMs: config.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
       ...config.cacheSizeKib === undefined ? {} : { cacheSizeKib: config.cacheSizeKib },
+      asyncCodec: config.asyncCodec ?? false,
     })
     this.tracker = new SqliteBackendTracker(this.name)
     // Registered before the tracker's teardown so disposal closes every open
