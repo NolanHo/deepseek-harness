@@ -88,7 +88,7 @@ describe.skipIf(MODE === 'record')('web e2e: document preview through Files', ()
     const settled = scaffold.whenTurnSettled()
     const input = page.locator('[data-composer-input]').first()
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const sessionId = await settled
     await page.getByText('LIGHTHOUSE', { exact: true }).waitFor({ timeout: 15_000 })
     const cwd = scaffold.ctx.agents.get(sessionId)?.session.header.cwd

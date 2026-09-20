@@ -18,7 +18,6 @@ export const zh = {
   'placeholder.parentOffline': '父会话已离线，无法继续发送；仍可停止当前运行',
   'placeholder.hero': '描述你想要构建的内容, / 调用指令, @ 文件或对话',
   'placeholder.workspace': '选择一个工作区开始',
-  'placeholder.steerQueue': 'Cmd/Ctrl+Enter 插话发送全部排队消息',
   'input.commands': '指令',
   'input.stop': '停止生成',
   'input.send': '发送消息',
@@ -65,7 +64,9 @@ export const zh = {
   'context.tools': '工具定义',
   'context.messages': '对话消息',
   'settings.enter.title': '繁忙时的发送行为',
-  'settings.enter.description': '智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为',
+  // Fork patch (FORK_SURFACE.md): the setting governs the submit chord and
+  // the Send button together (no inverted Cmd/Ctrl+Enter mode).
+  'settings.enter.description': '智能体运行时 Cmd/Ctrl+Enter 与发送按钮的发送方式',
   'settings.enter.queue': '排队发送',
   'settings.enter.steer': '插话发送',
   'access.preset.readOnly': '仅可查看',
@@ -184,7 +185,6 @@ export const en = {
   'placeholder.parentOffline': 'Parent session offline; sending is unavailable but you can still stop the run',
   'placeholder.hero': 'Describe what you want to build, / commands, @ files or sessions',
   'placeholder.workspace': 'Choose a workspace to start',
-  'placeholder.steerQueue': 'Cmd/Ctrl+Enter steers all queued messages',
   'input.commands': 'Commands',
   'input.stop': 'Stop generating',
   'input.send': 'Send message',
@@ -231,7 +231,9 @@ export const en = {
   'context.tools': 'Tool definitions',
   'context.messages': 'Messages',
   'settings.enter.title': 'Send behavior while busy',
-  'settings.enter.description': 'What Enter and the Send button do while the agent is running; Cmd/Ctrl+Enter uses the other behavior',
+  // Fork patch (FORK_SURFACE.md): the setting governs the submit chord and
+  // the Send button together (no inverted Cmd/Ctrl+Enter mode).
+  'settings.enter.description': 'How Cmd/Ctrl+Enter and the Send button deliver while the agent is running',
   'settings.enter.queue': 'Queue',
   'settings.enter.steer': 'Steer',
   'access.preset.readOnly': 'Read Only',

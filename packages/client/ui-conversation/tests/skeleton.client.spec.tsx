@@ -371,7 +371,8 @@ describe('ConversationRoot resident composer', () => {
     // tree: the DOM survives the block being raised and cleared.
     expect(box.getAttribute('aria-disabled')).toBe('true')
     expect(box.getAttribute('data-placeholder')).toBe('select a model first')
-    fireEvent.keyDown(box, { key: 'Enter' })
+    // Even the submit chord is refused while the blocker stands.
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
     expect(b.sink).not.toHaveBeenCalled()
 
     // The model seat stays live. Locking it too would leave the composer

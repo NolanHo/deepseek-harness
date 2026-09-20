@@ -1,6 +1,7 @@
 # Agent Note: 统一 composer 提交路径——Enter 换行，Cmd/Ctrl+Enter 与发送按钮共用繁忙态策略
 
 Status: implemented
+Archived: 2026-09-19
 
 [English](2026-08-28-composer-submission-chord-and-button.md) | 中文
 

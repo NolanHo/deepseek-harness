@@ -1,4 +1,4 @@
-# Agent Note: 繁忙态 Send 按钮跟随 Enter 设置
+# Agent Note: 繁忙态 Send 按钮跟随 busy-Enter 设置
 
 Status: implemented
 
@@ -10,11 +10,11 @@ Web composer 为 agent（智能体）运行期间的提交只提供一个面向�
 
 ## 决策
 
-运行中的 Send 按钮按与 plain Enter 相同的模式投递。`InputBar` 每次渲染计算一次 `resolveSubmitMode(busyEnter, running, 'enter', steeringAvailable)`，其中 `steeringAvailable` 与键盘路径使用同一个"普通 Session 或可继续 child"判定；用它通过 `ComposerKeyboard.submit(mode)` 执行主按钮点击，并且仅在点击会投递一条普通消息时用它决定主按钮标签：composer 运行中且可 steering、按钮可用（没有仍在上传的文件）、草稿非空、未被认领且不是将进入命令 adjudication 的 `/` 行。该状态把 `input.send.queue`（"Queue message" / "排队发送"）或 `input.send.steer`（"Steer message" / "插话发送"）同时用作 tooltip 与可访问名称；该位置仍为 Send 按钮的其余所有状态——空闲会话、one-shot child、锁定的 composer、可继续 child 的空草稿、带待上传附件的草稿，以及点击会执行命令而非投递消息的命令草稿——保留 `input.send`（"Send message"）；普通运行中会话在空草稿或 owner block 时该位置显示的是 Stop。Cmd/Ctrl+Enter 仍解析为相反模式，空草稿下的加速手势仍对整个队列执行 steering（中途引导）。[可继续 subagent 中断 Agent Note](../feature/2026-08-06-continuable-subagent-interrupt.zh.md)以此投递方式描述 child 的 Send。
+运行中的 Send 按钮按与提交组合键相同的模式投递。`InputBar` 每次渲染计算一次 `resolveSubmitMode(busyEnter, running, 'enter', steeringAvailable)`，其中 `steeringAvailable` 与键盘路径使用同一个"普通 Session 或可继续 child"判定；用它通过 `ComposerKeyboard.submit(mode)` 执行主按钮点击，并且仅在点击会投递一条普通消息时用它决定主按钮标签：composer 运行中且可 steering、按钮可用（没有仍在上传的文件）、草稿非空、未被认领且不是将进入命令 adjudication 的 `/` 行。该状态把 `input.send.queue`（"Queue message" / "排队发送"）或 `input.send.steer`（"Steer message" / "插话发送"）同时用作 tooltip 与可访问名称；该位置仍为 Send 按钮的其余所有状态——空闲会话、one-shot child、锁定的 composer、可继续 child 的空草稿、带待上传附件的草稿，以及点击会执行命令而非投递消息的命令草稿——保留 `input.send`（"Send message"）；普通运行中会话在空草稿或 owner block 时该位置显示的是 Stop。普通 Enter 是换行，组合键解析为与此相同的模式（[仅组合键提交](../feature/2026-09-19-composer-chord-only-submission.zh.md)）；空草稿整队列 steer 已移除。[可继续 subagent 中断 Agent Note](../feature/2026-08-06-continuable-subagent-interrupt.zh.md)以此投递方式描述 child 的 Send。
 
 composer bar 的 inject 接口携带实时偏好，而不是解析闭包。`ComposerBarInjected.hooks.busyEnter` 发布 `ComposerSubmissionPolicy.busyEnter`，因此 bar 获得 `useBusyEnter` 选择器 hook，并在设置行或 Host 设置更新改变该值时重新渲染标签。`resolveSubmitMode` 是 `submission-policy.ts` 中导出的纯函数，显式接收偏好值；policy 类只保留 store 及其 Host 采纳与写回。
 
-设置行重新命名以覆盖两种输入："Send behavior while busy" / "繁忙时的发送行为"，描述为 agent 运行时 Enter 与 Send 按钮的行为，并保留 Cmd/Ctrl+Enter 使用相反模式的说明。`busyEnter` 字段名、其 `queue` 默认值和 Host schema 均未改变，因此现有 `settings.yaml` 文档保持原有含义。
+设置行重新命名以覆盖两种输入："Send behavior while busy" / "繁忙时的发送行为"，描述为 agent 运行时提交组合键与 Send 按钮的发送方式。`busyEnter` 字段名、其 `queue` 默认值和 Host schema 均未改变，因此现有 `settings.yaml` 文档保持原有含义。
 
 ## 验证
 
@@ -32,4 +32,4 @@ composer bar 的 inject 接口携带实时偏好，而不是解析闭包。`Comp
 
 ## 影响
 
-该设置约束用户能以消息触发的每一种繁忙态提交，且按钮会声明它执行哪种投递，因此选择 Steer 后不再会从草稿旁的按钮产生 Queue 行。此前在设置为 Steer 时依赖按钮作为始终 Queue 逃生口的用户，现在改用 Cmd/Ctrl+Enter。运行中的 Send 标签对每位用户都会变化，包括默认的 Queue 偏好下，运行中点击 Send 的 Web e2e 场景已相应处理；空闲会话流程和 one-shot subagent composer 没有变化。已归档的运行中草稿 Agent Note 中"指针操作忽略偏好"的条款在此被反转；其主操作位置、owner block 与 subagent 控件决策按已交付状态继续有效，并由 `ui-conversation` README 描述。
+该设置约束用户能以消息触发的每一种繁忙态提交，且按钮会声明它执行哪种投递，因此选择 Steer 后不再会从草稿旁的按钮产生 Queue 行。设置为 Steer 时不再存在始终 Queue 的指针逃生口：普通 Enter 插入换行，组合键跟随设置（[仅组合键提交](../feature/2026-09-19-composer-chord-only-submission.zh.md)）。运行中的 Send 标签对每位用户都会变化，包括默认的 Queue 偏好下，运行中点击 Send 的 Web e2e 场景已相应处理；空闲会话流程和 one-shot subagent composer 没有变化。已归档的运行中草稿 Agent Note 中"指针操作忽略偏好"的条款在此被反转；其主操作位置、owner block 与 subagent 控件决策按已交付状态继续有效，并由 `ui-conversation` README 描述。

@@ -141,8 +141,6 @@ export const InputBar = memo(function InputBar({
   const editorDisabled = removed || (locked && !workspaceTrigger)
   const editable = live && !locked && !machineBusy
   const steeringAvailable = subagent === null || subagent.address.mode === 'continuable'
-  const canSteerQueue = !locked && !machineBusy && !commandMenuOpen && empty && running && steeringAvailable
-    && input.queue.some(row => row.placement === 'queued')
 
   useEffect(() => {
     if (input === undefined || inputActions === undefined) return
@@ -265,11 +263,11 @@ export const InputBar = memo(function InputBar({
   // The keymap handlers read live bar state through this ref so the editor
   // registration survives re-renders without re-arming per keystroke.
   const gate = useRef({
-    locked, machineBusy, canSteerQueue, running, steeringAvailable, busyEnter,
+    locked, machineBusy, running, steeringAvailable, busyEnter,
     intakeFiles, uploadsPending, showToast, t,
   })
   gate.current = {
-    locked, machineBusy, canSteerQueue, running, steeringAvailable, busyEnter,
+    locked, machineBusy, running, steeringAvailable, busyEnter,
     intakeFiles, uploadsPending, showToast, t,
   }
 
@@ -283,23 +281,23 @@ export const InputBar = memo(function InputBar({
       },
       dismissPopup: () => { keyboard.dismissPopup() },
       canSubmit: () => !gate.current.locked && !gate.current.machineBusy,
-      submit: (accelerated) => {
+      submit: (_accelerated) => {
         const g = gate.current
-        // Empty-draft accelerated Enter acts on the queue instead of the
-        // (empty) draft: the machine rejects empty drafts, so the gesture
-        // steers every still-pending queued message into the running turn.
-        if (accelerated && g.canSteerQueue) {
-          keyboard.steerQueue()
-          return
-        }
+        // Fork patch (FORK_SURFACE.md): the empty-draft whole-queue steer is
+        // gone — with plain Enter demoted to a newline, a double chord press
+        // would steer the just-queued message into the running turn. An empty
+        // draft now falls through to the machine's empty-draft rejection.
         if (g.uploadsPending) {
           g.showToast(g.t('file.stillUploading'))
           return
         }
+        // Fork patch (FORK_SURFACE.md): the Cmd/Ctrl chord carries the Send
+        // button's delivery mode (the busyEnter preference), rather than
+        // upstream's inverted accelerated gesture.
         keyboard.submit(resolveSubmitMode(
           g.busyEnter,
           g.running,
-          accelerated ? 'accelerated' : 'enter',
+          'enter',
           g.steeringAvailable,
         ))
       },
@@ -336,7 +334,7 @@ export const InputBar = memo(function InputBar({
 
   // An ordinary running session keeps Stop while the composer is empty or
   // owner-blocked; an actionable draft gets the busy Send action, delivered
-  // through the same mode plain Enter resolves to. The label names that mode
+  // through the same mode Cmd/Ctrl+Enter resolves to. The label names that mode
   // only when the click would deliver a plain message right now — an enabled
   // button (no pending upload) over a non-empty draft that is neither a
   // claimed command nor a `/` line headed for adjudication — so it never
@@ -395,12 +393,9 @@ export const InputBar = memo(function InputBar({
     ? t('placeholder.parentOffline')
     : disabled
       ? t('placeholder.unavailable')
-      // The steer hint deliberately outranks the plan placeholder:
-      // while it shows, the whole-queue gesture is genuinely available
-      // (the gate never consults plan mode), so the actionable hint wins.
-      : canSteerQueue
-        ? t('placeholder.steerQueue')
-        : planActive ? t('placeholder.plan') : t('placeholder.default'))
+      // Fork patch (FORK_SURFACE.md): the whole-queue steer hint left with
+      // its gesture (see the submit handler); plan/default guidance remains.
+      : planActive ? t('placeholder.plan') : t('placeholder.default'))
 
   return (
     <div className={clsx(css.root, variant === 'hero' && css.hero)}>

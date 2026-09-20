@@ -1,7 +1,7 @@
 /**
  * Composer keymap over the Lexical command layer: menu arbitration
- * (arrows/escape/enter), space adjudication, the Enter submit gesture, and
- * paste routing. Registered at CRITICAL priority so it decides before
+ * (arrows/escape/enter), space adjudication, the Cmd/Ctrl+Enter submit chord,
+ * and paste routing. Registered at CRITICAL priority so it decides before
  * @lexical/plain-text's own Enter/paste defaults; a handler returning false
  * falls through to those defaults (Shift+Enter's line break, ordinary
  * spaces, text paste the bar routes itself).
@@ -121,6 +121,10 @@ export function registerComposerKeymap(editor: LexicalEditor, handlers: Composer
         event?.preventDefault()
         return true
       }
+      // Fork patch (FORK_SURFACE.md): plain Enter inserts a native newline; only
+      // the Cmd/Ctrl chord submits, and it resolves to the Send button's delivery
+      // mode (the busyEnter preference) instead of upstream's inverted gesture.
+      if (event !== null && !(event.metaKey || event.ctrlKey)) return false
       event?.preventDefault()
       if (event?.repeat === true) return true // held-down Enter must not machine-gun sends
       if (!handlers.canSubmit()) return true

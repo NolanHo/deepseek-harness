@@ -58,7 +58,8 @@ function surface(page: Page): ReturnType<Page['locator']> {
 
 /**
  * Replace the draft through real gestures: select-all, delete, then insert
- * the rows with soft line breaks (the composer's Enter submits).
+ * the rows with soft line breaks (Shift+Enter breaks the line; only the
+ * Cmd/Ctrl chord submits).
  * @param page - the page under test.
  * @param rows - draft lines; a trailing empty row leaves a trailing newline.
  */
