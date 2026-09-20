@@ -16,9 +16,9 @@ Status: implemented
 
 **只有解压离开线程。** 压缩仍在调用方线程上用 `zstdCompressSync`，事务持有的每次解码也一样。
 
-**只在读事务返回之后 await 线程池。** `loadStoredLog` 与 `loadStoredFrom` 在同步的 `readTransaction` 内选出各自的行，之后才水合。同一条 `DatabaseSync` 连接无法承载两个打开的事务：在事务内 await 会让同一连接上的另一个操作开启嵌套 `BEGIN`，或回滚已打开的事务 —— 交错的 `ROLLBACK` 终止写方事务，写方的 `COMMIT` 随之失败，已写入的那部分被静默 autocommit。因此即使开关打开，每条写路径仍用同步解码器。
+**只在读事务返回之后 await 线程池。** `loadStoredLog` 与 `loadStoredFrom` 在同步的 `readTransaction` 内选出各自的行，之后才水合。同一条 `DatabaseSync` 连接无法承载两个打开的事务，而在事务内 await 会打开窗口：另一个操作的 `BEGIN` 以 `cannot start a transaction within a transaction` 失败，它的 `ROLLBACK` 终止写方仍以为持有的事务 —— 该回滚之前写入的行全部被丢弃，之后写入的一行在事务之外 autocommit，写方的 `COMMIT` 随后以 `cannot commit - no transaction is active` 失败。因此即使开关打开，每条写路径仍用同步解码器。
 
-**压缩不异步，因为两种帧不同。** Node 的异步 zstd 入口是流式的那个（`ZSTD_compressStream2`，写出 window descriptor），而 `zstdCompressSync` 是一次性的 `ZSTD_compress2`，其 single-segment 帧携带 `Frame_Content_Size`。用存储编解码器自己的选项 —— 它的字典与 level 3 —— 同一输入从不逐字节相同：在 Node 25.9.0 上 5 次探测 0 次相同，同步帧以 `28 b5 2f fd 60` 开头，异步帧以 `28 b5 2f fd 00` 开头。压缩改为异步会改变每个存储行的内容；而 `worker_thread` 要恢复逐字节相同，就得给一个前提为"不额外增加 isolate 与堆"的开关加上第二个 isolate 与堆。正是压缩保持同步，才让两种设置写出逐字节相同的物理行，`tests/async-codec.spec.ts` 逐列比对这一点。
+**压缩不异步，因为两种帧不同。** Node 的异步 zstd 入口是流式的那个（`ZSTD_compressStream2`，写出 window descriptor），而 `zstdCompressSync` 是一次性的 `ZSTD_compress2`，其 single-segment 帧携带 `Frame_Content_Size`。用存储编解码器自己的选项 —— 它的字典与 level 3 —— 5 个探测输入在 Node 25.9.0 上全部不同：同步帧以 `28 b5 2f fd 60` 开头，异步帧以 `28 b5 2f fd 00` 开头。压缩改为异步会改变每个存储行的内容；而 `worker_thread` 要恢复逐字节相同，就得给一个前提为"不额外增加 isolate 与堆"的开关加上第二个 isolate 与堆。正是压缩保持同步，才让两种设置写出逐字节相同的物理行，`tests/async-codec.spec.ts` 逐列比对这一点。
 
 **窗口限制的是在飞解码数，不是内存。** `HYDRATION_WINDOW = 8` 一次最多提交 8 列，但 `hydrateDataColumns` 把全部解码列累积进一个数组，而调用方仍持有压缩行，因此该路径的峰值高于同步扫描 —— 后者解一行、用一行、丢一行。
 
@@ -30,17 +30,17 @@ Status: implemented
 
 **压缩也放到线程池上。** 因上述帧差异被拒：要么两种设置不再写同样的字节，必须指定其中一个为存储格式；要么把 zstd 搬进 `worker_thread`，用额外的 isolate、堆和一份要同步维护的第二份编解码器副本换取逐字节相同。
 
-**在读事务内 await 线程池。** 被拒：`readTransaction(async () => …)` 是自然的写法，而它产生的正是上面的事务危害而非变慢 —— 嵌套 `BEGIN` 报错，或写方 `COMMIT` 失败且其写入的一部分被 autocommit。
+**在读事务内 await 线程池。** 被拒：`readTransaction(async () => …)` 是自然的写法，而它产生的正是上面的事务危害而非变慢 —— 无法开始的嵌套 `BEGIN`、来自另一个操作并丢弃写方行的 `ROLLBACK`、以及随后失败的写方 `COMMIT`。
 
 **把开关默认设为 `true`。** 被拒：`false` 让已发布的路径在字节与行为上完全一致，这正是本次改动可以二分、可以只靠配置回滚的原因；想要池化解码的部署自己设该字段。
 
 ## 影响
 
-关闭即已发布行为。打开后，冷读在行与行之间让出，并发冷读共享线程池；解码的 CPU 开销不变，只是不再落在读取线程上，并发读之间互相重叠而不是排成一列。没有需要迁移的格式分叉：两种设置写出相同的行，并各自能读对方写的日志，因此该字段就是回滚的全部。线程池扫描比同行的同步扫描占用更多内存；写路径的停顿不变，因为压缩与事务内解码仍在调用方线程上运行。
+关闭即已发布行为。打开后，冷读在行与行之间让出，并发冷读共享线程池；解码的 CPU 开销不变，只是离开了读取线程，并发读之间互相重叠而不是排成一列。没有需要迁移的格式分叉：两种设置写出相同的行，并各自能读对方写的日志，因此该字段就是回滚的全部。线程池扫描比同行的同步扫描占用更多内存；写路径的停顿不变，因为压缩与事务内解码仍在调用方线程上运行。
 
 ## 测试
 
-`tests/compression-async.spec.ts` 把池化扫描与同步扫描对钉：混合物理日志解码出相同事件，撕裂尾、已提交损坏与畸形行的分类一致，打包的 `maxOutputLength` 上限与扫描 base 行为相同，配置后使用的是 `zstdDecompress` 入口，线程池无法解码的列留给扫描自己的分类。`tests/async-codec.spec.ts` 挂载 provider，钉住字段默认为 `false` 且拒绝非布尔值、两种设置写出逐字节相同的物理列、各自能读对方写的日志、只有配置过的 store 才调用池化解码器。
+`tests/compression-async.spec.ts` 把池化扫描与同步扫描对钉：混合物理日志解码出相同事件，撕裂尾、已提交损坏与畸形行的分类一致，打包的 `maxOutputLength` 上限与扫描 base 行为相同，配置后使用的是 `zstdDecompress` 入口，线程池无法解码的列留给扫描自己的分类。`tests/async-codec.spec.ts` 挂载 provider，钉住字段默认为 `false` 且拒绝非布尔值、两种设置写出逐字节相同的物理列、各自能读对方写的日志、只有配置过的 store 才调用池化解码器。`tests/page-cache-async-composition.spec.ts` 同时挂载两个 `Config` 字段，钉住组合后的 store 在连接上保持页缓存、为存储日志选择池化解码器、并在连接未保持 pragma 时让首次使用失败。
 
 ## 相关
 
