@@ -1358,3 +1358,237 @@ describe('SubagentRuntime.listDescendants', () => {
     )
   })
 })
+
+const COLD_CORPUS_PARENT = SessionId('cold-corpus-parent')
+
+/** One synthetic cold child: a durable header the live session store does not hold. */
+function coldHeader(id: string, createdAt: number): SessionHeader {
+  return {
+    version: SESSION_FORMAT_VERSION,
+    id: SessionId(id),
+    createdAt,
+    isSeeded: false,
+    parentSession: COLD_CORPUS_PARENT,
+    origin: 'subagent',
+  }
+}
+
+/** The identity every synthetic cold child's stored log folds to. */
+function coldIdentity(header: SessionHeader) {
+  return { mode: 'continuable' as const, label: `label ${header.id}`, seq: SessionSeq(2) }
+}
+
+/** One fabricated observation serving the identity this child's log would fold to. */
+function coldObservation(header: SessionHeader): SessionObservation {
+  return {
+    source: 'prepared',
+    header,
+    inheritedEventCount: SessionLogOffset(0),
+    events: [],
+    cursor: -1,
+    projections: { asOfSeq: SessionSeq(2), values: { subagent: coldIdentity(header) } },
+    retain: () => coldObservation(header),
+    [Symbol.dispose]: () => {},
+  } as unknown as SessionObservation
+}
+
+/** The child row one synthetic cold candidate resolves to. */
+function coldChildRow(header: SessionHeader) {
+  return {
+    kind: 'child' as const,
+    id: header.id,
+    label: `label ${header.id}`,
+    mode: 'continuable' as const,
+    activity: 'inactive' as const,
+    hasChildren: false,
+  }
+}
+
+/**
+ * Serve one synthetic cold corpus through the mounted query service: candidates
+ * exist only in its records and each observation is counted, so no persistence
+ * backend and no Agent runtime take part.
+ * @param ctx - context carrying the mounted query service.
+ * @param headers - cold children the corpus reports, in listing order.
+ * @param observe - observation served per candidate; defaults to an immediately resolving fabricated one.
+ * @returns the observed child ids, appended in observation order.
+ */
+function serveColdCorpus(
+  ctx: Context,
+  headers: readonly SessionHeader[],
+  observe?: (header: SessionHeader) => Promise<SessionObservation>,
+): SessionId[] {
+  vi.spyOn(ctx.sessionQuery, 'listSessions').mockResolvedValue(
+    headers.map(header => ({ header, live: false, persisted: true })),
+  )
+  const byId = new Map(headers.map(header => [header.id, header]))
+  const serve = observe ?? ((header: SessionHeader) => Promise.resolve(coldObservation(header)))
+  const observed: SessionId[] = []
+  vi.spyOn(ctx.sessionQuery, 'observeSession').mockImplementation((id) => {
+    const header = byId.get(id)
+    if (header === undefined) throw new Error(`unexpected cold observation: ${id}`)
+    observed.push(id)
+    return serve(header)
+  })
+  return observed
+}
+
+/** Mount the listing stack over a synthetic cold corpus. */
+async function setupColdCorpus(
+  headers: readonly SessionHeader[],
+  options: {
+    /** Validated deployment bounds; omitted mounts the shipped defaults. */
+    readonly config?: { readonly coldReadConcurrency?: number; readonly coldReadBudget?: number }
+    /** Observation served per candidate; defaults to an immediately resolving fabricated one. */
+    readonly observe?: (header: SessionHeader) => Promise<SessionObservation>
+  } = {},
+): Promise<{ ctx: Context; observed: SessionId[] }> {
+  const ctx = new Context()
+  await ctx.plugin(SessionStore)
+  await ctx.plugin(SessionProjectionRegistry)
+  await ctx.plugin(TestSessionQuery)
+  await ctx.plugin(SubagentRuntime, options.config)
+  return { ctx, observed: serveColdCorpus(ctx, headers, options.observe) }
+}
+
+describe('SubagentRuntime cold-read bounds', () => {
+  it('defaults both cold-read bounds and rejects a bound below one', async () => {
+    expect(SubagentRuntime.Config({})).toEqual({ coldReadConcurrency: 4, coldReadBudget: 64 })
+    expect(SubagentRuntime.Config({ coldReadBudget: 8 }))
+      .toEqual({ coldReadConcurrency: 4, coldReadBudget: 8 })
+    for (const invalid of [0, -1, 1.5]) {
+      expect(() => SubagentRuntime.Config({ coldReadConcurrency: invalid })).toThrow()
+      expect(() => SubagentRuntime.Config({ coldReadBudget: invalid })).toThrow()
+    }
+    await expect(new Context().plugin(SubagentRuntime, { coldReadBudget: 0 }))
+      .rejects.toThrow('invalid config')
+  })
+
+  it('reads only the leading cold candidates a listing budget allows', async () => {
+    const headers = [1, 2, 3, 4, 5].map(rank => coldHeader(`cold-budget-${rank}`, rank))
+    const { ctx, observed } = await setupColdCorpus(headers, {
+      config: { coldReadConcurrency: 4, coldReadBudget: 2 },
+    })
+
+    const entries = await ctx.subagents.listChildren(COLD_CORPUS_PARENT)
+
+    expect(observed).toEqual([headers[0]!.id, headers[1]!.id])
+    expect(entries).toEqual([
+      coldChildRow(headers[0]!),
+      coldChildRow(headers[1]!),
+      { kind: 'diagnostic', id: headers[2]!.id, reason: 'unavailable' },
+      { kind: 'diagnostic', id: headers[3]!.id, reason: 'unavailable' },
+      { kind: 'diagnostic', id: headers[4]!.id, reason: 'unavailable' },
+    ])
+  })
+
+  it('resolves every cold candidate when the corpus fits the default budget', async () => {
+    const headers = [1, 2, 3].map(rank => coldHeader(`cold-default-${rank}`, rank))
+    const { ctx, observed } = await setupColdCorpus(headers)
+
+    const entries = await ctx.subagents.listChildren(COLD_CORPUS_PARENT)
+
+    expect(observed).toEqual(headers.map(header => header.id))
+    expect(entries).toEqual(headers.map(coldChildRow))
+  })
+
+  it('treats a budget of one as one read and defers the rest', async () => {
+    const headers = [1, 2].map(rank => coldHeader(`cold-tiny-${rank}`, rank))
+    const { ctx, observed } = await setupColdCorpus(headers, {
+      config: { coldReadConcurrency: 1, coldReadBudget: 1 },
+    })
+
+    const entries = await ctx.subagents.listChildren(COLD_CORPUS_PARENT)
+
+    expect(observed).toEqual([headers[0]!.id])
+    expect(entries).toEqual([
+      coldChildRow(headers[0]!),
+      { kind: 'diagnostic', id: headers[1]!.id, reason: 'unavailable' },
+    ])
+  })
+
+  it('keeps concurrent cold observations at the configured concurrency', async () => {
+    const headers = [1, 2, 3, 4, 5, 6].map(rank => coldHeader(`cold-concurrency-${rank}`, rank))
+    const gate = Promise.withResolvers<undefined>()
+    let inFlight = 0
+    let peak = 0
+    const { ctx, observed } = await setupColdCorpus(headers, {
+      config: { coldReadConcurrency: 2 },
+      observe: (header) => {
+        inFlight += 1
+        peak = Math.max(peak, inFlight)
+        return gate.promise.then(() => {
+          inFlight -= 1
+          return coldObservation(header)
+        })
+      },
+    })
+
+    const listing = ctx.subagents.listChildren(COLD_CORPUS_PARENT)
+    // Holding both admitted reads open proves a third cannot start.
+    await vi.waitFor(() => { expect(observed).toHaveLength(2) })
+    expect(peak).toBe(2)
+
+    gate.resolve(undefined)
+    await expect(listing).resolves.toEqual(headers.map(coldChildRow))
+    expect(observed).toHaveLength(6)
+    expect(peak).toBe(2)
+  })
+
+  it('advances past cache-served children on the next listing', async () => {
+    const headers = [1, 2, 3, 4].map(rank => coldHeader(`cold-advance-${rank}`, rank))
+    const { ctx, observed } = await setupColdCorpus(headers, { config: { coldReadBudget: 2 } })
+    const served = new Set<SessionId>()
+    ctx.provide('sessionProjectionCache', {
+      cachedSnapshot: (header: SessionHeader) => served.has(header.id)
+        ? { asOfSeq: SessionSeq(2), values: { subagent: coldIdentity(header) } }
+        : undefined,
+    } as unknown as SessionProjectionCache)
+
+    const first = await ctx.subagents.listChildren(COLD_CORPUS_PARENT)
+    expect(observed).toEqual([headers[0]!.id, headers[1]!.id])
+    expect(first).toEqual([
+      coldChildRow(headers[0]!),
+      coldChildRow(headers[1]!),
+      { kind: 'diagnostic', id: headers[2]!.id, reason: 'unavailable' },
+      { kind: 'diagnostic', id: headers[3]!.id, reason: 'unavailable' },
+    ])
+
+    // The two reads populated the cache, so the next listing spends its budget
+    // on the children it has not resolved yet rather than re-reading them.
+    for (const header of headers.slice(0, 2)) served.add(header.id)
+    await expect(ctx.subagents.listChildren(COLD_CORPUS_PARENT))
+      .resolves.toEqual(headers.map(coldChildRow))
+    expect(observed).toEqual(headers.map(header => header.id))
+  })
+
+  it('applies the shipped cold-read defaults to a directly constructed plugin', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TestSessionQuery)
+    // Direct construction is the path with no loader-validated config object.
+    const runtime = new SubagentRuntime(ctx)
+    const headers = [1, 2, 3, 4, 5, 6].map(rank => coldHeader(`cold-direct-${rank}`, rank))
+    const gate = Promise.withResolvers<undefined>()
+    let inFlight = 0
+    let peak = 0
+    const observed = serveColdCorpus(ctx, headers, (header) => {
+      inFlight += 1
+      peak = Math.max(peak, inFlight)
+      return gate.promise.then(() => {
+        inFlight -= 1
+        return coldObservation(header)
+      })
+    })
+
+    const listing = runtime.listChildren(COLD_CORPUS_PARENT)
+    await vi.waitFor(() => { expect(observed).toHaveLength(4) })
+    expect(peak).toBe(4)
+
+    gate.resolve(undefined)
+    await expect(listing).resolves.toEqual(headers.map(coldChildRow))
+    expect(observed).toHaveLength(6)
+    expect(peak).toBe(4)
+  })
+})

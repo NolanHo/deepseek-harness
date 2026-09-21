@@ -39,6 +39,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import z from '@deepseek-ai/schemastery'
 import {
   catalogView, rejectCatalogRead, rejectPrompt, validateControlRequest,
 } from './control.ts'
@@ -71,7 +72,11 @@ import type { ActivationObserver, LifecycleEmitter } from './lifecycle.ts'
 import SubagentContinuationManager from './continuation.ts'
 import type { SubagentDelivery } from './inbox.ts'
 import { listChildren as listSubagentChildren, listDescendants as listSubagentDescendants } from './list-children.ts'
-import type { SubagentDescendantListEntry, SubagentListEntry } from './list-children.ts'
+import type {
+  SubagentDescendantListEntry,
+  SubagentListingLimits,
+  SubagentListEntry,
+} from './list-children.ts'
 import { snapshotSubagentDescriptor } from './descriptor.ts'
 import { subagentIdentityProjectionDefinition, subagentTimingProjectionDefinition } from './projection.ts'
 import { establishCatalogChild, subagentCatalogProjectionDefinition } from './catalog.ts'
@@ -185,8 +190,43 @@ interface BrowserPromptSource {
   readonly clientTimeZone?: string
 }
 
+/**
+ * Deployment bounds for the cold Session reads one catalog listing performs.
+ * A cold candidate is a child this process has not loaded, so its identity
+ * costs one read and decode of the child's complete stored Session log.
+ */
+export interface Config {
+  /**
+   * Cold Session observations one listing may keep in flight at once. Each one
+   * decodes a whole stored log, so this multiplies the peak Host work and
+   * memory a single listing can demand.
+   * @default 4
+   */
+  readonly coldReadConcurrency?: number
+  /**
+   * Cold Session observations one listing may start. Candidates past the bound
+   * report the retryable `unavailable` diagnostic and are read by a later
+   * listing, which caps one listing's total cold-read cost: a cold projection
+   * cache over a few hundred children otherwise pins the Host for minutes,
+   * stalling every other request sharing the event loop.
+   * @default 64
+   */
+  readonly coldReadBudget?: number
+}
+
+/** Cold observations this service keeps in flight per listing when unconfigured. */
+const DEFAULT_COLD_READ_CONCURRENCY = 4
+
+/** Cold observations this service starts per listing when unconfigured. */
+const DEFAULT_COLD_READ_BUDGET = 64
+
 /** Named provider registry with one-shot runs, durable discovery, and continuable-child operations. */
 export class SubagentRuntime extends TypertRemoteService {
+  static Config: z<Config> = z.object({
+    coldReadConcurrency: z.natural().min(1).default(DEFAULT_COLD_READ_CONCURRENCY),
+    coldReadBudget: z.natural().min(1).default(DEFAULT_COLD_READ_BUDGET),
+  })
+
   private providers = new Map<string, SubagentProvider>()
   private continuations: SubagentContinuationManager | undefined
   /**
@@ -195,9 +235,21 @@ export class SubagentRuntime extends TypertRemoteService {
    * composes into the carrier.
    */
   private readonly emitLifecycle: LifecycleEmitter
+  /** Cold-read bounds every listing call applies, resolved once from config. */
+  private readonly listingLimits: SubagentListingLimits
 
-  constructor(ctx: Context) {
+  /**
+   * @param ctx - owning Host context.
+   * @param config - validated cold-read bounds; absent fields take the schema defaults.
+   */
+  constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'subagents')
+    // Cordis validates the config against the schema and fills both defaults;
+    // the fallbacks also cover direct construction of this exported plugin.
+    this.listingLimits = {
+      coldReadConcurrency: config.coldReadConcurrency ?? DEFAULT_COLD_READ_CONCURRENCY,
+      coldReadBudget: config.coldReadBudget ?? DEFAULT_COLD_READ_BUDGET,
+    }
     this.emitLifecycle = createLifecycleEmitter(this.ctx, parent => scopeTarget(this, parent))
     ctx.inject(['agents'], (childCtx: Context) => {
       const manager = new SubagentContinuationManager(childCtx, {
@@ -337,6 +389,10 @@ export class SubagentRuntime extends TypertRemoteService {
    * immutable descriptor hits without opening cold logs. The registered
    * `subagent` projection remains the sole mode/label classifier.
    *
+   * Cold identity reads stay inside the configured per-listing cold-read
+   * concurrency and budget; candidates past the budget report the retryable
+   * `unavailable` diagnostic for a later listing.
+   *
    * Every query receives `signal`, and the listing rechecks cancellation
    * around each await. Read rejections that settle
    * after an abort become a stable `SubagentError` with code `CANCELLED`.
@@ -348,7 +404,7 @@ export class SubagentRuntime extends TypertRemoteService {
    *   store is not mounted, or the caller cancels the listing.
    */
   listChildren(parentSessionId: SessionId, signal?: AbortSignal): Promise<SubagentListEntry[]> {
-    return listSubagentChildren(this.ctx, parentSessionId, signal)
+    return listSubagentChildren(this.ctx, parentSessionId, this.listingLimits, signal)
   }
 
   /**
@@ -367,7 +423,7 @@ export class SubagentRuntime extends TypertRemoteService {
    * @throws {@link SubagentError} under the same conditions as {@link listChildren}.
    */
   listDescendants(rootSessionId: SessionId, signal?: AbortSignal): Promise<SubagentDescendantListEntry[]> {
-    return listSubagentDescendants(this.ctx, rootSessionId, signal)
+    return listSubagentDescendants(this.ctx, rootSessionId, this.listingLimits, signal)
   }
 
   /**

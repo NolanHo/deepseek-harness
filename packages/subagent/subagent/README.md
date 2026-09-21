@@ -50,6 +50,17 @@ One-shot children run once and settle with a single result, plus an optional str
 
 Every exact live Agent can use `sendMessage()` with a direct continuable child; a resident continuable child can also use it with its direct parent. A working target receives the Agent message through Steer at its nearest step; an idle target starts a turn, and only a direct child can be cold-resumed. The parent can also interrupt a running descendant or list its children at any time. A browser continuation prompt independently selects Queue or Steer and may carry image parts: the Host admits and persists each image batch through the attachment store before the child inbox accepts the message, and refuses delivery when the child's declared model does not accept image input. Discovery covers both shapes: the service lists direct children and the full descendant tree — mode, activity, and lineage — reading live session state and optional persistence, without loading any child.
 
+### Bounding discovery reads
+
+Listing a child this process has not loaded costs one read of that child's complete stored Session log. Two `config` fields bound that work per listing: `coldReadConcurrency` caps how many of those reads run at once (default `4`), and `coldReadBudget` caps how many one listing starts (default `64`). Candidates past the budget report the retryable `unavailable` diagnostic a later listing picks up, and the projection cache answers the children an earlier listing already resolved, so repeated listings advance through a cold workspace instead of re-reading the same head.
+
+```yaml
+- name: '@deepseek-ai/dsh-subagent'
+  config:
+    coldReadConcurrency: 4
+    coldReadBudget: 64
+```
+
 ### Failure and recovery
 
 Requests that need a capability the chosen provider lacks fail loudly at start rather than being silently ignored. A failed child run returns a stop reason, and provider backends add a safe diagnostic; a cancelled request settles as `aborted`. Children are isolated: a crashed or misbehaving child cannot corrupt the parent's session.

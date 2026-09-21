@@ -30,11 +30,28 @@ import type { SubagentIdentityProjection } from './projection-types.ts'
 export type { SubagentListEntry } from './control-types.ts'
 
 /**
- * Concurrent cold observations per explicit catalog listing. Current Session
- * persistence providers are local; a networked provider must promote this to
- * a validated deployment setting.
+ * Cold-read bounds one listing applies to its non-live candidates. One cold
+ * observation reads and decodes a child's complete stored Session log, so an
+ * unbounded listing costs grow with the workspace and can pin the Host on a
+ * cold projection cache.
  */
-const COLD_READ_CONCURRENCY = 4
+export interface SubagentListingLimits {
+  /** Cold observations one listing may keep in flight at once. */
+  readonly coldReadConcurrency: number
+  /**
+   * Cold observations one listing may start. Candidates past the budget stay
+   * unread and report the retryable `unavailable` diagnostic.
+   */
+  readonly coldReadBudget: number
+}
+
+/** One cold candidate awaiting its identity observation. */
+interface ColdReadJob {
+  /** Position of the candidate in the row-aligned candidate list. */
+  readonly index: number
+  /** Enumerated header of the child to observe. */
+  readonly header: SessionHeader
+}
 
 /**
  * One entry of a descendant listing: the interpreted subagent facts plus its
@@ -56,6 +73,8 @@ interface ListingRuntime {
   readonly cache: SessionProjectionCache | undefined
   readonly corpus: ReadonlyMap<SessionId, CorpusRecord>
   readonly subagentParents: ReadonlySet<SessionId>
+  readonly coldReadConcurrency: number
+  readonly coldReadBudget: number
 }
 
 interface PositionedCandidate {
@@ -69,12 +88,14 @@ interface PositionedCandidate {
  * live-preferred merge of `ctx.sessions` and optional session persistence,
  * serving each identity from the `subagent` projection unit: the registry's
  * watermark snapshot for a live child; for a cold one, a durable
- * projection-cache read for an unseeded lifecycle, else one bounded-concurrency
- * shared Session observation carrying the exact inherited cut.
+ * projection-cache read for an unseeded lifecycle, else one shared Session
+ * observation carrying the exact inherited cut, within the caller's per-listing
+ * cold-read bounds.
  * @see SubagentRuntime.listChildren for the public cancellation and failure contract.
  * @param ctx - context carrying the session store, the projection registry,
  *   optional persistence, and the optional projection cache.
  * @param parentSessionId - parent session whose direct children are listed.
+ * @param limits - cold-read concurrency and per-listing budget.
  * @param signal - caller-owned cancellation observed around every persistence read.
  * @returns children and per-child diagnostics ordered by `createdAt`, then id.
  * @throws {@link SubagentError} when the projection registry or the session
@@ -83,9 +104,10 @@ interface PositionedCandidate {
 export async function listChildren(
   ctx: Context,
   parentSessionId: SessionId,
+  limits: SubagentListingLimits,
   signal?: AbortSignal,
 ): Promise<SubagentListEntry[]> {
-  const listing = await prepareListing(ctx, signal)
+  const listing = await prepareListing(ctx, limits, signal)
   const candidates = [...listing.corpus.values()]
     .filter(record => record.header.parentSession === parentSessionId
       && record.header.origin === 'subagent')
@@ -103,6 +125,7 @@ export async function listChildren(
  * @see SubagentRuntime.listDescendants for the public cancellation and failure contract.
  * @param ctx - context carrying the session store, projection registry, and optional persistence/cache.
  * @param rootSessionId - session whose complete descendant tree is listed.
+ * @param limits - cold-read concurrency and per-listing budget.
  * @param signal - caller-owned cancellation observed around every persistence read.
  * @returns interpreted subagents with durable direct-parent and root-relative depth.
  * @throws {@link SubagentError} under the same conditions as {@link listChildren}.
@@ -110,9 +133,10 @@ export async function listChildren(
 export async function listDescendants(
   ctx: Context,
   rootSessionId: SessionId,
+  limits: SubagentListingLimits,
   signal?: AbortSignal,
 ): Promise<SubagentDescendantListEntry[]> {
-  const listing = await prepareListing(ctx, signal)
+  const listing = await prepareListing(ctx, limits, signal)
   const positioned = descendantCandidates(listing.corpus, rootSessionId)
   const rows = await resolveCandidateRows(
     positioned.map(candidate => candidate.record),
@@ -132,6 +156,7 @@ export async function listDescendants(
 /** Resolve listing services once and build one live-preferred session corpus. */
 async function prepareListing(
   ctx: Context,
+  limits: SubagentListingLimits,
   signal: AbortSignal | undefined,
 ): Promise<ListingRuntime> {
   const projections = ctx.get('sessionProjections')
@@ -190,7 +215,7 @@ async function prepareListing(
       subagentParents.add(record.header.parentSession)
     }
   }
-  return { projections, query, cache, corpus, subagentParents }
+  return { projections, query, cache, corpus, subagentParents, ...limits }
 }
 
 /** Resolve projection-backed rows for aligned candidates with bounded cold reads. */
@@ -201,10 +226,19 @@ async function resolveCandidateRows(
 ): Promise<(SubagentListEntry | undefined)[]> {
   const { projections, query, cache, subagentParents } = listing
   const rows: (SubagentListEntry | undefined)[] = Array.from({ length: candidates.length })
-  const coldReads: { index: number; header: SessionHeader }[] = []
+  const coldReads: ColdReadJob[] = []
   candidates.forEach((candidate, index) => {
     const childId = candidate.header.id
     if (candidate.live === undefined) {
+      // A durable projection-cache row answers a cold candidate without any
+      // Session read, so it spends neither the read budget nor a concurrency
+      // slot: a repeated listing advances past what it already resolved
+      // instead of re-spending its budget on rows served from the cache.
+      const cached = cachedColdIdentity(cache, candidate.header)
+      if (cached !== undefined) {
+        rows[index] = childRow(childId, cached, 'inactive', subagentParents.has(childId))
+        return
+      }
       coldReads.push({ index, header: candidate.header })
       return
     }
@@ -226,15 +260,23 @@ async function resolveCandidateRows(
     rows[index] = childRow(childId, identity, 'running', subagentParents.has(childId))
   })
 
-  // Cold candidates came from the query corpus and are resolved concurrently.
+  // Cold candidates that still need a read are resolved concurrently inside
+  // the configured per-listing bounds.
   if (coldReads.length > 0) {
-    const queue = [...coldReads]
+    const { reads, deferred } = selectColdReads(coldReads, listing.coldReadBudget)
+    // Beyond-budget candidates keep their corpus position and degrade to the
+    // retryable `unavailable` row: the order is stable across listings, so the
+    // next one resumes at the front rather than starving the tail.
+    for (const job of deferred) {
+      rows[job.index] = { kind: 'diagnostic', id: job.header.id, reason: 'unavailable' }
+    }
+    const queue = [...reads]
     await Promise.all(Array.from(
-      { length: Math.min(COLD_READ_CONCURRENCY, queue.length) },
+      { length: Math.min(listing.coldReadConcurrency, queue.length) },
       async () => {
         for (let job = queue.shift(); job !== undefined; job = queue.shift()) {
-          rows[job.index] = await resolveColdIdentity(
-            query, cache, job.header,
+          rows[job.index] = await observeColdIdentity(
+            query, job.header,
             subagentParents.has(job.header.id), signal,
           )
         }
@@ -243,6 +285,23 @@ async function resolveCandidateRows(
   }
   assertListingNotCancelled(signal)
   return rows
+}
+
+/**
+ * Take the cold candidates one listing reads now, in corpus order. Candidates
+ * the projection cache already serves never reach this selection, so a repeated
+ * listing spends its budget on children it has not resolved yet instead of the
+ * same head; read survivors keep their corpus position, which makes that
+ * advance monotonic.
+ * @param coldCandidates - cold candidates still needing a Session read, in corpus order.
+ * @param budget - maximum candidates one listing observes.
+ * @returns the candidates to observe and those left for a later listing.
+ */
+function selectColdReads(
+  coldCandidates: readonly ColdReadJob[],
+  budget: number,
+): { readonly reads: readonly ColdReadJob[]; readonly deferred: readonly ColdReadJob[] } {
+  return { reads: coldCandidates.slice(0, budget), deferred: coldCandidates.slice(budget) }
 }
 
 /** Build origin-classified candidates from the complete tree without recursion. */
@@ -287,43 +346,55 @@ function compareCorpusRecords(a: CorpusRecord, b: CorpusRecord): number {
 }
 
 /**
- * Resolve one cold candidate down the remaining ladder: an unseeded durable
- * projection-cache row, otherwise one shared Session observation. An absent or transiently failed
- * observation is one `unavailable` row retried on the next listing; an observation
- * source naming another lifecycle, and a
- * settled log the fold cannot identify — or that makes any registered unit
- * throw — are final, so they report `corrupt`.
+ * Read the durable projection-cache rung for one cold candidate: an unseeded
+ * lifecycle's stored identity, when the cache holds one.
+ * @param cache - mounted projection cache; absent when the deployment has none.
+ * @param header - enumerated header of the child.
+ * @returns the cached identity, or `undefined` when the cache cannot answer for
+ *   this candidate: no cache, a seeded lifecycle, an absent row, the serializable
+ *   no-value sentinel, or a throwing derived row.
  */
-async function resolveColdIdentity(
-  query: SessionQueryEngine,
+function cachedColdIdentity(
   cache: SessionProjectionCache | undefined,
+  header: SessionHeader,
+): SubagentIdentityProjection | undefined {
+  // A header deliberately exposes only whether a fork cut exists, not its
+  // integer. An unseeded lifecycle has the exact cut 0 and may use the cache;
+  // a seeded lifecycle must read the body before an identity seq can be
+  // classified as inherited or owned.
+  if (cache === undefined || header.isSeeded) return undefined
+  try {
+    // An unseeded child's descriptor is owned at every valid seq, so only a
+    // served identity answers here. The `null` sentinel means no value: its
+    // verdict belongs to the authoritative re-fold, not to a derived row.
+    return cache.cachedSnapshot(header, SessionLogOffset(0), ['subagent'])?.values.subagent ?? undefined
+  } catch {
+    // Unlike the live preparation fold, a throwing cache read renders no
+    // verdict: the cache is derived data, so its damage (a poisoned stored
+    // row of ANY unit) silently falls through to the authoritative re-fold.
+    return undefined
+  }
+}
+
+/**
+ * Resolve one cold candidate by observing its stored Session. An absent or
+ * transiently failed observation is one `unavailable` row retried on the next
+ * listing; an observation source naming another lifecycle, and a settled log
+ * the fold cannot identify — or that makes any registered unit throw — are
+ * final, so they report `corrupt`.
+ * @param query - Session query engine serving the shared observation.
+ * @param header - enumerated header of the child to observe.
+ * @param hasChildren - whether the enumerated corpus holds descendants of this child.
+ * @param signal - caller-owned cancellation observed around the read.
+ * @returns the served child row, or this candidate's diagnostic.
+ */
+async function observeColdIdentity(
+  query: SessionQueryEngine,
   header: SessionHeader,
   hasChildren: boolean,
   signal: AbortSignal | undefined,
 ): Promise<SubagentListEntry> {
   const childId = header.id
-  // A header deliberately exposes only whether a fork cut exists, not its
-  // integer. An unseeded lifecycle has the exact cut 0 and may use the cache;
-  // a seeded lifecycle must read the body before an identity seq can be
-  // classified as inherited or owned.
-  if (cache !== undefined && !header.isSeeded) {
-    let cached: SubagentIdentityProjection | null | undefined
-    try {
-      cached = cache.cachedSnapshot(header, SessionLogOffset(0), ['subagent'])?.values.subagent
-    } catch {
-      // Unlike the preparation fold below, a throwing cache read renders no
-      // verdict: the cache is derived data, so its damage (a poisoned stored
-      // row of ANY unit) silently falls through to the authoritative re-fold.
-      cached = undefined
-    }
-    // An unseeded child's descriptor is owned at every valid seq. Everything
-    // else falls through to preparation: an absent key and the `null`
-    // sentinel, whose verdict belongs to the authoritative re-fold, not to a
-    // derived row.
-    if (cached !== undefined && cached !== null) {
-      return childRow(childId, cached, 'inactive', hasChildren)
-    }
-  }
   assertListingNotCancelled(signal)
   let observation: SessionObservation
   try {

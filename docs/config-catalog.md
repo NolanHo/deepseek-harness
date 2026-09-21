@@ -2437,6 +2437,38 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 Source: [`packages/storage/storage-sqlite/src/index.ts:24`](../packages/storage/storage-sqlite/src/index.ts)
 
+<a id="deepseek-aidsh-subagent"></a>
+
+## `@deepseek-ai/dsh-subagent`
+
+```ts config-catalog
+/**
+ * Deployment bounds for the cold Session reads one catalog listing performs.
+ * A cold candidate is a child this process has not loaded, so its identity
+ * costs one read and decode of the child's complete stored Session log.
+ */
+export interface Config {
+  /**
+   * Cold Session observations one listing may keep in flight at once. Each one
+   * decodes a whole stored log, so this multiplies the peak Host work and
+   * memory a single listing can demand.
+   * @default 4
+   */
+  readonly coldReadConcurrency?: number
+  /**
+   * Cold Session observations one listing may start. Candidates past the bound
+   * report the retryable `unavailable` diagnostic and are read by a later
+   * listing, which caps one listing's total cold-read cost: a cold projection
+   * cache over a few hundred children otherwise pins the Host for minutes,
+   * stalling every other request sharing the event loop.
+   * @default 64
+   */
+  readonly coldReadBudget?: number
+}
+```
+
+Source: [`packages/subagent/subagent/src/index.ts:198`](../packages/subagent/subagent/src/index.ts)
+
 <a id="deepseek-aidsh-subagent-acp"></a>
 
 ## `@deepseek-ai/dsh-subagent-acp`
@@ -3764,7 +3796,6 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-session-turn-outline` — requires `sessionProjections` ([`packages/session/session-turn-outline/src/index.ts`](../packages/session/session-turn-outline/src/index.ts))
 - `@deepseek-ai/dsh-skill-badge` — requires `skills` ([`packages/skill/skill-badge/src/index.ts`](../packages/skill/skill-badge/src/index.ts))
 - `@deepseek-ai/dsh-storage` ([`packages/storage/storage/src/index.ts`](../packages/storage/storage/src/index.ts))
-- `@deepseek-ai/dsh-subagent` ([`packages/subagent/subagent/src/index.ts`](../packages/subagent/subagent/src/index.ts))
 - `@deepseek-ai/dsh-subprocess-local` ([`packages/subprocess/subprocess-local/src/index.ts`](../packages/subprocess/subprocess-local/src/index.ts))
 - `@deepseek-ai/dsh-terminal` ([`packages/terminal/terminal/src/index.ts`](../packages/terminal/terminal/src/index.ts))
 - `@deepseek-ai/dsh-tool-ask-user` — requires `tools` · `userQuestions` ([`packages/interaction/tool-ask-user/src/index.ts`](../packages/interaction/tool-ask-user/src/index.ts))

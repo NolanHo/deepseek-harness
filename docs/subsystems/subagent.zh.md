@@ -592,6 +592,10 @@ async drainContinuableChildren(parent: Agent, childIds: readonly SessionId[]): P
  * immutable descriptor hits without opening cold logs. The registered
  * `subagent` projection remains the sole mode/label classifier.
  *
+ * Cold identity reads stay inside the configured per-listing cold-read
+ * concurrency and budget; candidates past the budget report the retryable
+ * `unavailable` diagnostic for a later listing.
+ *
  * Every query receives `signal`, and the listing rechecks cancellation
  * around each await. Read rejections that settle
  * after an abort become a stable `SubagentError` with code `CANCELLED`.
