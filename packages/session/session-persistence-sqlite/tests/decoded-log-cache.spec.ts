@@ -162,6 +162,30 @@ describe('decoded log cache', () => {
     await store.close()
   })
 
+  it('misses when another connection materializes a header over the cached session', async () => {
+    const path = await freshDbPath()
+    const header = meta('decoded-cache-header-upsert', '/cached')
+    const writer = openStore(path)
+    await writer.appendBatch(storage(header), oneTurnLog(), false)
+    await writer.close()
+
+    const reader = openStore(path, 1 << 20)
+    const before = await reader.loadStoredLog(header.id)
+    expect(await reader.loadStoredLog(header.id)).toBe(before)
+    expect(before?.meta.cwd).toBe('/cached')
+
+    // A second connection rewrites only the session row. That write does not touch the
+    // event rows, so nothing but the revision bump can tell the reader its log is stale.
+    const other = openStore(path)
+    await other.materializeHeader(storage(meta('decoded-cache-header-upsert', '/rewritten')))
+    await other.close()
+
+    const after = await reader.loadStoredLog(header.id)
+    expect(after).not.toBe(before)
+    expect(after?.meta.cwd).toBe('/rewritten')
+    await reader.close()
+  })
+
   it('drops the retained log after a local append and serves the appended events', async () => {
     const path = await freshDbPath()
     const store = openStore(path, 64 * 1024)

@@ -1,0 +1,74 @@
+# Agent Note: SQLite 会话存储按 revision 保留整份已解码日志
+
+Status: implemented
+
+[English](2026-09-21-decoded-log-cache.md) | 中文
+
+> 范围：`@deepseek-ai/dsh-session-persistence-sqlite` 为何新增 `decodedLogCacheBytes`、为何只在同一次调用读到的 revision 相符时才复用已保留日志、上限如何计费与淘汰，以及保留刻意不承诺什么。
+
+## 问题
+
+一次完整读取会解压、解析、校验并冻结一个会话的每一行已存储数据，而 `SqliteStore.loadStoredLog` 每次调用都重跑这份工作。于是恢复一个会话、重连一个客户端、重新列一次 catalog，以及任何其他「打开已存储会话并读取」的消费方，都要为没有变化的行再付一次全价。代价随日志线性增长：本部署那条 66,736 事件的会话每次冷读约 3.5 秒，而每一次重复读取都会再建一份完全相同的对象图。
+
+这份代价是通过冷 catalog listing 变得可测量的。[catalog listing 的冷读有了上限](../bug-fix/2026-09-21-subagent-listing-cold-read-bound.zh.md)记录了其背后的线上事故：一个投影缓存为冷的 422 子会话 workspace 会解码整份存储日志——每遍 423 次，共 4–5 遍——把单核钉在 100% 约 8 分钟，期间共享事件循环的所有 RPC 与流全部挂起。那条记录新增的上界限制了单次 listing 发起多少次整日志读取；它并不让一次读取变便宜，也看不到 listing 没发起的那部分读取。该事故记录下来的形态正是成本被忽略的另一半：在 422 个子会话的 workspace 上，每一遍几乎都把整个 corpus 重新解码了一遍，因为存储里没有任何东西记得它已经产出过的日志。上界限制的是单遍的读取数，保留消除的是后一遍本要重复支付的解码。
+
+## 决策
+
+**`decodedLogCacheBytes?: number` 是经校验的 `Config` 字段，`0` 表示关闭。** schema 为 `z.natural().default(0)`：省略该字段时不保留任何内容、每次读取都重新解码（即已发布行为），需要重复读取被直接回答的部署从自己的 profile 行开启。负数或小数值会在挂载期失败并点名该字段。
+
+**键是会话 id；命中条件是同一次调用读到的 revision。** `loadStoredLog` 本来就在同一个 `readTransaction` 内读取会话行与事件行；存储用这同一行算出 revision，只有它与条目记录的 revision 相等时才复用该条目。整个判定不额外发任何语句，命中判定所用的正是事件所在的那个快照，且从读出 revision 到返回保留日志之间没有 await。命中返回的是首次读取恢复出的那个完全相同的冻结 `SqliteStoredLog`——元数据、inherited cut、revision、存储版本、可选的撕裂基点，以及深冻结的事件数组——因此省去解压、解析、校验与冻结。
+
+**每条本地写路径都在提交后删除条目，header 物化现在也和其他路径一样推动 revision。** 追加、header 物化、已存储日志发布、修复与 truncate 都在自己的事务内推动该会话的 revision，并经 `commitSessionMutation` 提交，后者在 `COMMIT` 之后立刻删除该会话的条目。让这条校验成立的是 revision 推动；删除条目只是在上限本会淘汰它之前提前释放字节。header 物化会重写命中判定所依据的那一行，因此它也推动 revision：没有这次推动，保留日志会继续为另一个连接写入的 header 作答，甚至绕过该次读取执行的 inherited-cut 校验。`close()` 清空映射与字节计数。
+
+**上限按解码后 JSON 文本的 UTF-8 字节计费，并按最久未使用淘汰条目。** `scanRows` 在解析之前按 `Buffer.byteLength` 累加每个 data 列的解码文本，并把总和作为 `ScannedRows.decodedBytes` 报出；这个数就是条目的计费量，因此与编解码通道无关——`asyncCodec` 开关两态下数值相同。命中会把条目重新放到最新端，一次读取若会超出上限就从最旧端开始淘汰直到装得下，而比整体上限还大的日志永不保留。计费刻意只量文本、不量被保留的图：它低报该图实际占用的内存，这也是 README 把上限表述为缓存大小而非内存预算的原因。
+
+## 命中保持的不变量
+
+**I1 —— 保留是 opt-in，关闭态就是已发布路径。** 省略上限或上限为 `0` 时不保留任何内容：两次读取产出不同的日志、不同的事件数组、不同的事件对象，包括那条本会被计费为零字节的仅 header 会话。证据：`tests/decoded-log-cache.spec.ts` 的 `retains nothing when the ceiling is omitted`、`defaults to 0 and accepts a size`，以及 `rejects a negative or fractional ceiling`。
+
+**I2 —— 命中要求同一次调用读到的会话行 revision。** 证据：`answers a repeat read of an unchanged session with the same frozen log`——第二次读取是同一个对象，其事件数组是同一个已冻结对象，`meta`、`inheritedEventCount`、`revision` 与 `storedVersion` 全部相等。
+
+**I3 —— 本连接自己做的写入不可能由保留来回答。** 证据：`drops the retained log after a local append and serves the appended events`、`drops the retained log after a truncate`、`drops the retained log after a cut at the stored end`（什么都不丢的截断同样提交一个 revision）、`drops the retained log after a repair of a torn tail`、`drops the retained log when a migration is published over it`，以及 `drops the retained log when a header materialization commits`。
+
+**I4 —— 另一个连接或进程做的写入不可能由保留来回答。** 证据：`misses when another connection bumps the revision or writes rows`——一次不改任何行、只推动 revision 的带外操作会让下一次读取未命中，而一次带外插入加推动会在下一次读取中可见。
+
+**I5 —— 上限是硬上界，计费是字节数。** 证据：`bounds retained bytes with LRU eviction and never retains an oversized log`（恰好等于日志计费量的上限只装一条并淘汰另一条；比日志自身计费量少一字节的上限什么都不保留）与 `charges UTF-8 bytes, not UTF-16 code units, so a multibyte log cannot be under-sized`（按 UTF-16 码元数设的上限会拒绝一份按字节数可以保留的日志）。
+
+**I6 —— 只有成功的读取才会被保留，失败与取消行为不变。** 证据：`retains nothing when a stored log cannot be read`（一行已提交数据损坏时两次读取抛出同一条诊断，而不是拿保留日志作答）与 `observes an aborted signal on a cached read exactly as on an uncached one`（已中止的 signal 在热、冷两个 store 上都抛 `AbortError`，且热 store 的条目在该次中止调用后仍然存活）。撕裂尾读取是一次成功的读取，按它读到的 revision 被保留。
+
+**I7 —— 保留属于连接，随连接结束。** 证据：`retains nothing across close and a fresh store over the same file`——重新打开的 store 建出一份相等但不同的日志，随后保留这一份。跨进程一致性不在契约之内；见「影响」。
+
+## 备选方案
+
+**只靠本地失效，不做 revision 校验。** 只在自己写入时删除条目的 store，会为自己从未做过的写入返回陈旧事件：本包支持多个连接与多个进程共用一个数据库文件，而 revision 是读取判定行是否移动过的唯一信号。这条校验依附于读取本来就要取的那一行，因此不花任何语句。变异轮次说明了哪一半在承重：去掉比较会让带外写入用例失败，而只去掉提交后删除则什么都不会失败。
+
+**承诺跨进程一致性，包括带外 SQL。** revision 能覆盖本提供方的每一次写入，而本 store 能负担得起的任何读取期校验都无法区分「日志未变」与「另一个写方改写了行却没有推动 revision」。因此本设计对绕过提供方的写方不作任何承诺，README 记录了其代价：在该会话的条目被淘汰之前，保留日志会掩盖带外物理损坏，收缩保护的损坏判定也被一并掩盖。
+
+**把多份日志拼成一次解码。** Node 的 zstd 接口每次调用只解一帧——两帧拼接后解压只会得到第一帧的内容，且不报错（在 Node v25.9.0 上核对）——拼批就需要帧边界与一份本 store 不拥有的尺寸账目，而兄弟通道的池化解码已经在重叠并发的解码。拼批还会在任何一份被计费之前同时持有多个已解码对象图，而这正是保留想要避免的状态。
+
+**先读会话行，让命中省掉事件行扫描。** 这是推迟而非否决。revision 与事件行来自同一个 `readTransaction`，所以让命中跳过该扫描意味着要么另开一个只读 revision 的事务，要么让一个事务跨两条语句持有——为一项当前形态还不需要的节省，重新打开校验与复用之间的缝隙：命中仍要付整行扫描（在实测会话上约 0.3 秒对 3.5 秒），省下的是解码。README 把剩余的这次扫描记为已知限制。
+
+## 影响
+
+对未变化会话的重复整日志读取，返回的是首次读取产出的那些对象。在本部署那条 66,736 事件的会话上，重复读取实测 3.5 秒 → 0.30 秒（约 11×），两次命中是同一个冻结对象（`identitySame: true`）；第二次之后的读取仍是同一次命中。内存：该会话的日志被计费 252.2 MB 解码后 JSON 文本，而在同一次实测里，进程 heap 在开启缓存时约 0.69 GB、关闭时约 1.96 GB——保留把一份不断堆积却已无人引用的解码图，换成了它唯一持有的那一份。
+
+三条限制属于设计本身，包 README 以面向运维的措辞给出：计费是被保留内存的下界，且不限制零字节条目的条数；绕过提供方的写方在条目被淘汰前可能被掩盖；命中仍然要读取事件行。保留也是按连接的：同一文件上的两个 store 各解码一次，它们只能通过 revision 校验看到彼此的写入。本包为 fork 自有，因此本次改动不会在其自身文件之外新增任何合并面，fork 清单登记了该字段、store、计费与规格。
+
+## 测试
+
+`packages/session/session-persistence-sqlite/tests/decoded-log-cache.spec.ts` 共 16 个用例：`decoded log cache` 块 14 个，钉住 I1–I7；`decodedLogCacheBytes configuration` 块 2 个，钉住 schema 默认值与对 `-1`、`1.5` 的拒绝。`tests/decoded-text.ts` 独立于被测代码解码存储的 data 列，因此上限用例所依赖的字节测量不是从实现里读回来的。
+
+变异轮次（在本 worktree 内对已提交源码逐个施加、每次都在下一次之前还原）：从命中路径去掉 revision 比较，恰好让 `misses when another connection bumps the revision or writes rows` 失败；在两个解码点把 `Buffer.byteLength` 换成 `String.length`（UTF-16 码元），恰好让多字节用例失败；去掉上限的「超限即不保留」判定与淘汰循环，则让 LRU 用例与多字节用例失败。有四个变异什么都不失败，本记录把它们当作结果写下来：去掉提交后的 `forgetDecodedLog`、去掉 `close()` 的清空、去掉命中时的 LRU 刷新，这 16 个用例全绿（承重的是 revision 推动；另两处只是更早释放内存，或只改变计费量相同的两个条目里谁被淘汰）；而去掉 header 物化的 revision 推动会让整个包套件保持 162 通过 / 2 跳过的全绿，尽管它恢复的是一个真实缺陷。最后这个缺口被点名而不是被掩盖：没有任何用例「经一个 store 缓存、经另一个 store 物化 header」，因此该跨连接效应没有失败态覆盖，而同一文件上的第二个 store 就能补上。目前验证该修复的是同连接物化用例，以及这次推动如今与其他所有变异共用的那条事务路径。
+
+包套件通过：`npx vitest run packages/session/session-persistence-sqlite/tests` → 10 文件通过 / 1 跳过（11），162 通过 / 2 跳过（164），exit 0。
+
+真实会话 A/B 在与生产同构的隔离实例上、针对本部署那条 66,736 事件的会话执行，缓存设置是唯一的配置差异：重复整读 3.5 秒 → 0.30 秒、两次命中是同一个冻结对象、该会话计费 252.2 MB、进程 heap 约 0.69 GB 对 1.96 GB。这些是作者本机对单机会话的观测，不是提交在案的基准，也无法仅凭本 commit 重放；本记录没有重跑它们。
+
+以下没有任何证据覆盖：缓存没有浏览器、e2e 或录制会话快照（它返回的对象图与无缓存路径相同，因此没有任何模型可见或产品可见输出变化，也就不欠快照）；上面那条跨连接 header 物化路径；同一会话上同时在飞的两个读取（条目在扫描之后才写入，因此两者都会解码）；以及超出该条已测会话的上限内存余量。
+
+## 相关
+
+- 限制单遍发起多少冷读的 listing 上界：[catalog listing 的冷读有了上限](../bug-fix/2026-09-21-subagent-listing-cold-read-bound.zh.md)
+- 挪走未命中仍要支付的解码的兄弟开关：[session 日志编解码器在 libuv 线程池上解压](2026-09-20-async-session-codec.zh.md)
+- 包 README 承载面向运维的字段表、三条限制与冷读行为：[session-persistence-sqlite](../../../../packages/session/session-persistence-sqlite/README.zh.md)
+- 该差异面登记所在的 fork 清单行：[FORK_SURFACE.md](../../../../FORK_SURFACE.md)

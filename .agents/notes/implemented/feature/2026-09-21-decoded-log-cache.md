@@ -1,0 +1,74 @@
+# Agent Note: The SQLite session store retains whole decoded logs by revision
+
+Status: implemented
+
+English | [中文](2026-09-21-decoded-log-cache.zh.md)
+
+> Scope: why `@deepseek-ai/dsh-session-persistence-sqlite` gained `decodedLogCacheBytes`, why a retained log is only ever served for the revision read in the same call, how the ceiling charges and evicts, and what retention deliberately does not guarantee.
+
+## Problem
+
+One full read decompresses, parses, validates, and freezes every stored row of a Session, and `SqliteStore.loadStoredLog` runs that work on every call. Resuming a Session, reconnecting a client, re-listing a catalog, and every other consumer that opens a stored Session and reads it therefore pay the whole cost again on rows that have not changed. The cost is linear in the log: this deployment's 66,736-event Session takes about 3.5 s per cold read, and each repeat read built a second, identical object graph.
+
+The cost became measurable through the cold catalog listing. [A catalog listing bounds its cold Session reads](../bug-fix/2026-09-21-subagent-listing-cold-read-bound.md) records the production incident behind it: a 422-subagent workspace with a cold projection cache decoded whole stored logs — 423 of them per pass, across 4–5 passes — and pinned one core at 100% for about 8 minutes while every RPC and stream sharing the event loop stalled. The bound that note added caps how many whole-log reads one listing starts; it does not make a read cheap, and it never sees the reads a listing does not make. The recorded shape of the incident is the other half of the cost: on a 422-child workspace, every pass decoded essentially the whole corpus again, because nothing in the store remembered a log it had already produced. The bound caps one pass's reads, and retention removes the repeat a later pass pays.
+
+## Decision
+
+**`decodedLogCacheBytes?: number` is a validated `Config` field, and `0` is off.** The schema is `z.natural().default(0)`, so an omitted field retains nothing and every read decodes afresh — the released behavior — and a deployment that wants the repeat read answered opts in from its profile row. A negative or fractional value fails the mount naming the field.
+
+**The key is the Session id; the hit condition is the revision read in the same call.** `loadStoredLog` already reads the Session row and the event rows inside one `readTransaction`; the store computes the revision from that same row and reuses the entry only when it equals the entry's revision. No extra statement is issued, the hit is decided on the snapshot the events came from, and there is no await between reading the revision and returning the retained log. A hit returns the identical frozen `SqliteStoredLog` the first read restored — metadata, inherited cut, revision, stored version, optional torn base, and the deep-frozen event array — so it skips decompression, parsing, validation, and freezing.
+
+**Every local write path drops the entry after it commits, and header materialization now bumps the revision like the others.** Append, header materialization, stored-log publish, repair, and truncate bump the Session's revision inside their transaction and commit through `commitSessionMutation`, which drops that Session's entry immediately after `COMMIT`. The bump is what makes the check sound; dropping the entry releases the bytes before the ceiling would evict them. Header materialization rewrites the row a hit is keyed by, so it bumps too: without that bump a retained log kept answering for a header another connection wrote, including past the inherited-cut validation the read performs. `close()` clears the map and the byte counter.
+
+**The ceiling charges decoded JSON text in UTF-8 bytes and evicts least-recently-used entries.** `scanRows` accumulates `Buffer.byteLength` of each data column's decoded text before parsing it and reports the sum as `ScannedRows.decodedBytes`; that number is the entry's charge, so it is codec-independent — the same value with and without `asyncCodec`. A hit re-inserts its entry at the newest end, a read that would exceed the ceiling evicts oldest entries until it fits, and a log larger than the whole ceiling is never retained. The charge deliberately measures the text, not the retained graph: it understates the memory that graph occupies, which is why the README states the ceiling as a cache size rather than a memory budget.
+
+## The invariants a hit preserves
+
+**I1 — Retention is opt-in, and off is the released path.** An omitted or `0` ceiling retains nothing: two reads build distinct logs, distinct event arrays, and distinct event objects, including for a header-only Session that would be charged zero bytes. Evidence: `retains nothing when the ceiling is omitted`, `defaults to 0 and accepts a size`, and `rejects a negative or fractional ceiling` in `tests/decoded-log-cache.spec.ts`.
+
+**I2 — A hit requires the revision of the row read in that same call.** Evidence: `answers a repeat read of an unchanged session with the same frozen log` — the second read is the same object, its event array is the same object and frozen, and `meta`, `inheritedEventCount`, `revision`, and `storedVersion` are equal.
+
+**I3 — A write this connection makes cannot be answered from retention.** Evidence: `drops the retained log after a local append and serves the appended events`, `drops the retained log after a truncate`, `drops the retained log after a cut at the stored end` (a cut that discards nothing still commits a revision), `drops the retained log after a repair of a torn tail`, `drops the retained log when a migration is published over it`, and `drops the retained log when a header materialization commits`.
+
+**I4 — A write another connection or process makes cannot be answered from retention.** Evidence: `misses when another connection bumps the revision or writes rows` — a foreign revision bump that changes no row forces a miss, and a foreign insert followed by a bump becomes visible on the next read.
+
+**I5 — The ceiling is a hard bound, and the charge is a byte count.** Evidence: `bounds retained bytes with LRU eviction and never retains an oversized log` (an exact-size ceiling keeps one entry and evicts the other; a ceiling one byte below the log's own charge retains nothing) and `charges UTF-8 bytes, not UTF-16 code units, so a multibyte log cannot be under-sized` (a ceiling at the code-unit count refuses a log the byte count retains).
+
+**I6 — Only a successful read is retained, and failure plus cancellation behavior is unchanged.** Evidence: `retains nothing when a stored log cannot be read` (a corrupted committed row throws the same diagnostic on both reads instead of serving a retained log) and `observes an aborted signal on a cached read exactly as on an uncached one` (an already-aborted signal throws `AbortError` against a warm and a cold store, and the warm entry survives the aborted call). A torn-tail read is a successful read and is retained at the revision it read.
+
+**I7 — Retention is connection-local and ends with the connection.** Evidence: `retains nothing across close and a fresh store over the same file` — a reopened store builds an equal but distinct log and then retains that one. Cross-process coherence is not part of the contract; see Consequences.
+
+## Alternatives considered
+
+**Rely on local invalidation instead of the revision check.** A store that dropped entries only on its own writes would return stale events for a write it never made: this package supports several connections and processes over one database file, and the revision is the only signal a read has that the rows moved. The check rides the row the read already fetches, so it costs no statement. The mutation round shows which half is load-bearing: removing the comparison fails the foreign-write case, while removing the post-commit drop fails nothing.
+
+**Promise cross-process coherence, including out-of-band SQL.** The revision catches every write this provider makes, and no read-time check this store can afford distinguishes an unchanged log from rows another writer rewrote without moving the revision. The design therefore promises nothing about a writer that bypasses the provider, and the README records what that costs: a retained entry can mask out-of-band physical damage for that Session until it is evicted, including the shrink guard's damage verdict.
+
+**Batch several logs into one decode pass.** Node's zstd surface decodes one frame per call — two concatenated frames decompress to the first payload alone, without an error (checked on Node v25.9.0) — so a batch would need frame boundaries and a size accounting the store does not own, and the sibling pooled decoder already overlaps concurrent decodes. A batch would also hold several decoded object graphs before any of them is charged, which is the state retention exists to avoid.
+
+**Read the Session row first so a hit skips the event rows.** Deferred, not rejected. The revision arrives in the same `readTransaction` as the event rows, so making a hit skip that scan means a revision-only read in its own transaction, or one transaction held across two statements — reopening the gap between the check and the reuse for a saving this shape does not need yet: a hit still pays the row scan (about 0.3 s against 3.5 s on the measured Session) and skips the decode. The README records the remaining scan as a known limitation.
+
+## Consequences
+
+A repeat whole-log read of an unchanged Session returns the objects the first read produced. On this deployment's 66,736-event Session the repeat read measured 3.5 s → 0.30 s (about 11×), and the two hits were the same frozen object (`identitySame: true`); reads beyond the second are the same hit. Memory: that Session's log is charged 252.2 MB of decoded JSON text, and on the measured run the process held about 0.69 GB with the cache on against about 1.96 GB with it off — retention replaced an accumulation of unreferenced decoded graphs with the one graph it keeps.
+
+Three limits are part of the design, and the package README states them for operators: the charge is a lower bound on the retained memory and does not bound the number of zero-byte entries; a writer that bypasses the provider can be masked until its entry is evicted; and a hit still reads the event rows. Retention is per connection: two stores over one file each decode once, and they see each other's writes only through the revision check. The package is fork-owned, so this adds no merge surface outside its own files, and the fork inventory registers the field, the store, the charge, and the specs.
+
+## Testing
+
+`packages/session/session-persistence-sqlite/tests/decoded-log-cache.spec.ts` holds 16 cases: 14 in the `decoded log cache` block, which pin I1–I7, and 2 in `decodedLogCacheBytes configuration`, which pin the schema default and the rejection of `-1` and `1.5`. `tests/decoded-text.ts` decodes a stored data column independently of the code under test, so the byte measurements the ceiling cases rely on are not read back from the implementation.
+
+Mutation round (run in this worktree against the committed source, one mutation at a time, each reverted before the next): removing the revision comparison from the hit path fails exactly `misses when another connection bumps the revision or writes rows`; charging `String.length` (UTF-16 code units) instead of `Buffer.byteLength` at both decode sites fails exactly the multibyte case; and removing the ceiling's oversize refusal together with the eviction loop fails the LRU case and the multibyte case. Four mutations fail nothing, and this note records them as results: removing the post-commit `forgetDecodedLog`, removing the `close()` clear, and removing the hit's LRU refresh leave all 16 cases green (the revision bump carries correctness, and the other two release memory earlier or change only which of two equal-charge entries is evicted), and removing the header-materialization revision bump leaves the whole package suite green at 162 passed / 2 skipped even though it restores a real defect. That last gap is named rather than papered over: no case caches through one store and materializes a header through another, so the cross-connection effect has no failing-case coverage, and a second store over the same file would close it. The same-connection materialization case and the transaction the bump now shares with every other mutation are what verify that fix today.
+
+The package suite passes: `npx vitest run packages/session/session-persistence-sqlite/tests` → 10 files passed / 1 skipped (11), 162 passed / 2 skipped (164), exit 0.
+
+The real-session A/B ran on the isolated production-isomorphic instance against this deployment's 66,736-event Session, with the cache setting as the only configuration difference: repeat whole read 3.5 s → 0.30 s, the two hits the same frozen object, that Session's charge 252.2 MB, and process heap about 0.69 GB against 1.96 GB. Those are author-local observations of one Session on one host, not a committed benchmark and not reproducible from this commit alone; this note did not re-run them.
+
+Not covered by any evidence here: the cache has no browser, e2e, or recorded-session snapshot (it returns the same object graph the uncached path returns, so no model- or product-visible output changes and no snapshot is owed); the cross-connection header-materialization path above; two reads of one Session in flight at once, which each decode because the entry is written after the scan; and the ceiling's memory headroom beyond the one Session measured.
+
+## Related
+
+- The listing bound that caps how many cold reads one pass starts: [A catalog listing bounds its cold Session reads](../bug-fix/2026-09-21-subagent-listing-cold-read-bound.md)
+- The sibling switch that moves the decode a miss still pays: [The session-log codec decompresses on the libuv thread pool](2026-09-20-async-session-codec.md)
+- The package README owns the operator-facing field table, the three limitations, and the cold-read behavior: [session-persistence-sqlite](../../../../packages/session/session-persistence-sqlite/README.md)
+- The fork inventory row this surface is registered under: [FORK_SURFACE.md](../../../../FORK_SURFACE.md)
