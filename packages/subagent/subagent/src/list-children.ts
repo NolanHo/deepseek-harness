@@ -29,6 +29,9 @@ import type { SubagentIdentityProjection } from './projection-types.ts'
 
 export type { SubagentListEntry } from './control-types.ts'
 
+// Fork patch (FORK_SURFACE.md): upstream starts one read per cold candidate
+// behind a hardcoded concurrency; the caller's per-listing budget and the
+// projection-cache rung hoisted ahead of it are the fork's.
 /**
  * Cold-read bounds one listing applies to its non-live candidates. One cold
  * observation reads and decodes a child's complete stored Session log, so an
@@ -287,6 +290,8 @@ async function resolveCandidateRows(
   return rows
 }
 
+// Fork patch (FORK_SURFACE.md): selection in corpus order is what makes the
+// caller's per-listing budget advance monotonically across listings.
 /**
  * Take the cold candidates one listing reads now, in corpus order. Candidates
  * the projection cache already serves never reach this selection, so a repeated

@@ -273,6 +273,8 @@ describe('Remote stream mux server carrier lifecycle', () => {
   })
 })
 
+// Fork patch (FORK_SURFACE.md): pins the four mux diagnostic lines, the
+// slow-carrier threshold, and the late-tick throttle.
 describe('Remote stream mux diagnostics', () => {
   it('reports one heartbeat-terminate line and marks the socket close as heartbeat-caused', async () => {
     const recorded = recordDiagnostics(3_000)

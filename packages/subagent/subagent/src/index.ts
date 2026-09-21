@@ -214,6 +214,9 @@ export interface Config {
   readonly coldReadBudget?: number
 }
 
+// Fork patch (FORK_SURFACE.md): the `Config` above is the fork's — upstream bounds
+// only how many cold reads run at once, with a hardcoded constant, and has neither
+// a per-listing read budget nor any deployment setting for either bound.
 /** Cold observations this service keeps in flight per listing when unconfigured. */
 const DEFAULT_COLD_READ_CONCURRENCY = 4
 
@@ -235,6 +238,7 @@ export class SubagentRuntime extends TypertRemoteService {
    * composes into the carrier.
    */
   private readonly emitLifecycle: LifecycleEmitter
+  // Fork patch (FORK_SURFACE.md): the resolved bounds ride both listing calls below.
   /** Cold-read bounds every listing call applies, resolved once from config. */
   private readonly listingLimits: SubagentListingLimits
 
@@ -404,6 +408,7 @@ export class SubagentRuntime extends TypertRemoteService {
    *   store is not mounted, or the caller cancels the listing.
    */
   listChildren(parentSessionId: SessionId, signal?: AbortSignal): Promise<SubagentListEntry[]> {
+    // Fork patch (FORK_SURFACE.md): the configured per-listing cold-read bounds ride this call.
     return listSubagentChildren(this.ctx, parentSessionId, this.listingLimits, signal)
   }
 
@@ -423,6 +428,7 @@ export class SubagentRuntime extends TypertRemoteService {
    * @throws {@link SubagentError} under the same conditions as {@link listChildren}.
    */
   listDescendants(rootSessionId: SessionId, signal?: AbortSignal): Promise<SubagentDescendantListEntry[]> {
+    // Fork patch (FORK_SURFACE.md): the configured per-listing cold-read bounds ride this call.
     return listSubagentDescendants(this.ctx, rootSessionId, this.listingLimits, signal)
   }
 
