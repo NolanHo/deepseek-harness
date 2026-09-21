@@ -1451,6 +1451,9 @@ async function setupColdCorpus(
   return { ctx, observed: serveColdCorpus(ctx, headers, options.observe) }
 }
 
+// Fork patch (FORK_SURFACE.md): pins the per-listing cold-read bounds, the
+// projection-cache rung that spends no budget, and the retryable `unavailable`
+// degradation.
 describe('SubagentRuntime cold-read bounds', () => {
   it('defaults both cold-read bounds and rejects a bound below one', async () => {
     expect(SubagentRuntime.Config({})).toEqual({ coldReadConcurrency: 4, coldReadBudget: 64 })

@@ -19,6 +19,9 @@ export type RemoteStreamOpener = (
 /** Convert an invocation or carrier failure to a stable wire value. */
 export type RemoteStreamFailureMapper = (error: unknown) => RemoteStreamFailure
 
+// Fork patch (FORK_SURFACE.md): upstream's mux reports no carrier lifecycle, so
+// this injectable sink, its threshold, and the four report sites below are the
+// fork's.
 /**
  * Sink for one transport diagnostic line. The Host composition injects the
  * process logger, so the mux owns the message and never the destination.
@@ -71,6 +74,8 @@ export class RemoteStreamMuxServer {
   private readonly server: WebSocketServer
   private readonly connections = new Set<Promise<void>>()
   private readonly missedHeartbeats = new WeakMap<WebSocket, number>()
+  // Fork patch (FORK_SURFACE.md): acceptance time, heartbeat causation, and the
+  // per-socket tick clock exist only to attribute a diagnostic line.
   private readonly acceptedAt = new WeakMap<WebSocket, number>()
   private readonly heartbeatTerminated = new WeakSet<WebSocket>()
   private heartbeatTimer: NodeJS.Timeout | undefined
@@ -112,6 +117,7 @@ export class RemoteStreamMuxServer {
       websocket.on('pong', () => { this.missedHeartbeats.set(websocket, 0) })
       this.startHeartbeat()
       const connection = new RemoteStreamMuxConnection(websocket, this.open, this.failure, this.diagnostics)
+      // Fork patch (FORK_SURFACE.md): every carrier close is reported with its cause.
       websocket.once('close', (code, reason) => {
         this.reportSocketClose(websocket, connection.openedStreams, code, reason)
       })

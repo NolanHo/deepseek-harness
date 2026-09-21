@@ -47,6 +47,8 @@ const REMOTE_HOST = { home: '/home/fixture' } as const
 type AgentWireId = TypertContextWire<TypertContextMap['agent']>
 const agentId = (value: string): AgentWireId => value as AgentWireId
 
+// Fork patch (FORK_SURFACE.md): the two diagnostics cases below pin the
+// `diagnosticsSlowMs` field and the stderr routing this fork added.
 /** Collect the mux carrier diagnostics the composed Host writes into its process log. */
 function captureDiagnostics(): string[] {
   const lines: string[] = []

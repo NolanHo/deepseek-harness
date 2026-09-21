@@ -153,6 +153,9 @@ export interface Config {
   readonly diagnosticsSlowMs?: number
 }
 
+// Fork patch (FORK_SURFACE.md): upstream's mux reports nothing about a carrier, so
+// the stderr sink above, the `diagnosticsSlowMs` field above it, and the mux
+// argument below are the fork's only view of a carrier's life and death.
 interface ResolvedConfig extends Config {
   readonly websocketHeartbeatIntervalMs: number
   readonly websocketPerMessageDeflate: boolean
@@ -245,6 +248,7 @@ export class TypertGatewayService extends Service implements TypertGateway {
         this.wireStream.failure,
         resolved.websocketHeartbeatIntervalMs,
         resolved.websocketPerMessageDeflate,
+        // Fork patch (FORK_SURFACE.md): the sink and the configured threshold ride the mux.
         { sink: REMOTE_STREAM_DIAGNOSTIC_SINK, slowMs: resolved.diagnosticsSlowMs },
       )
       webCtx.effect(() => {
