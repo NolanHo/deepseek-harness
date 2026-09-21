@@ -47,6 +47,17 @@ const REMOTE_HOST = { home: '/home/fixture' } as const
 type AgentWireId = TypertContextWire<TypertContextMap['agent']>
 const agentId = (value: string): AgentWireId => value as AgentWireId
 
+/** Collect the mux carrier diagnostics the composed Host writes into its process log. */
+function captureDiagnostics(): string[] {
+  const lines: string[] = []
+  vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown): boolean => {
+    const line = String(chunk).trim()
+    if (line.startsWith('api gateway: remote stream')) lines.push(line)
+    return true
+  })
+  return lines
+}
+
 /** Exchange this test Host's process token for its WebSocket/HTTP Cookie header. */
 function browserCookie(ctx: Context): string {
   const existing = browserCookies.get(ctx)
@@ -219,11 +230,24 @@ afterEach(async () => {
 
 describe('Typert Remote streams', () => {
   it('validates the WebSocket heartbeat timer range', () => {
-    expect(TypertGatewayService.Config({})).toEqual({ websocketHeartbeatIntervalMs: 2_000, websocketPerMessageDeflate: false })
+    expect(TypertGatewayService.Config({}))
+      .toEqual({ websocketHeartbeatIntervalMs: 2_000, websocketPerMessageDeflate: false, diagnosticsSlowMs: 3_000 })
     expect(TypertGatewayService.Config({ websocketHeartbeatIntervalMs: MAX_TIMER_DELAY_MS }))
-      .toEqual({ websocketHeartbeatIntervalMs: MAX_TIMER_DELAY_MS, websocketPerMessageDeflate: false })
+      .toEqual({
+        websocketHeartbeatIntervalMs: MAX_TIMER_DELAY_MS,
+        websocketPerMessageDeflate: false,
+        diagnosticsSlowMs: 3_000,
+      })
     for (const websocketHeartbeatIntervalMs of [0, 1.5, MAX_TIMER_DELAY_MS + 1]) {
       expect(() => TypertGatewayService.Config({ websocketHeartbeatIntervalMs })).toThrow()
+    }
+  })
+
+  it('defaults and bounds the transport diagnostics threshold', () => {
+    expect(TypertGatewayService.Config({})).toMatchObject({ diagnosticsSlowMs: 3_000 })
+    expect(TypertGatewayService.Config({ diagnosticsSlowMs: 50 })).toMatchObject({ diagnosticsSlowMs: 50 })
+    for (const diagnosticsSlowMs of [0, 1.5, MAX_TIMER_DELAY_MS + 1]) {
+      expect(() => TypertGatewayService.Config({ diagnosticsSlowMs })).toThrow()
     }
   })
 
@@ -314,6 +338,23 @@ describe('Typert Remote streams', () => {
 
     socket.close()
     await once(socket, 'close')
+  })
+
+  it('routes mux carrier diagnostics into the Host process log', async () => {
+    const { ctx } = await setup(true)
+    const lines = captureDiagnostics()
+    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.port)}/api/remote.mux`, {
+      headers: { cookie: browserCookie(ctx) },
+    })
+    await once(socket, 'open')
+
+    socket.close(1000, 'diagnostics probe')
+    await once(socket, 'close')
+    const line = await vi.waitFor(() => {
+      expect(lines).toHaveLength(1)
+      return lines[0] as string
+    })
+    expect(line).toContain('api gateway: remote stream socket closed code=1000 reason="diagnostics probe"')
   })
 
   it('multiplexes independent streams over one WebSocket and propagates cancellation', async () => {

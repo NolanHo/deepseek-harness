@@ -204,10 +204,20 @@ export interface Config {
    * live frames stay raw. @default false
    */
   readonly websocketPerMessageDeflate?: boolean
+  /**
+   * Elapsed milliseconds at or above which the Remote stream mux warns about
+   * a slow carrier: a logical stream whose first item took that long to
+   * produce, or a heartbeat tick that the event loop delayed by that much
+   * past its interval. Healthy traffic logs nothing. Deployment-tunable
+   * because the tolerable delay follows this host's scheduler, garbage
+   * collection, and network path, while the log volume a busy host accepts
+   * does not. @default 3000
+   */
+  readonly diagnosticsSlowMs?: number
 }
 ```
 
-来源：[`packages/api/gateway/src/index.ts:119`](../packages/api/gateway/src/index.ts)
+来源：[`packages/api/gateway/src/index.ts:120`](../packages/api/gateway/src/index.ts)
 
 <a id="deepseek-aidsh-api-session-controller"></a>
 

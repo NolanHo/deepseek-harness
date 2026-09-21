@@ -36,6 +36,7 @@ import type {
 import {
   RemoteStreamMuxServer,
   rejectRemoteStreamUpgrade,
+  type RemoteStreamDiagnosticSink,
 } from './stream-server.ts'
 import {
   REMOTE_EVENT_STREAM_ENDPOINT,
@@ -114,6 +115,19 @@ type ConnectionRpcResult = Awaited<ReturnType<ConnectionRpcHandler>>
 type ConnectionRpcError = Extract<ConnectionRpcResult, { readonly ok: false }>['error']
 const NEVER_ABORTED_SIGNAL = new AbortController().signal
 const DEFAULT_WEBSOCKET_HEARTBEAT_INTERVAL_MS = 2_000
+const DEFAULT_DIAGNOSTICS_SLOW_MS = 3_000
+
+/**
+ * Where the Remote stream mux writes its diagnostic lines. This tree registers
+ * no console exporter — cordis's built-in exporter only appends to a memory
+ * buffer — so `ctx.logger` output would never reach an operator. Deployments
+ * run the process under a supervisor that folds stderr into the service log,
+ * which is where these lines are read; the mux keeps the sink injectable so a
+ * composition that does serve an exporter can pass its logger instead.
+ */
+const REMOTE_STREAM_DIAGNOSTIC_SINK: RemoteStreamDiagnosticSink = {
+  warn: (message) => { process.stderr.write(`${message}\n`) },
+}
 
 /** Gateway transport configuration. */
 export interface Config {
@@ -127,11 +141,22 @@ export interface Config {
    * live frames stay raw. @default false
    */
   readonly websocketPerMessageDeflate?: boolean
+  /**
+   * Elapsed milliseconds at or above which the Remote stream mux warns about
+   * a slow carrier: a logical stream whose first item took that long to
+   * produce, or a heartbeat tick that the event loop delayed by that much
+   * past its interval. Healthy traffic logs nothing. Deployment-tunable
+   * because the tolerable delay follows this host's scheduler, garbage
+   * collection, and network path, while the log volume a busy host accepts
+   * does not. @default 3000
+   */
+  readonly diagnosticsSlowMs?: number
 }
 
 interface ResolvedConfig extends Config {
   readonly websocketHeartbeatIntervalMs: number
   readonly websocketPerMessageDeflate: boolean
+  readonly diagnosticsSlowMs: number
 }
 
 /**
@@ -181,6 +206,8 @@ export class TypertGatewayService extends Service implements TypertGateway {
     websocketHeartbeatIntervalMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS)
       .default(DEFAULT_WEBSOCKET_HEARTBEAT_INTERVAL_MS),
     websocketPerMessageDeflate: z.boolean().default(false),
+    diagnosticsSlowMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS)
+      .default(DEFAULT_DIAGNOSTICS_SLOW_MS),
   })
 
   /** Carrier adapter shared by the WebSocket mux and local Host transports. */
@@ -218,6 +245,7 @@ export class TypertGatewayService extends Service implements TypertGateway {
         this.wireStream.failure,
         resolved.websocketHeartbeatIntervalMs,
         resolved.websocketPerMessageDeflate,
+        { sink: REMOTE_STREAM_DIAGNOSTIC_SINK, slowMs: resolved.diagnosticsSlowMs },
       )
       webCtx.effect(() => {
         const route: WebUpgradeRoute = {

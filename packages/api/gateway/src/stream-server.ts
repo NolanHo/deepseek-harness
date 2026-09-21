@@ -20,6 +20,31 @@ export type RemoteStreamOpener = (
 export type RemoteStreamFailureMapper = (error: unknown) => RemoteStreamFailure
 
 /**
+ * Sink for one transport diagnostic line. The Host composition injects the
+ * process logger, so the mux owns the message and never the destination.
+ */
+export interface RemoteStreamDiagnosticSink {
+  /**
+   * Emit one complete single-line message.
+   * @param message - finished text; callers must not pass a format string with placeholders.
+   */
+  warn(message: string): void
+}
+
+/**
+ * Diagnosis of a slow Remote stream carrier: where lines go and the elapsed
+ * time that makes one worth reporting. A logical stream's first item and a
+ * heartbeat timer tick are both measured against `slowMs`; healthy traffic
+ * emits nothing, and the messages carry no payload or session values.
+ */
+export interface RemoteStreamDiagnostics {
+  /** Destination for diagnostic lines. */
+  readonly sink: RemoteStreamDiagnosticSink
+  /** Elapsed milliseconds at or above which a first item or a late heartbeat tick is reported. */
+  readonly slowMs: number
+}
+
+/**
  * `perMessageDeflate` options for the negotiable RFC 7692 compression: the
  * threshold keeps sub-kilobyte live frames raw (no deflate latency on the
  * typing path) while page bursts — one `opened` journal frame carrying the
@@ -32,12 +57,25 @@ const PER_MESSAGE_DEFLATE = { threshold: 1024 } as const
 /** Pongs owed before the heartbeat timer terminates a dead carrier. */
 const MAX_MISSED_HEARTBEATS = 2
 
+/** Prefix of every mux diagnostic line; operators grep one stream carrier by it. */
+const DIAGNOSTIC_PREFIX = 'api gateway: remote stream'
+
+/** Minimum milliseconds between two late-heartbeat lines, so one stall cannot repeat per tick. */
+const LATE_HEARTBEAT_REPORT_INTERVAL_MS = 5_000
+
+/** Close-reason characters kept in a diagnostic line; ws admits 123 bytes from a peer, so only a maximum-length reason is clipped. */
+const CLOSE_REASON_MAX_LENGTH = 120
+
 /** Own the no-server WebSocket acceptor and every active logical stream. */
 export class RemoteStreamMuxServer {
   private readonly server: WebSocketServer
   private readonly connections = new Set<Promise<void>>()
   private readonly missedHeartbeats = new WeakMap<WebSocket, number>()
+  private readonly acceptedAt = new WeakMap<WebSocket, number>()
+  private readonly heartbeatTerminated = new WeakSet<WebSocket>()
   private heartbeatTimer: NodeJS.Timeout | undefined
+  private lastHeartbeatTickAt = 0
+  private lastLateHeartbeatAt = 0
 
   /**
    * @param open - Gateway stream dispatcher.
@@ -45,12 +83,15 @@ export class RemoteStreamMuxServer {
    * @param heartbeatIntervalMs - interval between WebSocket Ping control frames.
    * @param perMessageDeflate - negotiate RFC 7692 per-message compression with
    * clients that offer it.
+   * @param diagnostics - where slow-carrier lines go and the threshold that
+   * makes one worth reporting; absent emits nothing.
    */
   constructor(
     private readonly open: RemoteStreamOpener,
     private readonly failure: RemoteStreamFailureMapper,
     private readonly heartbeatIntervalMs: number,
     perMessageDeflate: boolean = false,
+    private readonly diagnostics?: RemoteStreamDiagnostics,
   ) {
     this.server = new WebSocketServer({
       noServer: true,
@@ -67,9 +108,13 @@ export class RemoteStreamMuxServer {
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     this.server.handleUpgrade(req, socket, head, (websocket) => {
       this.missedHeartbeats.set(websocket, 0)
+      this.acceptedAt.set(websocket, Date.now())
       websocket.on('pong', () => { this.missedHeartbeats.set(websocket, 0) })
       this.startHeartbeat()
-      const connection = new RemoteStreamMuxConnection(websocket, this.open, this.failure)
+      const connection = new RemoteStreamMuxConnection(websocket, this.open, this.failure, this.diagnostics)
+      websocket.once('close', (code, reason) => {
+        this.reportSocketClose(websocket, connection.openedStreams, code, reason)
+      })
       const done = connection.run()
       this.connections.add(done)
       void done.then(() => { this.connections.delete(done) })
@@ -93,14 +138,20 @@ export class RemoteStreamMuxServer {
   /** Start one `unref()` timer after the first upgrade; it spans empty-client periods until close(). */
   private startHeartbeat(): void {
     if (this.heartbeatTimer !== undefined) return
+    this.lastHeartbeatTickAt = Date.now()
     this.heartbeatTimer = setInterval(() => {
+      const now = Date.now()
+      this.reportLateHeartbeat(now)
+      this.lastHeartbeatTickAt = now
       for (const socket of this.server.clients) {
         if (socket.readyState !== WebSocket.OPEN) continue
         const missed = this.missedHeartbeats.get(socket) as number
         if (missed >= MAX_MISSED_HEARTBEATS) {
           setImmediate(() => {
             if ((this.missedHeartbeats.get(socket) as number) >= MAX_MISSED_HEARTBEATS) {
+              this.heartbeatTerminated.add(socket)
               socket.terminate()
+              this.reportHeartbeatTerminate(socket)
             }
           })
           continue
@@ -110,6 +161,50 @@ export class RemoteStreamMuxServer {
       }
     }, this.heartbeatIntervalMs)
     this.heartbeatTimer.unref()
+  }
+
+  /**
+   * Report one carrier close with everything needed to attribute it: the peer
+   * or local close code, the clipped reason, socket lifetime, how many logical
+   * streams it carried, and whether the heartbeat killed it.
+   */
+  private reportSocketClose(
+    socket: WebSocket,
+    openedStreams: number,
+    code: number,
+    reason: Buffer,
+  ): void {
+    if (this.diagnostics === undefined) return
+    const text = reason.toString('utf8')
+    const clipped = text.length > CLOSE_REASON_MAX_LENGTH
+      ? `${text.slice(0, CLOSE_REASON_MAX_LENGTH)}...`
+      : text
+    const lifetimeMs = Date.now() - (this.acceptedAt.get(socket) as number)
+    this.diagnostics.sink.warn(
+      `${DIAGNOSTIC_PREFIX} socket closed code=${String(code)} reason=${JSON.stringify(clipped)}`
+      + ` lifetimeMs=${String(lifetimeMs)} streams=${String(openedStreams)}`
+      + ` heartbeat=${String(this.heartbeatTerminated.has(socket))}`,
+    )
+  }
+
+  /** Report the actual heartbeat terminate once, after its `setImmediate` re-check confirmed the socket still owed pongs. */
+  private reportHeartbeatTerminate(socket: WebSocket): void {
+    if (this.diagnostics === undefined) return
+    const missed = this.missedHeartbeats.get(socket) as number
+    const lifetimeMs = Date.now() - (this.acceptedAt.get(socket) as number)
+    this.diagnostics.sink.warn(
+      `${DIAGNOSTIC_PREFIX} heartbeat terminate missed=${String(missed)} lifetimeMs=${String(lifetimeMs)}`,
+    )
+  }
+
+  /** Report a heartbeat tick that the event loop delayed past its interval, at most once per {@link LATE_HEARTBEAT_REPORT_INTERVAL_MS}. */
+  private reportLateHeartbeat(now: number): void {
+    if (this.diagnostics === undefined) return
+    const driftMs = now - this.lastHeartbeatTickAt - this.heartbeatIntervalMs
+    if (driftMs < this.diagnostics.slowMs
+      || now - this.lastLateHeartbeatAt < LATE_HEARTBEAT_REPORT_INTERVAL_MS) return
+    this.lastLateHeartbeatAt = now
+    this.diagnostics.sink.warn(`${DIAGNOSTIC_PREFIX} heartbeat tick late driftMs=${String(driftMs)}`)
   }
 }
 
@@ -121,12 +216,19 @@ interface ActiveStream {
 class RemoteStreamMuxConnection {
   private readonly streams = new Map<string, ActiveStream>()
   private writes = Promise.resolve()
+  private opened = 0
 
   constructor(
     private readonly socket: WebSocket,
     private readonly open: RemoteStreamOpener,
     private readonly failure: RemoteStreamFailureMapper,
+    private readonly diagnostics: RemoteStreamDiagnostics | undefined,
   ) {}
+
+  /** Logical streams this carrier has opened, reported with its close line. */
+  get openedStreams(): number {
+    return this.opened
+  }
 
   async run(): Promise<void> {
     const closed = new Promise<void>((resolve) => {
@@ -165,6 +267,7 @@ class RemoteStreamMuxConnection {
       done: Promise.resolve(),
     }
     this.streams.set(message.streamId, active)
+    this.opened += 1
     const done = this.pump(message.streamId, message.endpoint, message.payload, active)
     active.done = done
     const remove = (): void => { this.streams.delete(message.streamId) }
@@ -177,9 +280,15 @@ class RemoteStreamMuxConnection {
     payload: unknown,
     active: ActiveStream,
   ): Promise<void> {
+    const startedAt = Date.now()
     try {
       const source = await this.open(endpoint, payload, active.abort.signal)
+      let first = true
       for await (const value of source) {
+        if (first) {
+          first = false
+          this.reportFirstItem(endpoint, startedAt)
+        }
         await this.send({ type: 'item', streamId, value })
       }
       if (!active.abort.signal.aborted) await this.send({ type: 'end', streamId })
@@ -194,6 +303,16 @@ class RemoteStreamMuxConnection {
         }
       }
     }
+  }
+
+  /** Report a first item that took at least the configured slow threshold to produce. */
+  private reportFirstItem(endpoint: string, startedAt: number): void {
+    if (this.diagnostics === undefined) return
+    const elapsedMs = Date.now() - startedAt
+    if (elapsedMs < this.diagnostics.slowMs) return
+    this.diagnostics.sink.warn(
+      `${DIAGNOSTIC_PREFIX} first item slow endpoint=${JSON.stringify(endpoint)} elapsedMs=${String(elapsedMs)}`,
+    )
   }
 
   private send(message: RemoteStreamServerMessage): Promise<void> {
