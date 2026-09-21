@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import WebSocket, { type RawData } from 'ws'
 import {
   RemoteStreamMuxServer,
+  type RemoteStreamDiagnostics,
   type RemoteStreamFailureMapper,
   type RemoteStreamOpener,
 } from '../src/stream-server.ts'
@@ -272,11 +273,191 @@ describe('Remote stream mux server carrier lifecycle', () => {
   })
 })
 
+describe('Remote stream mux diagnostics', () => {
+  it('reports one heartbeat-terminate line and marks the socket close as heartbeat-caused', async () => {
+    const recorded = recordDiagnostics(3_000)
+    const entry = await startMux(
+      async (_endpoint, _payload, signal) => waitForAbort(signal),
+      20,
+      false,
+      recorded.options,
+    )
+    const client = await connect(entry.url)
+    const serverSocket = acceptedSocket(entry.mux)
+    serverSocket.removeAllListeners('pong')
+    const closed = once(client, 'close')
+
+    await once(client, 'ping')
+    await once(client, 'ping')
+    await closed
+    await vi.waitFor(() => { expect(recorded.lines).toHaveLength(2) })
+
+    const terminated = recorded.lines.filter(line => line.includes('heartbeat terminate'))
+    expect(terminated).toHaveLength(1)
+    expect(terminated[0]).toContain('missed=2')
+    expect(terminated[0]).toMatch(/lifetimeMs=\d+/u)
+    // The terminate line precedes the close line: terminate() emits 'close' asynchronously.
+    expect(recorded.lines[0]).toBe(terminated[0])
+
+    const closedLine = recorded.lines.filter(line => line.includes('socket closed'))
+    expect(closedLine).toHaveLength(1)
+    expect(closedLine[0]).toContain('code=1006')
+    expect(closedLine[0]).toContain('heartbeat=true')
+  })
+
+  it('reports the close code, reason, lifetime, and logical stream count of a peer close', async () => {
+    const recorded = recordDiagnostics(3_000)
+    const entry = await startMux(fastItem, 30_000, false, recorded.options)
+    const client = await connect(entry.url)
+    client.send(openFrame('counted'))
+    await once(client, 'message')
+
+    const closed = once(client, 'close')
+    client.close(1000, 'peer done')
+    await closed
+    await vi.waitFor(() => { expect(recorded.lines).toHaveLength(1) })
+    expect(recorded.lines[0]).toContain('socket closed code=1000 reason="peer done"')
+    expect(recorded.lines[0]).toMatch(/lifetimeMs=\d+/u)
+    expect(recorded.lines[0]).toContain('streams=1')
+    expect(recorded.lines[0]).toContain('heartbeat=false')
+  })
+
+  it('clips a maximum-length peer close reason to one bounded line', async () => {
+    const recorded = recordDiagnostics(3_000)
+    const entry = await startMux(
+      async (_endpoint, _payload, signal) => waitForAbort(signal),
+      30_000,
+      false,
+      recorded.options,
+    )
+    const client = await connect(entry.url)
+    const reason = 'r'.repeat(123)
+
+    const closed = once(client, 'close')
+    client.close(1000, reason)
+    await closed
+    await vi.waitFor(() => { expect(recorded.lines).toHaveLength(1) })
+    expect(recorded.lines[0]).toContain(`reason="${'r'.repeat(120)}..."`)
+    expect(recorded.lines[0]).not.toContain(reason)
+  })
+
+  it('reports a first item slower than the configured threshold with its endpoint', async () => {
+    const recorded = recordDiagnostics(10)
+    const entry = await startMux(delayedItemOpener(50), 30_000, false, recorded.options)
+    const client = await connect(entry.url)
+    const messages = vi.fn()
+    client.on('message', messages)
+
+    client.send(openFrame('slow-open'))
+    await vi.waitFor(() => { expect(messages).toHaveBeenCalled() })
+    expect(recorded.lines).toHaveLength(1)
+    expect(recorded.lines[0]).toContain('first item slow endpoint="fixture/follow"')
+    expect(recorded.lines[0]).toMatch(/elapsedMs=\d+/u)
+
+    const closed = once(client, 'close')
+    client.close()
+    await closed
+  })
+
+  it('stays silent for a first item under a raised threshold', async () => {
+    const recorded = recordDiagnostics(60_000)
+    const entry = await startMux(delayedItemOpener(50), 30_000, false, recorded.options)
+    const client = await connect(entry.url)
+    const messages = vi.fn()
+    client.on('message', messages)
+
+    client.send(openFrame('slow-but-tolerated'))
+    await vi.waitFor(() => { expect(messages).toHaveBeenCalled() })
+    expect(recorded.lines).toEqual([])
+
+    const closed = once(client, 'close')
+    client.close()
+    await closed
+  })
+
+  it('emits nothing for a healthy carrier and reports only the close line', async () => {
+    const recorded = recordDiagnostics(1_000)
+    const entry = await startMux(fastItem, 20, false, recorded.options)
+    const client = await connect(entry.url)
+    const messages = vi.fn()
+    client.on('message', messages)
+
+    client.send(openFrame('fast'))
+    await once(client, 'ping')
+    await once(client, 'ping')
+    await vi.waitFor(() => { expect(messages).toHaveBeenCalled() })
+    expect(recorded.lines).toEqual([])
+
+    const closed = once(client, 'close')
+    client.close(1000, 'done')
+    await closed
+    await vi.waitFor(() => { expect(recorded.lines).toHaveLength(1) })
+    expect(recorded.lines[0]).toContain('socket closed code=1000')
+  })
+
+  it('reports a late heartbeat tick once per throttling window', async () => {
+    const recorded = recordDiagnostics(10)
+    const entry = await startMux(
+      async (_endpoint, _payload, signal) => waitForAbort(signal),
+      20,
+      false,
+      recorded.options,
+    )
+    const client = await connect(entry.url)
+
+    stallEventLoop(120)
+    await vi.waitFor(() => { expect(recorded.lines).toHaveLength(1) })
+    expect(recorded.lines[0]).toContain('heartbeat tick late driftMs=')
+    expect(recorded.lines[0]).not.toContain('socket closed')
+
+    // A second stall inside the throttling window advances the timer past its
+    // interval again; the ping proves a later tick ran without a second line.
+    stallEventLoop(120)
+    await once(client, 'ping')
+    expect(recorded.lines).toHaveLength(1)
+
+    const closed = once(client, 'close')
+    client.close()
+    await closed
+  })
+})
+
 const mapFailure: RemoteStreamFailureMapper = error => ({
   code: 'internal',
   message: error instanceof Error ? error.message : String(error),
   details: {},
 })
+
+/** One in-memory diagnostics destination plus the options that feed it to a mux. */
+interface RecordedDiagnostics {
+  readonly lines: string[]
+  readonly options: RemoteStreamDiagnostics
+}
+
+/** Collect mux diagnostics so a spec can assert their exact count and content. */
+function recordDiagnostics(slowMs: number): RecordedDiagnostics {
+  const lines: string[] = []
+  return { lines, options: { slowMs, sink: { warn: (message) => { lines.push(message) } } } }
+}
+
+/** Open one source whose only item arrives after the delay, so a spec can cross a slow threshold. */
+function delayedItemOpener(delayMs: number): RemoteStreamOpener {
+  return async (_endpoint, _payload, _signal) => {
+    await new Promise<void>((resolve) => { setTimeout(resolve, delayMs) })
+    return (async function *(): AsyncIterable<string> { yield 'late-item' })()
+  }
+}
+
+/** Open one source that yields its single item immediately. */
+const fastItem: RemoteStreamOpener = async () => (async function *(): AsyncIterable<string> { yield 'item' })()
+
+/** Block the event loop synchronously; a stalled timer firing late is the event the diagnostic reports. */
+function stallEventLoop(ms: number): void {
+  const until = Date.now() + ms
+  while (Date.now() < until) {
+    // Spin rather than await: an awaited delay would let the heartbeat timer run on schedule.
+  }
+}
 
 
 /** Decode one ws text frame to its JSON string, across every RawData shape. */
@@ -291,8 +472,9 @@ async function startMux(
   open: RemoteStreamOpener,
   heartbeatIntervalMs = 2_000,
   perMessageDeflate = false,
+  diagnostics?: RemoteStreamDiagnostics,
 ): Promise<RunningMux> {
-  const mux = new RemoteStreamMuxServer(open, mapFailure, heartbeatIntervalMs, perMessageDeflate)
+  const mux = new RemoteStreamMuxServer(open, mapFailure, heartbeatIntervalMs, perMessageDeflate, diagnostics)
   const http = createServer()
   http.on('upgrade', (request, socket, head) => { mux.handleUpgrade(request, socket, head) })
   await new Promise<void>((resolve, reject) => {
