@@ -60,6 +60,21 @@ export interface SqliteStoreOptions {
    * omitted value keeps the synchronous behavior.
    */
   readonly asyncCodec?: boolean
+  /**
+   * Whole decoded logs this connection may retain, in decoded JSON text bytes;
+   * an omitted or zero value retains nothing.
+   */
+  readonly decodedLogCacheBytes?: number
+}
+
+/** One cached whole-log read: the restored log and the bytes it is charged. */
+interface DecodedLogCacheEntry {
+  /** Revision this log was read at; a hit requires the same revision again. */
+  readonly revision: SessionPersistenceRevision
+  /** The restored, validated log returned to every hit unchanged. */
+  readonly log: SqliteStoredLog
+  /** UTF-8 byte length of the log's decoded JSON text. */
+  readonly bytes: number
 }
 
 /** One stored log restored and validated to the current logical format. */
@@ -117,9 +132,22 @@ export class SqliteStore {
    * stale base instead of acting on it.
    */
   private readonly scanStoredRows: StoredRowScan
+  /**
+   * Bounded LRU of whole decoded logs keyed by session id, oldest first. A hit
+   * requires the revision just read from the session row in this same call, so
+   * a write by any connection or process misses instead of returning events the
+   * database no longer holds. Every local mutation drops its session's entry
+   * and `close()` drops the whole map.
+   */
+  private readonly decodedLogs = new Map<SessionId, DecodedLogCacheEntry>()
+  /** Decoded JSON text bytes currently charged across {@link decodedLogs}. */
+  private retainedDecodedLogBytes = 0
+  /** Configured ceiling on {@link retainedDecodedLogBytes}; zero retains nothing. */
+  private readonly decodedLogCacheBytes: number
 
   constructor(private readonly options: SqliteStoreOptions) {
     this.scanStoredRows = options.asyncCodec === true ? scanRowsOnThreadPool : scanRows
+    this.decodedLogCacheBytes = options.decodedLogCacheBytes ?? 0
   }
 
   /**
@@ -207,6 +235,14 @@ export class SqliteStore {
     })
     signal?.throwIfAborted()
     if (snapshot === undefined) return undefined
+    const revision = sqliteRevision(this.storeIdentity, snapshot.row)
+    const cached = this.decodedLogs.get(id)
+    if (cached !== undefined && cached.revision === revision) {
+      // Re-insert at the newest end: the eviction scan below walks oldest first.
+      this.decodedLogs.delete(id)
+      this.decodedLogs.set(id, cached)
+      return cached.log
+    }
     const scanned = await this.scanStoredRows(snapshot.eventRows)
     const restored = restoreStoredLog(storedPhysicalHeaderOf(snapshot.row), scanned.preserved, id)
     if (snapshot.row.version === SESSION_FORMAT_VERSION
@@ -216,12 +252,14 @@ export class SqliteStore {
         { cause: new Error('stored inherited cut mismatch') },
       )
     }
-    return {
+    const log: SqliteStoredLog = {
       ...restored,
-      revision: sqliteRevision(this.storeIdentity, snapshot.row),
+      revision,
       storedVersion: snapshot.row.version,
       ...scanned.tornFrom === undefined ? {} : { tornFrom: scanned.tornFrom },
     }
+    this.memoizeDecodedLog(id, log, scanned.decodedBytes)
+    return log
   }
 
   /**
@@ -398,7 +436,7 @@ export class SqliteStore {
       const insert = this.insertStatement()
       for (const record of packChunkRuns(events as readonly SessionEvent[])) this.insertRecord(insert, sessionKey, bindRecord(record))
       this.incrementRevision(storage.meta.id)
-      this.db.exec(sql('commit'))
+      this.commitSessionMutation(storage.meta.id)
     } catch (error: unknown) {
       this.rollback(error, 'append')
     }
@@ -414,7 +452,7 @@ export class SqliteStore {
     try {
       validateSchemaForMutation(this.databaseConstructor, this.db, this.databasePath)
       this.writeRow(storage)
-      this.db.exec(sql('commit'))
+      this.commitSessionMutation(storage.meta.id)
     } catch (error: unknown) {
       /* v8 ignore next -- validate/write failure uses the same transaction rollback path covered by append and repair. */
       this.rollback(error, 'materialize empty session')
@@ -444,7 +482,7 @@ export class SqliteStore {
       const insert = this.insertStatement()
       for (const record of packChunkRuns(events)) this.insertRecord(insert, sessionKey, bindRecord(record))
       this.incrementRevision(storage.meta.id)
-      this.db.exec(sql('commit'))
+      this.commitSessionMutation(storage.meta.id)
     } catch (error: unknown) {
       this.rollback(error, 'publish stored migration')
     }
@@ -492,7 +530,7 @@ export class SqliteStore {
         for (const closer of closers) this.insertRecord(insert, sessionKey, bindRecord(closer))
       }
       this.incrementRevision(storage.meta.id)
-      this.db.exec(sql('commit'))
+      this.commitSessionMutation(storage.meta.id)
     } catch (error: unknown) {
       this.rollback(error, 'repair')
     }
@@ -533,7 +571,7 @@ export class SqliteStore {
         const insert = this.insertStatement()
         for (const record of packChunkRuns(appended)) this.insertRecord(insert, sessionKey, bindRecord(record))
         this.incrementRevision(storage.meta.id)
-        this.db.exec(sql('commit'))
+        this.commitSessionMutation(storage.meta.id)
         return
       }
       // A packed row whose run head sits below the cut may still span it; that
@@ -557,7 +595,7 @@ export class SqliteStore {
         for (const record of packChunkRuns(appended)) this.insertRecord(insert, sessionKey, bindRecord(record))
       }
       this.incrementRevision(storage.meta.id)
-      this.db.exec(sql('commit'))
+      this.commitSessionMutation(storage.meta.id)
     } catch (error: unknown) {
       this.rollback(error, 'truncate')
     }
@@ -575,12 +613,56 @@ export class SqliteStore {
     await Promise.allSettled([this.ready])
     if (!this.opened) return
     this.opened = false
+    this.decodedLogs.clear()
+    this.retainedDecodedLogBytes = 0
     this.db.close()
   }
 
   private rowFor(id: SessionId): SessionRow | undefined {
     const value = this.db.prepare(sql('select-session')).get(id)
     return value === undefined ? undefined : decodeSessionRow(value)
+  }
+
+  /**
+   * Retain one decoded log for the next read at the same revision, then evict
+   * least-recently-used entries until the retained bytes fit the configured
+   * ceiling. A log larger than the whole ceiling is never retained.
+   * @param id - the session this log belongs to.
+   * @param log - the restored log a hit returns unchanged.
+   * @param bytes - UTF-8 byte length of the log's decoded JSON text.
+   */
+  private memoizeDecodedLog(id: SessionId, log: SqliteStoredLog, bytes: number): void {
+    this.forgetDecodedLog(id)
+    if (this.decodedLogCacheBytes === 0 || bytes > this.decodedLogCacheBytes) return
+    this.decodedLogs.set(id, { revision: log.revision, log, bytes })
+    this.retainedDecodedLogBytes += bytes
+    for (const oldest of this.decodedLogs.keys()) {
+      if (this.retainedDecodedLogBytes <= this.decodedLogCacheBytes) break
+      this.forgetDecodedLog(oldest)
+    }
+  }
+
+  /**
+   * Drop one session's retained log and release the bytes it was charged.
+   * @param id - the session whose entry this call drops.
+   */
+  private forgetDecodedLog(id: SessionId): void {
+    const entry = this.decodedLogs.get(id)
+    if (entry === undefined) return
+    this.decodedLogs.delete(id)
+    this.retainedDecodedLogBytes -= entry.bytes
+  }
+
+  /**
+   * Commit one transaction that changed a session's stored rows and drop that
+   * session's retained log. The revision bump the transaction already made
+   * forces the next read to miss; dropping the entry releases the bytes now
+   * instead of holding a superseded log until the ceiling evicts it.
+   * @param id - the session this transaction changed.
+   */
+  private commitSessionMutation(id: SessionId): void {
+    this.db.exec(sql('commit'))
+    this.forgetDecodedLog(id)
   }
 
   private sessionKey(id: SessionId): number {

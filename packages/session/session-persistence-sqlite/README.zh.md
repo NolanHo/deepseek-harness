@@ -37,6 +37,8 @@ kind: "package-reference"
 
 磁盘成本换来的是结构化、可查询的会话历史视图：外部工具可以用 SQL 分析 `sessions` 与 `events`，按本提供方的方式解码物理行——这是内置全文搜索等功能的天然基础。
 
+完整读取会恢复每一行已存储数据，而恢复一个会话——或任何其他打开并读取它的消费方——会在数据未变化时重复这份工作。`decodedLogCacheBytes` 保留连接已解码过的日志，当某个会话的已存储 revision 未变化时，用首次读取产出的对象回答重复读取。默认值 `0` 完全保留未缓存行为：不保留任何内容，每次读取都构建全新的对象图。
+
 <a id="minimal-configuration"></a>
 ### 最小配置
 
@@ -57,6 +59,7 @@ kind: "package-reference"
 | `cacheSizeKib` | SQLite 的 `-2000`（约 1.95 MiB） | 每个连接的 SQLite 页缓存，单位为 KiB；省略或留空时不执行任何 pragma |
 | `writeBatchMaxDelayMs` | `200` | 实时事件的固定聚合窗口，单位为毫秒 |
 | `asyncCodec` | `false` | 在 libuv 线程池而非读线程上解压已存储的日志 |
+| `decodedLogCacheBytes` | `0`（关闭） | 单个连接可保留的整份已解码日志上限，单位为解码后 JSON 文本字节 |
 
 本包接受的字段见[最小配置](#minimal-configuration)表；每个字段及其 JSDoc 的穷尽式真源是生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-session-persistence-sqlite)。
 
@@ -137,6 +140,8 @@ await ctx.sessionPersistence.append(id, events)
 完整读取先反向定位最后一个有效 `turn/end`，再按正向顺序把每个物理行解码为其逻辑事件，并拒绝已提交前缀中的缺口或格式错误行。格式错误的最后一行被视为撕裂尾部：执行恢复的加载可以在写锁下删除它，并用合成闭合事件关闭日志。后缀读取（`readFrom`）只检查可能包含目标序列的物理跨度，因此永远不会解析无关的更早行。
 
 `asyncCodec` 选择由哪个线程解压这些行。开启后，`zlib.zstdDecompress` 先在 libuv 线程池上解码每个压缩数据列，再由同一个扫描把行展平，因此冷读会在行与行之间让出，并发的冷读最多按池的规模并行解压。压缩，以及任何在写事务打开期间执行的解码（追加尾部窗口、修复、truncate），都留在调用线程上：在打开的事务中 await，会让另一个操作在同一连接上开启嵌套事务。两种设置写出的行相同、读出的事件也相同；`tests/compression-async.spec.ts` 与 `tests/async-codec.spec.ts` 钉住这一点。
+
+`decodedLogCacheBytes` 为单个连接保留整份已解码日志。只有当同一次调用读到的会话行携带该条目被读入时的 revision 时，读取才会复用该条目，因此任何连接或进程的写入都会未命中，而不会返回数据库已不再持有的事件。追加、发布、修复、truncate 以及 header 物化还会额外删除该会话的条目，`close()` 则删除全部条目。上限按每条日志数据列的解码后 JSON 文本计费——压缩列按解压后的文本——并持续淘汰最久未使用的条目，直到保留总量落入上限；超过整体上限的日志永不保留。
 
 </details>
 

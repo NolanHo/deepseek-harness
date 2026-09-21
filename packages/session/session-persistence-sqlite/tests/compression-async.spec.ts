@@ -21,6 +21,7 @@ import {
   scanRowsOnThreadPool,
 } from '../src/compression.ts'
 import type { EventRow } from '../src/schema.ts'
+import { decodedColumnText } from './decoded-text.ts'
 
 /**
  * Wrap both zstd decoders so a test can observe which entry point a scan uses;
@@ -65,6 +66,11 @@ function row(record: StorageRecord): EventRow {
     surface_op: bound.surfaceOp,
     ignorable: bound.ignorable,
   }
+}
+
+/** Decoded JSON text length of one physical row, the scan's cache-size unit. */
+function decodedBytes(physical: EventRow): number {
+  return decodedColumnText(physical.data).length
 }
 
 /** One scalar event whose data column the shared dictionary compresses. */
@@ -168,6 +174,8 @@ describe('thread-pool row scan', () => {
       value: {
         preserved: [{ type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } }],
         tornFrom: 4,
+        // The frame's own decode failed, so only the scalar row's text counts.
+        decodedBytes: decodedBytes(start),
       },
     })
     const pooledOptions = vi.mocked(zstdDecompress).mock.calls

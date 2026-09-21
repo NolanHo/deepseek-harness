@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/session/session-persistence-sqlite/README.md
-README.md: 1cfcc855c50101638a4600b9408f53f026bc9656
-README.zh.md: c30af23affc9e4b7ef6491cac8eb498d76e9935b
+README.md: fac41f034f4ba50de8a81b0984ed270f1847b44c
+README.zh.md: 5b5be9364e076ba69de0117f9c584b7aea01a845

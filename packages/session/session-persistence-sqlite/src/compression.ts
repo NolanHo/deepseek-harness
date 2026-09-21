@@ -36,6 +36,25 @@ export interface ScannedRows {
   readonly preserved: StoredLogicalEvent[]
   /** Physical deletion base of a removable tail, absent from a fully valid scan. */
   readonly tornFrom?: number
+  /**
+   * Summed UTF-8 byte length of every data column this scan decoded — a
+   * compressed column's decompressed text or an uncompressed column's stored
+   * text — counted before its JSON is parsed. A column whose decompression
+   * failed contributes nothing. The store's decoded-log cache charges its
+   * entries this number, which covers the retained strings but not the parsed
+   * object graph built from them.
+   */
+  readonly decodedBytes: number
+}
+
+/**
+ * Running decoded JSON text size a scan reports with its decoded rows. A
+ * caller that measures passes one accumulator through a whole scan; callers
+ * that only need the events omit it and pay nothing.
+ */
+export interface DecodedTextMeasurement {
+  /** Summed UTF-8 byte length of the decoded data columns seen so far. */
+  decodedBytes: number
 }
 
 /**
@@ -74,22 +93,20 @@ function isChunkTag(value: string): value is ChunkTag {
 /**
  * Decode one physical SQLite row into its complete stored-format logical event span.
  * @param row - detached SQLite event row.
+ * @param measurement - optional accumulator receiving this row's decoded JSON text length.
  * @returns every logical event represented by the row.
  */
-export function decodeRow(row: EventRow): StoredLogicalEvent[] {
-  if (row.ignorable !== PACKED_ROW_SENTINEL) return [decodeScalarRow(row)]
+export function decodeRow(row: EventRow, measurement?: DecodedTextMeasurement): StoredLogicalEvent[] {
+  if (row.ignorable !== PACKED_ROW_SENTINEL) return [decodeScalarRow(row, measurement)]
   if (!isChunkTag(row.type)) {
     throw new Error(`malformed ${row.type} storage row: packed discriminator requires a chunk tag`)
   }
   if (row.source_event_seqs !== null || row.surface_op !== null) {
     throw new Error(`malformed ${row.type} storage row: packed surface fields must be null`)
   }
-  return decodeSerializedChunkRow(
-    row.type,
-    row.seq,
-    row.time,
-    decodeData(row.data, MAX_PACKED_DATA_BYTES),
-  )
+  const serialized = decodeData(row.data, MAX_PACKED_DATA_BYTES)
+  if (measurement !== undefined) measurement.decodedBytes += Buffer.byteLength(serialized)
+  return decodeSerializedChunkRow(row.type, row.seq, row.time, serialized)
 }
 
 /**
@@ -301,18 +318,20 @@ function isChunkRow(record: StorageRecord): record is ChunkRow {
   return isChunkTag(record.type) && 'seq0' in record && !('seq' in record)
 }
 
-function decodeScalarRow(row: EventRow): StoredLogicalEvent {
+function decodeScalarRow(row: EventRow, measurement?: DecodedTextMeasurement): StoredLogicalEvent {
   const sourceEventSeqs = row.source_event_seqs === null
     ? undefined
     : decodeSourceEventSeqs(row.source_event_seqs, row.seq).map(seq => SessionSeq(seq))
   const surfaceOp = row.surface_op === null
     ? undefined
     : JSON.parse(row.surface_op) as SessionEvent<SurfaceEventType>['surfaceOp']
+  const serialized = decodeData(row.data)
+  if (measurement !== undefined) measurement.decodedBytes += Buffer.byteLength(serialized)
   return {
     type: row.type as StoredLogicalEvent['type'],
     seq: SessionSeq(row.seq),
     time: row.time,
-    data: JSON.parse(decodeData(row.data)) as StoredLogicalEvent['data'],
+    data: JSON.parse(serialized) as StoredLogicalEvent['data'],
     ...sourceEventSeqs === undefined ? {} : { sourceEventSeqs },
     ...surfaceOp === undefined ? {} : { surfaceOp },
     ...row.ignorable === 1 ? { ignorable: true as const } : {},
@@ -344,12 +363,13 @@ export function scanRows(
   }
 
   const preserved: StoredLogicalEvent[] = []
+  const measurement: DecodedTextMeasurement = { decodedBytes: 0 }
   let expected = base
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     const physical = rows[rowIndex] as EventRow
     let logicalEvents: StoredLogicalEvent[] | undefined
     try {
-      logicalEvents = decodeRow(physical)
+      logicalEvents = decodeRow(physical, measurement)
     } catch {
       // The committed-prefix rule below owns whether this invalid row is fatal or repairable.
     }
@@ -357,7 +377,7 @@ export function scanRows(
       if (rowIndex <= lastTurnEndRow) {
         throw new Error(`corrupt session log: invalid committed physical row at seq ${physical.seq}`)
       }
-      return { preserved, tornFrom: physical.seq }
+      return { preserved, tornFrom: physical.seq, decodedBytes: measurement.decodedBytes }
     }
     let contiguous = true
     for (const event of logicalEvents) {
@@ -371,11 +391,11 @@ export function scanRows(
       if (rowIndex <= lastTurnEndRow) {
         throw new Error(`corrupt session log: invalid committed physical row at seq ${physical.seq}`)
       }
-      return { preserved, tornFrom: physical.seq }
+      return { preserved, tornFrom: physical.seq, decodedBytes: measurement.decodedBytes }
     }
     preserved.push(...logicalEvents)
   }
-  return { preserved }
+  return { preserved, decodedBytes: measurement.decodedBytes }
 }
 
 /**

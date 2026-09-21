@@ -2033,6 +2033,23 @@ export interface Config {
    * lets this switch be bisected or rolled back on its own.
    */
   asyncCodec?: boolean
+  /**
+   * Whole decoded logs one connection may retain, in decoded JSON text bytes;
+   * `0` disables the cache and every read decodes afresh. Fork patch
+   * (FORK_SURFACE.md).
+   *
+   * A cold read decompresses, parses, validates, and freezes every stored row.
+   * Resuming a large session, and every other full-log read, repeats that work
+   * on data that has not changed; a retained log answers the repeat with the
+   * objects the first read already produced. Retention is only ever a hit on
+   * the revision read from the session row in the same call that asks for it,
+   * and every write path bumps that revision in the transaction that changes
+   * the rows, so a hit cannot return events the database no longer holds —
+   * named here because the deployment sizes the ceiling, while correctness
+   * rests on that revision check rather than on invalidation.
+   * @default 0
+   */
+  decodedLogCacheBytes?: number
 }
 
 /** Durable journal modes accepted by the backend. */

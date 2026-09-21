@@ -37,6 +37,8 @@ The packed layout exchanges some SQLite-local latency for a smaller queryable da
 
 The disk cost buys a structured, queryable view of session history: external tooling can analyze `sessions` and `events` with SQL, decoding physical rows the way this provider does — the groundwork for features such as built-in full-text search.
 
+A full read restores every stored row, and resuming a session — or any other consumer that opens one and reads it — repeats that work on data that has not changed. `decodedLogCacheBytes` keeps the logs a connection has already decoded and answers a repeat read of a session whose stored revision has not changed with the objects the first read produced. The default `0` keeps the uncached behavior exactly: nothing is retained and every read builds a fresh object graph.
+
 <a id="minimal-configuration"></a>
 ### Minimal configuration
 
@@ -57,6 +59,7 @@ Load the session service first, then mount the provider with a database path. Us
 | `cacheSizeKib` | SQLite's `-2000` (about 1.95 MiB) | SQLite page cache per connection, in KiB; an omitted or empty field executes no pragma |
 | `writeBatchMaxDelayMs` | `200` | Fixed live-event coalescing window, in milliseconds |
 | `asyncCodec` | `false` | Decompress stored logs on the libuv thread pool instead of the reading thread |
+| `decodedLogCacheBytes` | `0` (disabled) | Whole decoded logs one connection may retain, in decoded JSON text bytes |
 
 The [minimal configuration](#minimal-configuration) table lists the fields this package accepts, and the generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-session-persistence-sqlite) is the exhaustive source for each field and its JSDoc.
 
@@ -137,6 +140,8 @@ Each append takes an immediate transaction, re-validates schema ownership, check
 A full read locates the last valid `turn/end` in a reverse pass, then decodes each physical row into its logical events in forward order, rejecting gaps or malformed rows in the committed prefix. A malformed final row is treated as a torn tail: a mutating load may delete it under the write lock and close the log with synthetic closers. Suffix reads (`readFrom`) examine only the physical span that may contain the requested sequence, so they never parse unrelated earlier rows.
 
 `asyncCodec` selects the thread that decompresses those rows. With it on, `zlib.zstdDecompress` decodes every compressed data column on the libuv thread pool before the same scan flattens the rows, so a cold read yields between rows and concurrent cold reads decompress in parallel up to the pool size. Compression, and any decode that runs while a write transaction is open (the append tail window, repair, truncate), stays on the calling thread: an await inside an open transaction would let another operation start a nested one on the same connection. Both settings write identical rows and read identical events; `tests/compression-async.spec.ts` and `tests/async-codec.spec.ts` pin that.
+
+`decodedLogCacheBytes` retains whole decoded logs for one connection. A read reuses a retained log only when the session row it reads in that same call carries the revision the entry was read at, so a write from any connection or process misses instead of returning events the database no longer holds. Append, publish, repair, truncate, and header materialization additionally drop the session's entry, and `close()` drops every entry. The ceiling charges each log the decoded JSON text of its data columns — a compressed column's decompressed text — and evicts least-recently-used entries until the retained total fits; a log larger than the whole ceiling is never retained.
 
 </details>
 

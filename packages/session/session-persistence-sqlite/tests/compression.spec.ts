@@ -19,6 +19,7 @@ import {
   scanRows,
 } from '../src/compression.ts'
 import type { EventRow } from '../src/schema.ts'
+import { decodedColumnText } from './decoded-text.ts'
 
 /** One retired top-level delta event, the only shape schema-20 packs. */
 function chunk(seq: number, text = `token-${seq}`): StoredChunkEvent {
@@ -54,6 +55,11 @@ function row(record: StorageRecord): EventRow {
     surface_op: bound.surfaceOp,
     ignorable: bound.ignorable,
   }
+}
+
+/** Decoded JSON text length of one physical row, the scan's cache-size unit. */
+function decodedBytes(physical: EventRow): number {
+  return decodedColumnText(physical.data).length
 }
 
 describe('SQLite compression', () => {
@@ -388,7 +394,7 @@ describe('SQLite compression', () => {
     const skipped = row({ type: 'step/start', seq: SessionSeq(2), time: 2, data: { turn: 1, step: 1 } })
     expect(scanRows([start, skipped])).toEqual({ preserved: [
       { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
-    ], tornFrom: 2 })
+    ], tornFrom: 2, decodedBytes: decodedBytes(start) + decodedBytes(skipped) })
 
     const end = row({
       type: 'turn/end',
@@ -422,7 +428,7 @@ describe('SQLite compression', () => {
       surface_op: null,
       ignorable: 0,
     }
-    expect(scanRows([malformed])).toEqual({ preserved: [], tornFrom: 0 })
+    expect(scanRows([malformed])).toEqual({ preserved: [], tornFrom: 0, decodedBytes: decodedBytes(malformed) })
   })
 
   it('serves the packed predecessor a scalar row overlaps', () => {
@@ -437,6 +443,10 @@ describe('SQLite compression', () => {
     // The scan trusts the packed row's represented span and treats the
     // physically later scalar row as an uncommitted duplicate.
     expect(scanRows([packed, overlapping], 0))
-      .toEqual({ preserved: [chunk(0), chunk(1), chunk(2)], tornFrom: 1 })
+      .toEqual({
+        preserved: [chunk(0), chunk(1), chunk(2)],
+        tornFrom: 1,
+        decodedBytes: decodedBytes(packed) + decodedBytes(overlapping),
+      })
   })
 })
