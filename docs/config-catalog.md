@@ -3325,6 +3325,38 @@ export type ToolPresentationMode = 'native' | 'ptc' | 'both'
 
 Source: [`packages/core/tools/src/index.ts:647`](../packages/core/tools/src/index.ts)
 
+<a id="deepseek-aidsh-turn-continuation"></a>
+
+## `@deepseek-ai/dsh-turn-continuation`
+
+Requires: `agents`
+
+```ts config-catalog
+/**
+ * Plugin config, validated by the same-named schemastery schema plus the
+ * load-time checks in `apply` (misconfiguration fails loud: an unknown or
+ * non-continuable `continueOn` entry, or a `maxConsecutive` that is not a
+ * non-negative whole number, throws at plugin load).
+ */
+export interface Config {
+  /**
+   * Turn-end reason kinds that open another turn (default `['max-tokens']`).
+   * An entry outside {@link CONTINUABLE_REASONS} throws at load rather than
+   * silently continuing nothing.
+   */
+  continueOn?: string[]
+  /**
+   * Turns this plugin may open between two human inputs (default `2`).
+   * `0` disables continuation without unmounting the plugin. The count is
+   * refilled only by human-authored input, so an unattended session cannot
+   * spend more than this budget per human turn.
+   */
+  maxConsecutive?: number
+}
+```
+
+Source: [`packages/guard/turn-continuation/src/index.ts:40`](../packages/guard/turn-continuation/src/index.ts)
+
 <a id="deepseek-aidsh-typert-loader"></a>
 
 ## `@deepseek-ai/dsh-typert-loader`

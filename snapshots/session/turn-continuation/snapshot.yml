@@ -1,0 +1,8 @@
+version: 1
+scenario: turn-continuation
+profile: headless
+composition: turn-continuation
+recording: live
+header:
+  class: turn-continuation
+  pin: true

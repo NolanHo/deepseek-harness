@@ -1,0 +1,9 @@
+# Record-time patch for the turn-continuation scenario. The plugin is opt-in and
+# lives in no bundle, so the composition inserts it by relative source path; the
+# snapshot launcher rewrites that to an absolute file:// URL.
+- insert:
+    - id: turn-continuation
+      name: ../../../packages/guard/turn-continuation/src/index.ts
+      config:
+        continueOn: [max-tokens]
+        maxConsecutive: 2
