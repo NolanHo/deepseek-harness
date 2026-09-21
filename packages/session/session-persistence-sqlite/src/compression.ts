@@ -41,8 +41,10 @@ export interface ScannedRows {
    * compressed column's decompressed text or an uncompressed column's stored
    * text — counted before its JSON is parsed. A column whose decompression
    * failed contributes nothing. The store's decoded-log cache charges its
-   * entries this number, which covers the retained strings but not the parsed
-   * object graph built from them.
+   * entries this number as a stable, codec-independent size of the text each
+   * row carried; the retained value is the parsed, frozen event graph built
+   * from that text, which is larger, so the ceiling is a lower bound on the
+   * memory a retained log occupies.
    */
   readonly decodedBytes: number
 }

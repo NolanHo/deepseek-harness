@@ -452,6 +452,11 @@ export class SqliteStore {
     try {
       validateSchemaForMutation(this.databaseConstructor, this.db, this.databasePath)
       this.writeRow(storage)
+      // A header write changes the row every cached log's identity is keyed by,
+      // so it bumps the revision like every other mutation: the decoded-log
+      // cache must not answer a later read with the pre-write header — including
+      // a write this connection did not make.
+      this.incrementRevision(storage.meta.id)
       this.commitSessionMutation(storage.meta.id)
     } catch (error: unknown) {
       /* v8 ignore next -- validate/write failure uses the same transaction rollback path covered by append and repair. */

@@ -86,6 +86,18 @@ function storedTextBytes(path: string, id: SessionId): number {
   }
 }
 
+/** The same decoded text as {@link storedTextBytes}, measured in UTF-16 code units. */
+function storedCodeUnits(path: string, id: SessionId): number {
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const key = db.prepare(sql('select-session-key')).get(id) as { id: number }
+    const rows = db.prepare(sql('select-events')).all(key.id) as { data: string | Uint8Array }[]
+    return rows.reduce((total, row) => total + decodedColumnText(row.data).length, 0)
+  } finally {
+    db.close()
+  }
+}
+
 /**
  * The name of the error one aborted call throws, or `resolved` when it does
  * not. `AbortSignal.throwIfAborted()` rethrows the signal's reason, so the
@@ -316,6 +328,42 @@ describe('decoded log cache', () => {
     const oversized = await tooSmall.loadStoredLog(first.id)
     expect(await tooSmall.loadStoredLog(first.id)).not.toBe(oversized)
     await tooSmall.close()
+  })
+
+  it('charges UTF-8 bytes, not UTF-16 code units, so a multibyte log cannot be under-sized', async () => {
+    const path = await freshDbPath()
+    const header = meta('decoded-cache-multibyte')
+    const text = '你好世界🙂'.repeat(3)
+    const log = oneTurnLog().map(event => event.type !== 'user/message'
+      ? event
+      : {
+          ...event,
+          data: freezeMessage({
+            id: MessageId('one-turn-user'),
+            role: 'user',
+            content: [{ type: 'text', text }], source: { kind: 'user' },
+          }),
+        })
+    const writer = openStore(path)
+    await writer.appendBatch(storage(header), log, false)
+    await writer.close()
+
+    const utf8 = storedTextBytes(path, header.id)
+    const codeUnits = storedCodeUnits(path, header.id)
+    // Multibyte text makes the two measures diverge; a ceiling at the code-unit count
+    // must refuse the log, which is only true while the charge is UTF-8 bytes.
+    expect(codeUnits).toBeGreaterThan(0)
+    expect(codeUnits).toBeLessThan(utf8)
+
+    const atCodeUnits = openStore(path, codeUnits)
+    const first = await atCodeUnits.loadStoredLog(header.id)
+    expect(await atCodeUnits.loadStoredLog(header.id)).not.toBe(first)
+    await atCodeUnits.close()
+
+    const atBytes = openStore(path, utf8)
+    const retained = await atBytes.loadStoredLog(header.id)
+    expect(await atBytes.loadStoredLog(header.id)).toBe(retained)
+    await atBytes.close()
   })
 
   it('retains nothing when a stored log cannot be read', async () => {

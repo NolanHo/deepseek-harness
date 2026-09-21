@@ -190,6 +190,9 @@ These limits define when the provider is a poor fit or needs special operational
 - **Busy waits block the event loop** — SQLite waits inside synchronous calls; a competing writer can stall the thread for up to the configured `busyTimeoutMs`.
 - **External SQL readers must decode physical rows** — a packed `events.type` (`text-chunks`, `reasoning-chunks`, `tool-call-chunks`) is not a logical event type; supported consumers read through this provider.
 - **No deletion or historical compaction** — normal appends are insert-only and nothing removes old rows.
+- **Decoded-log retention is charged by decoded text** — `decodedLogCacheBytes` charges each retained log the UTF-8 byte length of the JSON text its rows decoded to, while the retained value is the parsed, frozen event graph built from that text; sessions whose rows carry no text are retained for free (a byte ceiling does not bound the entry count). Read the ceiling as a cache size with headroom, not as a memory budget.
+- **Out-of-band physical damage is masked while an entry lives** — the revision check catches every write this provider makes, but raw SQL outside it (an external tool or a second instance sharing the file) can change rows without moving the revision, and the retained log then keeps answering for that session until its entry is evicted, including the shrink guard's damage verdict.
+- **A retained hit still reads the event rows** — a hit is validated against the revision the session row carries in the same transaction as the events, so it skips decompression, parsing, validation, and freezing but still pays the row scan; on this deployment's 66,736-row Session that measured ~0.3s against ~3.5s for a cold read.
 
 <a id="dev-note"></a>
 ### Dev Note
