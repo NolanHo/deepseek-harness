@@ -68,9 +68,9 @@ function row(record: StorageRecord): EventRow {
   }
 }
 
-/** Decoded JSON text length of one physical row, the scan's cache-size unit. */
+/** Decoded JSON text bytes of one physical row, the scan's cache-size unit. */
 function decodedBytes(physical: EventRow): number {
-  return decodedColumnText(physical.data).length
+  return Buffer.byteLength(decodedColumnText(physical.data))
 }
 
 /** One scalar event whose data column the shared dictionary compresses. */

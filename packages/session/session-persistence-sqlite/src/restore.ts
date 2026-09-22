@@ -37,12 +37,12 @@ export interface RestoredStoredLog {
 }
 
 /**
- * Deep-freeze one decoded object graph iteratively so restored logs can be
+ * Deep-freeze one decoded event graph iteratively so restored logs can be
  * shared across handles as `shared-frozen`.
- * @param root - decoded object whose graph this call freezes in place.
+ * @param event - decoded event whose graph this call freezes in place.
  */
-function freezeGraph(root: object): void {
-  const pending: object[] = [root]
+function freezeEventGraph(event: SessionEvent): void {
+  const pending: object[] = [event]
   while (pending.length > 0) {
     const current = pending.pop() as object
     Object.freeze(current)
@@ -89,12 +89,13 @@ export function restoreStoredLog(
   assertVersion(meta)
   const events = artifact.events as SessionEvent[]
   validateStoredEvents(meta, events)
-  for (const event of events) freezeGraph(event)
+  for (const event of events) freezeEventGraph(event)
   Object.freeze(events)
-  // The decoded-log cache serves this header to every read at the same
-  // revision, and the current-format codec spreads its decoded header into a
-  // new unfrozen object, so this is where the declared immutability is applied.
-  freezeGraph(meta)
+  // The header is a flat record of primitives, so its shallow freeze is
+  // complete. The decoded-log cache serves this object to every read at the
+  // same revision, and the current-format codec spreads its decoded header into
+  // a new unfrozen object.
+  Object.freeze(meta)
   return {
     meta,
     inheritedEventCount: SessionLogOffset(artifact.inheritedEventCount),

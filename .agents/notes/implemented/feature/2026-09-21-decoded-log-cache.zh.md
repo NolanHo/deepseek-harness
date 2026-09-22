@@ -16,19 +16,19 @@ Status: implemented
 
 **`decodedLogCacheBytes?: number` 是经校验的 `Config` 字段，`0` 表示关闭。** schema 为 `z.natural().default(0)`：省略该字段时不保留任何内容、每次读取都重新解码（即已发布行为），需要重复读取被直接回答的部署从自己的 profile 行开启。负数或小数值会在挂载期失败并点名该字段。
 
-**键是会话 id；命中条件是同一次调用读到的 revision。** `loadStoredLog` 本来就在同一个 `readTransaction` 内读取会话行与事件行；存储用这同一行算出 revision，只有它与条目记录的 revision 相等时才复用该条目。整个判定不额外发任何语句，命中判定所用的正是事件所在的那个快照，且从读出 revision 到返回保留日志之间没有 await。命中返回的是首次读取恢复出的那个完全相同的冻结 `SqliteStoredLog`——元数据、inherited cut、revision、存储版本、可选的撕裂基点，以及深冻结的事件数组——因此省去解压、解析、校验与冻结。
+**键是会话 id；命中条件是同一次调用读到的 revision。** `loadStoredLog` 在同一个 `readTransaction` 内读取会话行，并在**查询事件行之前**就地判定：存储用这一行算出 revision，只有它与条目记录的 revision 相等时才复用该条目，因此一次命中只 prepare 一条 `select-session`、不 prepare 任何事件行语句。命中判定所用的正是该行所在的快照，且从读出 revision 到返回保留日志之间没有 await。命中返回的是首次读取恢复出的那个完全相同的冻结 `SqliteStoredLog`——元数据、inherited cut、revision、存储版本、可选的撕裂基点，以及深冻结的事件数组——因此既省去整行扫描，也省去解压、解析、校验与冻结。
 
 **每条本地写路径都在提交后删除条目，header 物化现在也和其他路径一样推动 revision。** 追加、header 物化、已存储日志发布、修复与 truncate 都在自己的事务内推动该会话的 revision，并经 `commitSessionMutation` 提交，后者在 `COMMIT` 之后立刻删除该会话的条目。让这条校验成立的是 revision 推动；删除条目只是在上限本会淘汰它之前提前释放字节。header 物化会重写命中判定所依据的那一行，因此它也推动 revision：没有这次推动，保留日志会继续为另一个连接写入的 header 作答，甚至绕过该次读取执行的 inherited-cut 校验。`close()` 清空映射与字节计数。
 
 **上限按解码后 JSON 文本的 UTF-8 字节计费，并按最久未使用淘汰条目。** `scanRows` 在解析之前按 `Buffer.byteLength` 累加每个 data 列的解码文本，并把总和作为 `ScannedRows.decodedBytes` 报出；这个数就是条目的计费量，因此与编解码通道无关——`asyncCodec` 开关两态下数值相同。命中会把条目重新放到最新端，一次读取若会超出上限就从最旧端开始淘汰直到装得下，而比整体上限还大的日志永不保留，因此装不下的一次读取不会把本须让位的条目淘汰掉。计费刻意只量文本、不量被保留的图：它低报该图实际占用的内存，这也是 README 把上限表述为缓存大小而非内存预算的原因。
 
-**读取会把交出去的 header 冻结，因此保留不会把可写对象公开出去。** `restoreStoredLog` 冻结了事件图，却没有冻结 `artifact.header`，而当前格式的 codec 用展开解码结果的方式构造该 header（`{ ...decoder.header, version: 3 }`）。保留让这处遗漏变得可观察：命中会把同一个 header 对象交给同一 revision 上的每一次后续读取，于是任何调用方写一个字段都会波及全部。恢复路径现在连同事件一起冻结 header 图，使未命中路径与命中路径交出的都是接口所声明的不可变 `SqliteStoredLog.meta`。
+**读取会把交出去的 header 冻结，因此保留不会把可写对象公开出去。** `restoreStoredLog` 冻结了事件图，却没有冻结 `artifact.header`，而当前格式的 codec 用展开解码结果的方式构造该 header（`{ ...decoder.header, version: 3 }`）。保留让这处遗漏变得可观察：命中会把同一个 header 对象交给同一 revision 上的每一次后续读取，于是任何调用方写一个字段都会波及全部。恢复路径现在直接冻结 header 记录本身——它的字段全是原始值，浅冻结即完整——使未命中路径与命中路径交出的都是接口所声明的不可变 `SqliteStoredLog.meta`。
 
 ## 命中保持的不变量
 
 **I1 —— 保留是 opt-in，关闭态就是已发布路径。** 省略上限或上限为 `0` 时不保留任何内容：两次读取产出不同的日志、不同的事件数组、不同的事件对象，包括那条本会被计费为零字节的仅 header 会话。证据：`tests/decoded-log-cache.spec.ts` 的 `retains nothing when the ceiling is omitted`、`defaults to 0 and accepts a size`、`rejects a negative or fractional ceiling`，以及 `hands the configured ceiling to the store behind the mounted service`（挂载出来的 provider 自身——而不只是直接构造的 store——也会用保留日志作答）。
 
-**I2 —— 命中要求同一次调用读到的会话行 revision。** 证据：`answers a repeat read of an unchanged session with the same frozen log`——第二次读取是同一个对象，其事件数组是同一个已冻结对象，`meta`、`inheritedEventCount`、`revision` 与 `storedVersion` 全部相等。
+**I2 —— 命中要求同一次调用读到的会话行 revision。** 证据：`answers a repeat read of an unchanged session with the same frozen log`——第二次读取是同一个对象，其事件数组是同一个已冻结对象，`meta`、`inheritedEventCount`、`revision` 与 `storedVersion` 全部相等——以及 `tests/hit-no-event-read.spec.ts`：它要求判定在同一事务内、事件行查询之前做出，且这次读取按它读到的那份快照作答。
 
 **I3 —— 本连接自己做的写入不可能由保留来回答。** 证据：`drops the retained log after a local append and serves the appended events`、`drops the retained log after a truncate`、`drops the retained log after a cut at the stored end`（什么都不丢的截断同样提交一个 revision）、`drops the retained log after a repair of a torn tail`、`drops the retained log when a migration is published over it`，以及 `drops the retained log when a header materialization commits`。
 
@@ -50,19 +50,19 @@ Status: implemented
 
 **把多份日志拼成一次解码。** Node 的 zstd 接口每次调用只解一帧——两帧拼接后解压只会得到第一帧的内容，且不报错（在 Node v25.9.0 上核对）——拼批就需要帧边界与一份本 store 不拥有的尺寸账目，而兄弟通道的池化解码已经在重叠并发的解码。拼批还会在任何一份被计费之前同时持有多个已解码对象图，而这正是保留想要避免的状态。
 
-**先读会话行，让命中省掉事件行扫描。** 这是推迟而非否决。revision 与事件行来自同一个 `readTransaction`，所以让命中跳过该扫描意味着要么另开一个只读 revision 的事务，要么让一个事务跨两条语句持有——为一项当前形态还不需要的节省，重新打开校验与复用之间的缝隙：命中仍要付整行扫描（在实测会话上约 0.3 秒对 3.5 秒），省下的是解码。README 把剩余的这次扫描记为已知限制。
+**先读会话行，让命中省掉事件行扫描。** 已采纳，但落在**现有事务内**而非另开一个事务：判定被提前到同一个同步 `readTransaction` 回调中、事件行查询之前，因此命中在 prepare 任何事件行语句之前就返回。单独开一个只读 revision 的事务只会多出一个快照和未命中路径的一次往返，换不到更多节省。在合成的 66,000 事件会话上，命中中位从 80.6 ms 降到 0.025 ms，二十次命中零条事件行语句，冷读不变；`tests/hit-no-event-read.spec.ts` 钉住这些语句计数。
 
 ## 影响
 
-对未变化会话的重复整日志读取，返回的是首次读取产出的那些对象。在本部署那条 66,736 事件的会话上，重复读取实测 3.5 秒 → 0.30 秒（约 11×），两次命中是同一个冻结对象（`identitySame: true`）；第二次之后的读取仍是同一次命中。内存：该会话的日志被计费 252.2 MB 解码后 JSON 文本，而在同一次实测里，进程 heap 在开启缓存时约 0.69 GB、关闭时约 1.96 GB——保留把一份不断堆积却已无人引用的解码图，换成了它唯一持有的那一份。
+对未变化会话的重复整日志读取，返回的是首次读取产出的那些对象。在本部署那条 66,736 事件的会话上，重复读取实测 3.5 秒 → 0.30 秒（约 11×），两次命中是同一个冻结对象（`identitySame: true`）；第二次之后的读取仍是同一次命中。复用判定移到事件行查询之前后，一次命中只付一行带索引的会话行读取：在上述合成会话上实测中位 0.025 ms、p95 0.342 ms，而此前为 80.6 ms。内存：该会话的日志被计费 252.2 MB 解码后 JSON 文本，而在同一次实测里，进程 heap 在开启缓存时约 0.69 GB、关闭时约 1.96 GB——保留把一份不断堆积却已无人引用的解码图，换成了它唯一持有的那一份。
 
-三条限制属于设计本身，包 README 以面向运维的措辞给出：计费是被保留内存的下界，且不限制零字节条目的条数；绕过提供方的写方在条目被淘汰前可能被掩盖；命中仍然要读取事件行。保留也是按连接的：同一文件上的两个 store 各解码一次，它们只能通过 revision 校验看到彼此的写入。本包为 fork 自有，因此本次改动不会在其自身文件之外新增任何合并面，fork 清单登记了该字段、store、计费与规格。
+两条限制属于设计本身，包 README 以面向运维的措辞给出：计费是被保留内存的下界，且不限制零字节条目的条数；绕过提供方的写方在条目被淘汰前可能被掩盖。保留也是按连接的：同一文件上的两个 store 各解码一次，它们只能通过 revision 校验看到彼此的写入。本包为 fork 自有，因此本次改动不会在其自身文件之外新增任何合并面，fork 清单登记了该字段、store、计费与规格。
 
 ## 测试
 
-`packages/session/session-persistence-sqlite/tests/decoded-log-cache.spec.ts` 共 23 个用例：`decoded log cache` 块 20 个，钉住 I1–I8；`decodedLogCacheBytes configuration` 块 3 个，分别钉住 schema 默认值、对 `-1`、`1.5` 的拒绝，以及挂载出的插件把上限传给自己的 store。`tests/decoded-text.ts` 独立于被测代码解码存储的 data 列，因此上限用例所依赖的字节测量不是从实现里读回来的。跨连接用例把同一份存储状态分别经保留 store 与无缓存 store 读出并比较内容，因为单独的否定断言会被本地提交后删除满足，无法区分 revision 推动与「删除条目」。packed 行计费另有覆盖，因为 store 级多字节用例存不下 packed 行：`tests/packed-charge.spec.ts` 用一份 schema-19 fixture 经迁移链读回带多字节文本的 packed 行，并用三个上限把计费钉成恰好等于字节数；`tests/compression.spec.ts` 另有一条直接断言累加器的 `scanRows` 用例。
+`packages/session/session-persistence-sqlite/tests/decoded-log-cache.spec.ts` 共 24 个用例：`decoded log cache` 块 21 个，钉住 I1–I8；`decodedLogCacheBytes configuration` 块 3 个，分别钉住 schema 默认值、对 `-1`、`1.5` 的拒绝，以及挂载出的插件把上限传给自己的 store。`tests/decoded-text.ts` 独立于被测代码解码存储的 data 列，因此上限用例所依赖的字节测量不是从实现里读回来的。跨连接用例把同一份存储状态分别经保留 store 与无缓存 store 读出并比较内容，因为单独的否定断言会被本地提交后删除满足，无法区分 revision 推动与「删除条目」；一条已热条目对应的会话行被带外删除时必须什么都不返回，而不是返回保留日志。packed 行计费另有覆盖，因为 store 级多字节用例存不下 packed 行：`tests/packed-charge.spec.ts` 用一份 schema-19 fixture 经迁移链读回带多字节文本的 packed 行，并用三个上限把计费钉成恰好等于字节数；`tests/compression.spec.ts` 另有一条直接断言累加器的 `scanRows` 用例。`tests/hit-no-event-read.spec.ts` 补上语句层与快照层的对照：它用 `vi.mock('node:sqlite')` 驱动记录 store prepare 与直接执行的 SQL，要求冷读恰有一条事件行语句、一次会话键查询、一对 `BEGIN`/`COMMIT`，命中则前两者为零、事务对相同；同一文件还在事件行查询之前注入一次已提交的外部写入，要求这次读取按它读到的快照作答——因为没有任何对象层断言能区分「扫了再丢」与「根本没扫」。
 
-变异轮次（针对这份源码独立施加、逐个进行、每次都在下一次之前还原）：从命中路径去掉 revision 比较，让带外写入用例失败；把 `Buffer.byteLength` 换成 `String.length`（UTF-16 码元）会让被改那处所属的用例失败（scalar 行那处让 `tests/decoded-log-cache.spec.ts` 的 store 级多字节用例失败，packed 行那处让 `tests/packed-charge.spec.ts` 与 `tests/compression.spec.ts` 的 `scanRows` 用例失败）；把 packed 行的累加改成赋值会让 `tests/packed-charge.spec.ts` 失败——它的上限钉住的是总计费，而不是落在窗口内的某个值；去掉「超限即不保留」判定，让 `does not evict a retained log to make room for one that cannot fit` 失败；去掉淘汰循环，让 `bounds retained bytes with LRU eviction and never retains an oversized log` 失败；去掉命中时的 LRU 刷新，让 `keeps a repeatedly read session when a third one arrives` 失败；去掉 header 物化的 revision 推动，让 `misses when another connection materializes a header over the cached session` 失败；去掉 append、publish、repair 或 truncate 的 revision 推动，各自让 `agrees with an uncached reader across another connection's writes` 失败（repair 那处让撕裂尾变体失败，truncate 那处让落到存储末尾之前的删除型截断失败）；让插件构造 store 时丢掉配置的上限，让 `hands the configured ceiling to the store behind the mounted service` 失败；去掉 header 冻结，让三处「header 已冻结」断言失败。有两个变异什么都不失败，本记录把它们当作结果写下来：去掉提交后的 `forgetDecodedLog` 与去掉 `close()` 的清空只改变字节何时释放，没有任何公开观测能区分。store 在解码之后执行的 inherited-cut 校验在这些规格里没有失败态 fixture：它对这些规格构造的每种日志形态都与所比较的行列一致。
+变异轮次（针对这份源码独立施加、逐个进行、每次都在下一次之前还原）：从命中路径去掉 revision 比较，让带外写入用例失败；把复用判定挪回事件行查询之后（即改动前的顺序），让 `tests/hit-no-event-read.spec.ts` 失败；完全不读会话行就回答命中，让该用例的 `select-session` 断言失败；命中路径顺手取一次整数会话键，让该用例的 `select-session-key` 断言失败；把 `Buffer.byteLength` 换成 `String.length`（UTF-16 码元）会让被改那处所属的用例失败（scalar 行那处让 `tests/decoded-log-cache.spec.ts` 的 store 级多字节用例失败，packed 行那处让 `tests/packed-charge.spec.ts` 与 `tests/compression.spec.ts` 的 `scanRows` 用例失败）；把 packed 行的累加改成赋值会让 `tests/packed-charge.spec.ts` 失败——它的上限钉住的是总计费，而不是落在窗口内的某个值；去掉「超限即不保留」判定，让 `does not evict a retained log to make room for one that cannot fit` 失败；去掉淘汰循环，让 `bounds retained bytes with LRU eviction and never retains an oversized log` 失败；去掉命中时的 LRU 刷新，让 `keeps a repeatedly read session when a third one arrives` 失败；去掉 header 物化的 revision 推动，让 `misses when another connection materializes a header over the cached session` 失败；去掉 append、publish、repair 或 truncate 的 revision 推动，各自让 `agrees with an uncached reader across another connection's writes` 失败（repair 那处让撕裂尾变体失败，truncate 那处让落到存储末尾之前的删除型截断失败）；让插件构造 store 时丢掉配置的上限，让 `hands the configured ceiling to the store behind the mounted service` 失败；去掉 header 冻结，让三处「header 已冻结」断言失败。有两个变异什么都不失败，本记录把它们当作结果写下来：去掉提交后的 `forgetDecodedLog` 与去掉 `close()` 的清空只改变字节何时释放，没有任何公开观测能区分。store 在解码之后执行的 inherited-cut 校验在这些规格里没有失败态 fixture：它对这些规格构造的每种日志形态都与所比较的行列一致。
 
 包套件通过：`npx vitest run packages/session/session-persistence-sqlite/tests` → 12 文件通过，173 中 172 通过 / 1 跳过，exit 0。
 

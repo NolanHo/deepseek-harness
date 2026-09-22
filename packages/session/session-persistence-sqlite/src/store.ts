@@ -227,35 +227,39 @@ export class SqliteStore {
    */
   async loadStoredLog(id: SessionId, signal?: AbortSignal): Promise<SqliteStoredLog | undefined> {
     await this.observe(signal)
-    const snapshot = this.readTransaction(() => {
+    const read = this.readTransaction(() => {
       const row = this.rowFor(id)
       if (row === undefined) return undefined
+      const revision = sqliteRevision(this.storeIdentity, row)
+      const cached = this.decodedLogs.get(id)
+      // Decide inside the transaction and before the event query: a hit answers
+      // from the retained log, and reading rows it would discard costs the whole
+      // scan on a large Session.
+      if (cached !== undefined && cached.revision === revision) return { cached }
       const eventRows = this.db.prepare(sql('select-events')).all(this.sessionKey(id)).map(decodeEventRow)
-      return { row, eventRows }
+      return { revision, row, eventRows }
     })
     signal?.throwIfAborted()
-    if (snapshot === undefined) return undefined
-    const revision = sqliteRevision(this.storeIdentity, snapshot.row)
-    const cached = this.decodedLogs.get(id)
-    if (cached !== undefined && cached.revision === revision) {
+    if (read === undefined) return undefined
+    if ('cached' in read) {
       // Re-insert at the newest end: the eviction scan below walks oldest first.
       this.decodedLogs.delete(id)
-      this.decodedLogs.set(id, cached)
-      return cached.log
+      this.decodedLogs.set(id, read.cached)
+      return read.cached.log
     }
-    const scanned = await this.scanStoredRows(snapshot.eventRows)
-    const restored = restoreStoredLog(storedPhysicalHeaderOf(snapshot.row), scanned.preserved, id)
-    if (snapshot.row.version === SESSION_FORMAT_VERSION
-      && Number(restored.inheritedEventCount) !== (snapshot.row.seed_length ?? 0)) {
+    const scanned = await this.scanStoredRows(read.eventRows)
+    const restored = restoreStoredLog(storedPhysicalHeaderOf(read.row), scanned.preserved, id)
+    if (read.row.version === SESSION_FORMAT_VERSION
+      && Number(restored.inheritedEventCount) !== (read.row.seed_length ?? 0)) {
       throw new SessionPersistenceCorruptionError(
-        `session "${id}" seed cut column disagrees with its log (${snapshot.row.seed_length ?? 0} vs ${restored.inheritedEventCount})`,
+        `session "${id}" seed cut column disagrees with its log (${read.row.seed_length ?? 0} vs ${restored.inheritedEventCount})`,
         { cause: new Error('stored inherited cut mismatch') },
       )
     }
     const log: SqliteStoredLog = {
       ...restored,
-      revision,
-      storedVersion: snapshot.row.version,
+      revision: read.revision,
+      storedVersion: read.row.version,
       ...scanned.tornFrom === undefined ? {} : { tornFrom: scanned.tornFrom },
     }
     this.memoizeDecodedLog(id, log, scanned.decodedBytes)

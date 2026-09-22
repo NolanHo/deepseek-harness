@@ -259,6 +259,24 @@ describe('decoded log cache', () => {
     await reader.close()
   })
 
+  it('returns nothing when the session row is deleted after a warm read', async () => {
+    const path = await freshDbPath()
+    const store = openStore(path, 64 * 1024)
+    const header = meta('decoded-cache-row-gone')
+    await store.appendBatch(storage(header), oneTurnLog(), false)
+    const warm = await store.loadStoredLog(header.id)
+    expect(await store.loadStoredLog(header.id)).toBe(warm)
+
+    // The row read is what authorizes a hit: a session the database no longer
+    // has must not be answered from retention.
+    const raw = new DatabaseSync(path)
+    raw.prepare(testSql('delete-session-row')).run(header.id)
+    raw.close()
+
+    expect(await store.loadStoredLog(header.id)).toBeUndefined()
+    await store.close()
+  })
+
   it('agrees with an uncached reader across another connection\'s writes', async () => {
     const path = await freshDbPath()
     const header = meta('decoded-cache-differential', '/one')

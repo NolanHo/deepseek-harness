@@ -13,6 +13,7 @@ export type TestSqlName =
   | 'create-unrelated-table'
   | 'delete-persistence-state'
   | 'delete-session-events'
+  | 'delete-session-row'
   | 'empty-store-id'
   | 'insert-corrupt-event'
   | 'insert-packed-event'
@@ -39,6 +40,7 @@ export type TestSqlName =
   | 'set-user-version-18'
   | 'set-user-version-19'
   | 'update-invalid-session-metadata'
+  | 'update-session-cwd'
   | 'vacuum'
 
 /** Load one fixed test SQL resource. */
