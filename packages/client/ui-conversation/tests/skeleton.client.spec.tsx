@@ -28,6 +28,7 @@ import { HeroShell } from '../src/client/skeleton/EmptyHero.tsx'
 import type { HeroShellProps } from '../src/client/skeleton/EmptyHero.tsx'
 import { InputBar } from '../src/client/skeleton/InputBar.tsx'
 import type { InputBarProps } from '../src/client/skeleton/InputBar.tsx'
+import { SETTLE_HIDE_LIMIT_MS } from '../src/client/skeleton/settle-hide.ts'
 import type {
   ComposerBarOwnerProps, ConversationHeaderLineageOwnerProps,
 } from '../src/client/contract/slots.ts'
@@ -529,6 +530,45 @@ describe('ConversationRoot resident composer', () => {
     )
     const root = b.view.container.querySelector('[data-phase]')
     expect(root?.getAttribute('data-phase')).toBe('settling')
+  })
+
+  it('settling phase: an unresolved continuable parent hides the composer only for the bounded window', () => {
+    vi.useFakeTimers()
+    try {
+      const b = mount(sessionSnapshotOf({
+        subagent: {
+          address: { parentSessionId: sid('root'), childSessionId: SID, mode: 'continuable' },
+        },
+      }))
+      const root = b.view.container.querySelector('[data-phase]')
+      expect(root?.getAttribute('data-phase')).toBe('settling')
+      act(() => { vi.advanceTimersByTime(SETTLE_HIDE_LIMIT_MS - 1) })
+      expect(root?.getAttribute('data-phase')).toBe('settling')
+      // The parent-catalog read may have failed or stalled; the composer returns
+      // because the hide is an anti-flash device, not a gate on availability.
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(root?.getAttribute('data-phase')).toBe('active')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('settling phase: a history open that never lands stops hiding the composer', () => {
+    vi.useFakeTimers()
+    try {
+      const b = mount(
+        sessionSnapshotOf({ blank: true, openState: 'loading' }),
+        undefined,
+        undefined,
+        { omitSummaryRow: true },
+      )
+      const root = b.view.container.querySelector('[data-phase]')
+      expect(root?.getAttribute('data-phase')).toBe('settling')
+      act(() => { vi.advanceTimersByTime(SETTLE_HIDE_LIMIT_MS) })
+      expect(root?.getAttribute('data-phase')).toBe('active')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('startup auto-selection: a summary-proven blank session opens straight into the hero', () => {

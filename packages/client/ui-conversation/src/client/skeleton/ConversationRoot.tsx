@@ -8,6 +8,7 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import type { ConversationSlotProps, InputZone } from '../contract/slots.ts'
 import { conversationPhase } from '../contract/snapshot.ts'
 import { HeroShell, WorkspaceChip, workspaceLabel } from './EmptyHero.tsx'
+import { SETTLE_HIDE_LIMIT_MS, useSettleHide } from './settle-hide.ts'
 import css from './ConversationRoot.module.css'
 
 /** Full props composed from the slot contract. */
@@ -285,10 +286,18 @@ export function ConversationRoot({
   // hidden instead of briefly rendering the parent-offline takeover.
   const parentAvailabilityPending = session?.subagent?.address.mode === 'continuable'
     && session.subagent.parentAvailable === undefined
-  const settling = sessionId !== undefined && (
+  const settlePending = sessionId !== undefined && (
     (shellPhase === 'blank' && openState === 'loading' && summaryBlank !== true)
     || parentAvailabilityPending
   )
+  // Fork patch (FORK_SURFACE.md): the settle hide is bounded. Neither settle
+  // input must settle — a history open can stall, and a failed or stalled
+  // parent-catalog read leaves `parentAvailable` undefined with no retry — so an
+  // unbounded hide removes the composer for the life of the page (observed on a
+  // restored continuable child) while `ui-subagent`'s elector deliberately keeps
+  // the normal composer in place until the parent is known offline. The hide
+  // only prevents a layout flash, so it gives way after `SETTLE_HIDE_LIMIT_MS`.
+  const settling = useSettleHide(settlePending, sessionId ?? '', SETTLE_HIDE_LIMIT_MS)
   const hero = sessionId === undefined
     || (shellPhase === 'blank' && (openState === 'open' || summaryBlank === true))
 
