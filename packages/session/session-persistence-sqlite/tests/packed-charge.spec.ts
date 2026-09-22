@@ -3,10 +3,11 @@
  * JSON text its data column decoded to. A packed chunk row decodes to the
  * whole run's run-data document — `texts` carries every member's text — so a
  * run whose texts are multibyte separates that charge from the same text
- * measured in UTF-16 code units. Two ceilings over one unchanged stored
- * session, one at each measure, pin which unit the packed row is charged in:
- * a code-unit charge is admitted by the lower ceiling, and only a byte charge
- * exceeds it.
+ * measured in UTF-16 code units. Three ceilings over one unchanged stored
+ * session pin the charge to exactly the byte count: the code-unit count admits
+ * the log, the byte count retains it, and one byte below the byte count refuses
+ * it, so a partial sum that happens to land inside that window also fails the
+ * case.
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -106,6 +107,17 @@ describe('packed row decode charge', () => {
     expect(packedRows).toHaveLength(1)
     expect(packedRows[0]?.type).toBe('text-chunks')
 
+    // The run and the unit difference both have to sit in the packed row: scalar
+    // rows contribute the same count in either unit, so multibyte text moved to
+    // one of them would leave this case green while it stopped testing the
+    // packed branch.
+    const packedText = decodedColumnText((packedRows[0] as EventRow).data)
+    expect(Buffer.byteLength(packedText)).toBeGreaterThan(packedText.length)
+    for (const scalar of rows.filter(row => row.ignorable !== 0)) {
+      const text = decodedColumnText(scalar.data)
+      expect(Buffer.byteLength(text)).toBe(text.length)
+    }
+
     // The four scalar rows contribute the same count in both units; the packed
     // row contributes 95 code units and 159 UTF-8 bytes, 64 bytes apart.
     const { bytes, codeUnits } = decodedTextSizes(rows)
@@ -125,5 +137,13 @@ describe('packed row decode charge', () => {
     const retained = await atBytes.loadStoredLog(PACKED_LEGACY_ID)
     expect(await atBytes.loadStoredLog(PACKED_LEGACY_ID)).toBe(retained)
     await atBytes.close()
+
+    // One byte under the byte count refuses the log, so the charge the scan
+    // reports is exactly this count: a partial sum that dropped an earlier
+    // row's bytes would land inside the window above and be retained here.
+    const underBytes = openStore(path, bytes - 1)
+    const rejected = await underBytes.loadStoredLog(PACKED_LEGACY_ID)
+    expect(await underBytes.loadStoredLog(PACKED_LEGACY_ID)).not.toBe(rejected)
+    await underBytes.close()
   })
 })
