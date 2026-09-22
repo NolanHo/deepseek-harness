@@ -3,8 +3,11 @@
  * `decodedLogCacheBytes` retains whole decoded logs behind a revision check the
  * store performs on every read. The specs below pin the invariants that make the
  * retention safe — never a hit without the revision just read, invalidation after
- * every local mutation and on close, only successful reads retained, unchanged
- * cancellation, and a hard byte ceiling with LRU eviction.
+ * every local mutation and on close, content equality with an uncached reader
+ * across another connection's writes, only successful reads retained, an
+ * immutable header on the hit and miss path alike, unchanged cancellation, a hard
+ * byte ceiling with LRU eviction that refuses a log larger than the whole ceiling,
+ * and the mounted plugin passing its configured ceiling to the store.
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
