@@ -57,7 +57,10 @@ async function bench() {
   const openWorkspacePath = vi.fn<ClientRemote['session']['openWorkspacePath']>(
     () => Promise.resolve({ ok: true, value: { opened: true } }),
   )
-  new TestRemote(runtime.ctx, { session: { openWorkspacePath } })
+  const canOpenWorkspacePath = vi.fn<ClientRemote['session']['canOpenWorkspacePath']>(
+    () => Promise.resolve({ ok: true, value: true }),
+  )
+  new TestRemote(runtime.ctx, { session: { openWorkspacePath, canOpenWorkspacePath } })
   runtime.ctx.provide('uiWorkspace', {
     openWorkspace: vi.fn(async (_workspaceId: WorkspaceId, beforeOpen: (id: SessionId) => void) => {
       beforeOpen(ROOT)
@@ -90,7 +93,7 @@ async function bench() {
     ) => ChatViewInjected)(id, instance.actions)
     return { instance, injected }
   }
-  return { runtime, layout, openWorkspacePath, sidebarRight, session, chatViewApi }
+  return { runtime, layout, openWorkspacePath, canOpenWorkspacePath, sidebarRight, session, chatViewApi }
 }
 
 describe('Chat inject API', () => {
@@ -180,6 +183,48 @@ describe('Chat inject API', () => {
     await b.runtime.dispose()
   })
 
+  it('gates a delivered prose mention on Host native-opening availability', async () => {
+    const b = await bench()
+    const { injected } = b.chatViewApi(ROOT)
+    const nativeOpen = vi.fn()
+    const hit = { open: nativeOpen, label: 'open', title: 'site/report.html' }
+    const resolve = vi.fn<() => typeof hit | undefined>(() => hit)
+    b.runtime.ctx.provide('chatFileMentions', {
+      forClosing: () => ({ resolve }),
+    } as never)
+    const gesture = () => { injected.fileMentions({} as never)!.resolve('site/report.html')!.open() }
+
+    // The wrapper keeps the vocabulary's own label and title, and a token
+    // naming no delivered file stays inert.
+    expect(injected.fileMentions({} as never)!.resolve('site/report.html'))
+      .toMatchObject({ label: 'open', title: 'site/report.html' })
+    resolve.mockReturnValueOnce(undefined)
+    expect(injected.fileMentions({} as never)!.resolve('site/report.html')).toBeUndefined()
+
+    // A Host without a desktop (headless Linux / containerised): the upstream
+    // vocabulary would POST present.open and take a 409, so the fork routes the
+    // gesture through the Web opener.
+    b.canOpenWorkspacePath.mockResolvedValueOnce({ ok: true, value: false })
+    gesture()
+    await vi.waitFor(() => {
+      expect(b.openWorkspacePath).toHaveBeenCalledWith({ path: '/proj/site/report.html' })
+    })
+    expect(nativeOpen).not.toHaveBeenCalled()
+
+    // A Host with a desktop keeps upstream's native gesture.
+    b.canOpenWorkspacePath.mockResolvedValueOnce({ ok: true, value: true })
+    gesture()
+    await vi.waitFor(() => { expect(nativeOpen).toHaveBeenCalledOnce() })
+    expect(b.openWorkspacePath).toHaveBeenCalledOnce()
+
+    // A failed probe reads as unavailable: the click still opens the path.
+    b.canOpenWorkspacePath.mockRejectedValueOnce(new Error('offline'))
+    gesture()
+    await vi.waitFor(() => { expect(b.openWorkspacePath).toHaveBeenCalledTimes(2) })
+    expect(nativeOpen).toHaveBeenCalledOnce()
+    await b.runtime.dispose()
+  })
+
   it('owns image loading, scroll memory, and optional closing-file mentions', async () => {
     const b = await bench()
     const { injected } = b.chatViewApi(ROOT)
@@ -189,7 +234,9 @@ describe('Chat inject API', () => {
     const mentions = { resolve: vi.fn() } as never
     const forClosing = vi.fn(() => mentions)
     b.runtime.ctx.provide('chatFileMentions', { forClosing } as never)
-    expect(injected.fileMentions(owner)).toBe(mentions)
+    // Fork patch (FORK_SURFACE.md): the provided vocabulary is wrapped by the
+    // native-availability gate, so the service object itself is not returned.
+    expect(injected.fileMentions(owner)).not.toBe(mentions)
     expect(forClosing).toHaveBeenCalledWith(owner, ROOT)
 
     expect(injected.chatScroll.read()).toBeNull()

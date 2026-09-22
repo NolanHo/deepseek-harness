@@ -4,6 +4,8 @@
 // opener. The Chat apply closure keeps the ctx duck read, the remote call, and
 // the locale seat.
 
+import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
+
 /** One editor tab request the third-party sidebar editor accepts. */
 export interface SidebarEditorTab {
   type: string
@@ -58,4 +60,46 @@ export function routeOpenFile(
 export function nativeOpenFailureText(wireMessage: string, desktopUnavailableCopy: string): string {
   if (wireMessage.includes('desktop unavailable')) return desktopUnavailableCopy
   return `path open failed: ${wireMessage}`
+}
+
+/**
+ * Gate a prose mention vocabulary on Host native-opening availability.
+ *
+ * Upstream's deliverables vocabulary opens a delivered file by POSTing
+ * `/api/present.open`, and that route answers 409 when the serving Host has
+ * no desktop (`workspaceDesktop().available` false — a headless Linux or
+ * containerised deployment). Its card disables the menu in that state; the
+ * prose mention carries no guard, so each click printed a 409 and opened
+ * nothing. With the probe reporting unavailable, this wrapper routes the
+ * gesture through the chat file opener instead, which resolves the same path
+ * into the Web surface (this fork's betterSidebar routing first).
+ *
+ * @param mentions - The deliverables vocabulary to wrap.
+ * @param canOpenNative - Host native-opening probe; a rejected probe reads as unavailable.
+ * @param openFile - The chat view's file opener.
+ * @returns A vocabulary whose gestures consult the probe before opening.
+ */
+export function nativeGatedMentions(
+  mentions: MarkdownFileMentions,
+  canOpenNative: () => Promise<boolean>,
+  openFile: (path: string) => void,
+): MarkdownFileMentions {
+  return {
+    resolve(value: string) {
+      const hit = mentions.resolve(value)
+      if (hit === undefined) return undefined
+      return {
+        label: hit.label,
+        title: hit.title,
+        open: () => {
+          // An unavailable or failed probe both route to the Web opener: the
+          // path must open somewhere, and a probe error cannot prove a desktop.
+          void canOpenNative().then(
+            (available) => { if (available) hit.open(); else openFile(hit.title) },
+            () => { openFile(hit.title) },
+          )
+        },
+      }
+    },
+  }
 }

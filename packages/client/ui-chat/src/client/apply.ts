@@ -18,7 +18,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
-  ChatNodeTurnDataInjected, ChatScrollPosition, ChatViewInjected,
+  ChatNodeTurnDataInjected, ChatScrollPosition, ChatViewInjected, OpenFileOptions,
   TurnTailOwnerProps,
 } from './contract/slots.ts'
 import type { ChatSnapshot } from './contract/snapshot.ts'
@@ -26,8 +26,9 @@ import { EMPTY_CHAT_SNAPSHOT } from './contract/snapshot.ts'
 import { ApprovalCommand } from './chat/ApprovalCommand.tsx'
 import { ChatView } from './chat/ChatView.tsx'
 // Fork patch (FORK_SURFACE.md): the open-file routing decision (sidebar editor
-// duck check and desktop-unavailable copy mapping) lives in the fork module.
-import { routeOpenFile, type SidebarEditorLike } from './chat/fork/open-file-routing.ts'
+// duck check and desktop-unavailable copy mapping) and the native-gated prose
+// mention vocabulary live in the fork module.
+import { nativeGatedMentions, routeOpenFile, type SidebarEditorLike } from './chat/fork/open-file-routing.ts'
 import { registerChatNodeRenderers } from './chat/register-node-renderers.ts'
 import { StatsPills } from './chat/StatsPills.tsx'
 import { registerConversationNodes } from './conversation-nodes/register.ts'
@@ -113,13 +114,47 @@ export function apply(ctx: Context): void {
         if (binding === undefined) throw new Error(`ui-chat: unknown session "${sessionId}"`)
         const session = binding.session
         const chat = chatSource(binding)
+        const openFile = async (path: string, options?: OpenFileOptions): Promise<void> => {
+          const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
+          const absolute = resolveWorkspacePath(cwd, path)
+          // Fork patch (FORK_SURFACE.md): the fork-owned routing prefers the
+          // betterSidebar tab, then the desktop-gated native open; upstream's
+          // official Sidebar takes the resource when neither applies.
+          const routing = routeOpenFile(path, absolute, ctx.get('betterSidebar') as SidebarEditorLike | undefined)
+          if (routing.kind === 'sidebar') {
+            routing.openTab(routing.tab)
+            return
+          }
+          const result = await ctx.remote.session.openWorkspacePath({
+            path: absolute,
+          })
+          if (result.ok) return
+          const url = fileAddressFor(sessionId, cwd, path)
+          if (options?.line === undefined) ctx.sidebarRight.openResource(url)
+          else ctx.sidebarRight.openResource(url, { params: { line: options.line } })
+          await Promise.resolve()
+        }
         return {
           hooks: { transcriptView: transcriptView.mode },
           keyedHooks: {
             chatNode: key => chat.getSnapshot().nodes.source(key),
             chatNodeProcess: key => chat.getSnapshot().nodes.processSource(key),
           },
-          fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner, sessionId),
+          // Fork patch (FORK_SURFACE.md): a delivered file's prose mention would
+          // POST present.open and 409 on a Host without a desktop; the fork
+          // module routes that gesture into the Web opener instead.
+          fileMentions: (owner: TurnTailOwnerProps) => {
+            const mentions = ctx.get('chatFileMentions')?.forClosing(owner, sessionId)
+            if (mentions === undefined) return undefined
+            return nativeGatedMentions(
+              mentions,
+              async () => {
+                const probe = await ctx.remote.session.canOpenWorkspacePath()
+                return probe.ok && probe.value
+              },
+              (path) => { void openFile(path) },
+            )
+          },
           // Files open in the right Sidebar, not in a desktop application: the
           // content stays in the product, beside the conversation that produced
           // it. A relative path, or an absolute one inside the session's
@@ -132,26 +167,7 @@ export function apply(ctx: Context): void {
           // address: the file is one piece of content whether it is opened at
           // its top or at line 400, so the same tab is revealed and told where
           // to land.
-          openFile: async (path, options) => {
-            const cwd = ctx.sessions.list.getSnapshot().byId[sessionId]?.cwd
-            const absolute = resolveWorkspacePath(cwd, path)
-            // Fork patch (FORK_SURFACE.md): the fork-owned routing prefers the
-            // betterSidebar tab, then the desktop-gated native open; upstream's
-            // official Sidebar takes the resource when neither applies.
-            const routing = routeOpenFile(path, absolute, ctx.get('betterSidebar') as SidebarEditorLike | undefined)
-            if (routing.kind === 'sidebar') {
-              routing.openTab(routing.tab)
-              return
-            }
-            const result = await ctx.remote.session.openWorkspacePath({
-              path: absolute,
-            })
-            if (result.ok) return
-            const url = fileAddressFor(sessionId, cwd, path)
-            if (options?.line === undefined) ctx.sidebarRight.openResource(url)
-            else ctx.sidebarRight.openResource(url, { params: { line: options.line } })
-            await Promise.resolve()
-          },
+          openFile,
           loadOlder: () => { void session.loadOlder() },
           loadThrough: seq => session.loadThrough(seq),
           loadImage: Object.assign(
