@@ -14,11 +14,13 @@
 
 ## 决策
 
-**能力探测宣告的门控现在也守护这个操作。** `openWorkspacePath` 在 abort 检查之后查询 `canOpenPath()`（与客户端可查询的 `nativeOpen` 配置 / 注入打开器 / 平台探测同一来源），为 false 时沿用既有错误词汇快速失败：`internal` / `path open failed: desktop unavailable`。Host 不再 spawn 一个它明知到不了桌面的平台打开器。Chat 的打开接口识别该拒绝，抛出 locale 所有的 `fileOpen.desktopUnavailable` 文案而非线上消息；其他失败继续转发线上原因。
+**能力探测宣告的门控现在也守护这个操作。** `openWorkspacePath` 在 abort 检查之后查询 `canOpenPath()`（与客户端可查询的 `nativeOpen` 配置 / 注入打开器 / 平台探测同一来源），为 false 时沿用既有错误词汇快速失败：`internal` / `path open failed: desktop unavailable`。Host 不再 spawn 一个它明知到不了桌面的平台打开器。Chat 的打开接口把该拒绝视作「此处没有原生打开器」，改走官方 Sidebar 的会话作用域资源地址（better-sidebar 安装时由下面的路由先行认领）；其他失败继续转发线上原因。
 
 **核心文件表面在 better-sidebar 安装时改走其侧栏编辑器。** 第三方插件 `dsh-better-sidebar` 已经劫持产出文件芯片并在自己的侧栏编辑器里打开；核心表面（行内引用、工具行路径、通用文件卡片）仍走 Host 打开器——这正是无桌面部署无法服务的那块。Chat 打开接口现在优先使用该插件服务——结构化 `ctx.get('betterSidebar')` 的 `openTab` duck 检查，不引入包依赖——打开 `{ type: 'editor', title: basename, path: absolute, id: 'editor:<absolute>' }`；原生打开器保留为无插件配置的回落路径，文件夹揭示（`.` 没有编辑器文件）也保持原生。
 
-**交付文件的正文提及受原生门控，不可用时回落到 Chat 打开漏斗。** 交付插件发布的提及词汇（`chatFileMentions`）由 fork 模块 `src/client/chat/fork/open-file-routing.ts` 的 `nativeGatedMentions` 包装：手势先问 `ctx.remote.session.canOpenWorkspacePath()`，探测报有桌面时保留词汇自身的原生路径，否则把路径交给 `openFile` —— 于是无桌面部署打开交付文件的方式与其它所有核心表面一致（侧栏编辑器）。探测被拒绝视作不可用：路径总得打开，而探测报错无法证明存在桌面。包装透传词汇的 label 与 title，未解析的 token 保持惰性。
+**交付文件的正文提及受原生门控，不可用时回落到 Chat 打开漏斗。** 交付插件发布的提及词汇（`chatFileMentions`）由 fork 模块 `src/client/chat/fork/open-file-routing.ts` 的 `nativeGatedMentions` 包装：手势先问 `ctx.remote.session.canOpenWorkspacePath()`，探测报有桌面时保留词汇自身的原生路径，否则把路径交给 owner 的 `openFile` —— 那是 Chat 视图自己的手势路径，持有 busy 状态与本地化失败对话框 —— 于是无桌面部署打开交付文件的方式与其它所有核心表面一致（侧栏编辑器）。探测被拒绝视作不可用：路径总得打开，而探测报错无法证明存在桌面。包装透传词汇的 label 与 title，未解析的 token 保持惰性。
+
+**探测与拒绝路由问的不是同一个谓词。** 客户端问 `canOpenWorkspacePath()`（即 `canOpenPath()`），而 `/api/present.open` 依据 `workspaceDesktop().available`（`nativeFileManager() !== null && canOpenPath()`）拒绝。两者只在「不存在原生文件管理器」（darwin/win32/linux 之外）而注入打开器或 `nativeOpen: true` 把 `canOpenPath()` 顶成 true 时不一致：此时提及保留原生手势、路由仍然拒绝。无需指定 Session 的可用性查询没有更窄的形式，且该缺口需要在不支持的平台上手工配置打开器，所以门控接受这一基数差异，而不是另造一个探测。
 
 ## 后果
 
@@ -26,6 +28,7 @@
 - `canOpenWorkspacePath()` 与 `openWorkspacePath` 不再可能不一致：操作恰好在探测为 `false` 时拒绝，探测仍对注入打开器报 `true`（测试钉住两者）。
 - 保持 `nativeOpen: true` 而平台打开器本身损坏的部署，仍会转发平台自身的失败文本。
 - `/api/present.open` 上 `workspaceDesktop().available` 为 false 时的 409 仍是上游答案；客户端从正文不再触达它，交付卡片保留自己的禁用菜单。
+- 回落的打开失败会经 Chat 视图的失败对话框呈现：包装调用的是 owner 的打开器，而不是 inject 面的原始闭包。
 
 ## 备选方案
 

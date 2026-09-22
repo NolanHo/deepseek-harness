@@ -192,35 +192,37 @@ describe('Chat inject API', () => {
     b.runtime.ctx.provide('chatFileMentions', {
       forClosing: () => ({ resolve }),
     } as never)
-    const gesture = () => { injected.fileMentions({} as never)!.resolve('site/report.html')!.open() }
+    // The owner's opener is the Chat view's own gesture path: it owns the busy
+    // state and the localized failure dialog the raw inject closure lacks.
+    const ownerOpen = vi.fn()
+    const owner = { openFile: ownerOpen } as never
+    const gesture = () => { injected.fileMentions(owner)!.resolve('site/report.html')!.open() }
 
     // The wrapper keeps the vocabulary's own label and title, and a token
     // naming no delivered file stays inert.
-    expect(injected.fileMentions({} as never)!.resolve('site/report.html'))
+    expect(injected.fileMentions(owner)!.resolve('site/report.html'))
       .toMatchObject({ label: 'open', title: 'site/report.html' })
     resolve.mockReturnValueOnce(undefined)
-    expect(injected.fileMentions({} as never)!.resolve('site/report.html')).toBeUndefined()
+    expect(injected.fileMentions(owner)!.resolve('site/report.html')).toBeUndefined()
 
     // A Host without a desktop (headless Linux / containerised): the upstream
     // vocabulary would POST present.open and take a 409, so the fork routes the
-    // gesture through the Web opener.
+    // gesture through the owner's opener.
     b.canOpenWorkspacePath.mockResolvedValueOnce({ ok: true, value: false })
     gesture()
-    await vi.waitFor(() => {
-      expect(b.openWorkspacePath).toHaveBeenCalledWith({ path: '/proj/site/report.html' })
-    })
+    await vi.waitFor(() => { expect(ownerOpen).toHaveBeenCalledWith('site/report.html') })
     expect(nativeOpen).not.toHaveBeenCalled()
 
     // A Host with a desktop keeps upstream's native gesture.
     b.canOpenWorkspacePath.mockResolvedValueOnce({ ok: true, value: true })
     gesture()
     await vi.waitFor(() => { expect(nativeOpen).toHaveBeenCalledOnce() })
-    expect(b.openWorkspacePath).toHaveBeenCalledOnce()
+    expect(ownerOpen).toHaveBeenCalledOnce()
 
     // A failed probe reads as unavailable: the click still opens the path.
     b.canOpenWorkspacePath.mockRejectedValueOnce(new Error('offline'))
     gesture()
-    await vi.waitFor(() => { expect(b.openWorkspacePath).toHaveBeenCalledTimes(2) })
+    await vi.waitFor(() => { expect(ownerOpen).toHaveBeenCalledTimes(2) })
     expect(nativeOpen).toHaveBeenCalledOnce()
     await b.runtime.dispose()
   })

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-29-headless-path-open-refusal.md
-2026-08-29-headless-path-open-refusal.md: 331e69874d990abc361992657df75bdade3cf7e2
-2026-08-29-headless-path-open-refusal.zh.md: 0b16898e457cacb2a81ffee57efae8b48eaff355
+2026-08-29-headless-path-open-refusal.md: 1cccf876d157d20f7419f28fa86e2ee119b0e5ea
+2026-08-29-headless-path-open-refusal.zh.md: d7e9a9034b54d7518943b4d04ded15843063f872

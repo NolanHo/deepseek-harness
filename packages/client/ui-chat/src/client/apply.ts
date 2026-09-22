@@ -142,7 +142,9 @@ export function apply(ctx: Context): void {
           },
           // Fork patch (FORK_SURFACE.md): a delivered file's prose mention would
           // POST present.open and 409 on a Host without a desktop; the fork
-          // module routes that gesture into the Web opener instead.
+          // module routes that gesture into the owner's opener, which owns the
+          // busy state and the localized failure dialog (the raw inject-face
+          // closure would discard a failed open silently).
           fileMentions: (owner: TurnTailOwnerProps) => {
             const mentions = ctx.get('chatFileMentions')?.forClosing(owner, sessionId)
             if (mentions === undefined) return undefined
@@ -152,7 +154,7 @@ export function apply(ctx: Context): void {
                 const probe = await ctx.remote.session.canOpenWorkspacePath()
                 return probe.ok && probe.value
               },
-              (path) => { void openFile(path) },
+              (path) => { owner.openFile(path) },
             )
           },
           // Files open in the right Sidebar, not in a desktop application: the
