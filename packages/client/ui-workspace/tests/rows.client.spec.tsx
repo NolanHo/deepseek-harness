@@ -471,8 +471,9 @@ describe('workspace browser rows', () => {
     const snooze: SessionRowMenuContribution = {
       id: 'snooze', label: '延后提醒', icon: <span data-testid="snooze-icon" />, submenu, onSelect: onSnooze,
     }
+    const bareLabel = vi.fn(() => 'Bare row')
     const bare: SessionRowMenuContribution = {
-      id: 'bare', label: 'Bare row', submenu: () => [{ id: 'leaf', label: 'Bare leaf' }], onSelect: onBare,
+      id: 'bare', label: bareLabel, submenu: () => [{ id: 'leaf', label: 'Bare leaf' }], onSelect: onBare,
     }
     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
       onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={[snooze, bare]} t={t} />)
@@ -482,6 +483,9 @@ describe('workspace browser rows', () => {
     expect(screen.getAllByRole('menuitem').map(item => item.textContent))
       .toEqual(['重命名', '分叉会话', '归档会话', '延后提醒', 'Bare row'])
     expect(screen.getByTestId('snooze-icon')).toBeTruthy()
+    // A label thunk is re-read on render, so localized copy can follow the
+    // active locale without the registrant re-registering.
+    expect(bareLabel).toHaveBeenCalled()
     // The leaves are built for this row's Session.
     expect(submenu).toHaveBeenCalledWith('s1')
     // Focusing a contributed row opens its submenu; a leaf reaches only its

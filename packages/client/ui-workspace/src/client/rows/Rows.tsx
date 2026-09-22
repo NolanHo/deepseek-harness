@@ -405,7 +405,11 @@ export function SessionNodeItem({
       .filter(entry => entry.leaves.length > 0)
       .map(entry => ({
         id: entry.contribution.id,
-        label: entry.contribution.label,
+        // A label thunk is re-read here, so localized copy follows the active
+        // locale without the registrant re-registering.
+        label: typeof entry.contribution.label === 'function'
+          ? entry.contribution.label()
+          : entry.contribution.label,
         ...(entry.contribution.icon === undefined ? {} : { icon: entry.contribution.icon }),
         // Leaf ids are namespaced so two registrants cannot collide.
         submenu: entry.leaves.map(leaf => ({

@@ -20,8 +20,12 @@ export interface SessionRowMenuLeaf {
 export interface SessionRowMenuContribution {
   /** Registrant-owned id; duplicated registration throws. */
   readonly id: string
-  /** Menu row label, already localized by the registrant. */
-  readonly label: string
+  /**
+   * Menu row label, already localized by the registrant. A thunk is re-read on
+   * every render, so localized copy follows the active locale without
+   * re-registering (the same rule the slot `label` option states).
+   */
+  readonly label: string | (() => string)
   /** Leading icon for the contributed menu row. */
   readonly icon?: ReactNode
   /**
