@@ -5,6 +5,7 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/clie
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
+import type { SessionRowMenuContribution } from '../src/client/fork/session-row-menu.ts'
 import type { RowDragProps } from '../src/client/rows/Rows.tsx'
 import { ProjectRowItem, SearchResultItem, SessionNodeItem } from '../src/client/rows/Rows.tsx'
 import type { GroupNode, SearchResultNode, SessionNode } from '../src/client/tree.ts'
@@ -16,6 +17,9 @@ const t = makeTranslate(zh, commonZh) as never
 
 const sid = (id: string) => id as SessionId
 const wid = (id: string) => id as WorkspaceId
+
+/** No registered contribution: the cases that don't exercise the extension point. */
+const noRowMenu: readonly SessionRowMenuContribution[] = []
 
 /** Half detection reads the row rect; jsdom rects are all-zero by default. */
 function stubRect(row: HTMLElement): void {
@@ -63,12 +67,12 @@ describe('workspace browser rows', () => {
       runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
     }
     const view = render(<SessionNodeItem node={idle} currentId={undefined} now={0} onOpen={vi.fn()}
-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} flat t={t} />)
+      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} flat t={t} />)
     const title = screen.getByText('Flat Session')
     expect(title.previousElementSibling).toBeNull()
 
     view.rerender(<SessionNodeItem node={{ ...idle, running: true }} currentId={undefined} now={0}
-      onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} flat t={t} />)
+      onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} flat t={t} />)
     expect(screen.getByText('Flat Session').previousElementSibling?.querySelector('[data-state="ongoing"]')).toBeTruthy()
   })
 
@@ -158,7 +162,7 @@ describe('workspace browser rows', () => {
     const onOpen = vi.fn()
     render(
       <SessionNodeItem node={node} currentId={node.id} now={0} onOpen={onOpen}
-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />,
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} t={t} />,
     )
 
     const row = screen.getByRole('treeitem')
@@ -177,7 +181,7 @@ describe('workspace browser rows', () => {
     }
     const view = render(
       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={onOpen}
-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />,
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} t={t} />,
     )
 
     const assertIndicator = (): HTMLElement => {
@@ -196,7 +200,7 @@ describe('workspace browser rows', () => {
 
     view.rerender(
       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={onOpen}
-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} flat t={t} />,
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} flat t={t} />,
     )
     assertIndicator()
   })
@@ -209,7 +213,7 @@ describe('workspace browser rows', () => {
           runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0, ...over,
         }}
         currentId={undefined} now={0} onOpen={vi.fn()}
-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t}
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} t={t}
       />,
     )
     const stateDot = (view: ReturnType<typeof renderRow>) =>
@@ -239,7 +243,7 @@ describe('workspace browser rows', () => {
       runningSubagentCount: 2, completed: false, hasActiveSchedule: false, updatedAt: 0,
     }
     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
+      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} t={t} />)
     const row = screen.getByRole('treeitem')
     expect(row.querySelector('[data-state="ongoing"]')).not.toBeNull()
     expect(screen.getByText('2 个子代理运行中')).toBeTruthy()
@@ -252,7 +256,7 @@ describe('workspace browser rows', () => {
       runningSubagentCount: 1, completed: false, hasActiveSchedule: false, updatedAt: 0,
     }
     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
+      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} t={t} />)
     const row = screen.getByRole('treeitem')
     expect(row.querySelectorAll('[data-state="ongoing"]')).toHaveLength(1)
     expect(screen.getByText('进行中')).toBeTruthy()
@@ -265,7 +269,7 @@ describe('workspace browser rows', () => {
       running: false, runningSubagentCount: 1, completed: false, hasActiveSchedule: false, updatedAt: 0,
     }
     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
+      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} t={t} />)
     const row = screen.getByRole('treeitem')
     expect(row.querySelector('[data-state="warning"]')).not.toBeNull()
     expect(row.querySelector('[data-state="ongoing"]')).toBeNull()
@@ -410,7 +414,7 @@ describe('workspace browser rows', () => {
       runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
     }
     render(<SessionNodeItem node={node} currentId={node.id} now={0} onOpen={vi.fn()}
-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
+      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} t={t} />)
     // The placeholder has no content yet: no row verbs, no "now" stamp.
     expect(screen.getByText('新会话')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /会话.*的操作/ })).toBeNull()
@@ -427,7 +431,7 @@ describe('workspace browser rows', () => {
       runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
     }
     render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={onOpen}
-      onRename={onRename} onFork={onFork} onArchive={onArchive} t={t} />)
+      onRename={onRename} onFork={onFork} onArchive={onArchive} rowMenu={noRowMenu} t={t} />)
     fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
     expect(onOpen).not.toHaveBeenCalled()
     // Archive is not destructive (log and accounting slot remain): no danger styling.
@@ -452,6 +456,72 @@ describe('workspace browser rows', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
+  // Fork patch (FORK_SURFACE.md): the registered-contribution cases of the
+  // session-row menu extension point.
+  it('appends registered menu rows after the built-in three and dispatches their leaves unprefixed', () => {
+    const onSnooze = vi.fn()
+    const onBare = vi.fn()
+    const submenu = vi.fn((sessionId: string) => sessionId === 's1'
+      ? [{ id: 'h1', label: '1 小时' }, { id: 'custom', label: '自定义…' }]
+      : [])
+    const node: SessionNode = {
+      id: sid('s1'), title: 'One', blank: false, running: false,
+      runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+    }
+    const snooze: SessionRowMenuContribution = {
+      id: 'snooze', label: '延后提醒', icon: <span data-testid="snooze-icon" />, submenu, onSelect: onSnooze,
+    }
+    const bare: SessionRowMenuContribution = {
+      id: 'bare', label: 'Bare row', submenu: () => [{ id: 'leaf', label: 'Bare leaf' }], onSelect: onBare,
+    }
+    render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={[snooze, bare]} t={t} />)
+    fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+    // The built-in rows keep their order and lead the contributions; the
+    // contribution without an icon renders a label-only row.
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent))
+      .toEqual(['重命名', '分叉会话', '归档会话', '延后提醒', 'Bare row'])
+    expect(screen.getByTestId('snooze-icon')).toBeTruthy()
+    // The leaves are built for this row's Session.
+    expect(submenu).toHaveBeenCalledWith('s1')
+    // Focusing a contributed row opens its submenu; a leaf reaches only its
+    // own registrant with the leaf's unprefixed id.
+    fireEvent.focus(screen.getByRole('menuitem', { name: 'Bare row' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Bare leaf' }))
+    expect(onBare).toHaveBeenCalledWith(node.id, 'leaf')
+    expect(onSnooze).not.toHaveBeenCalled()
+    expect(screen.queryByRole('menu')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+    fireEvent.focus(screen.getByRole('menuitem', { name: '延后提醒' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '1 小时' }))
+    expect(onSnooze).toHaveBeenCalledWith(node.id, 'h1')
+    expect(onBare).toHaveBeenCalledOnce()
+  })
+
+  it('hides a contribution with no leaf for the row and keeps a disabled leaf unselectable', () => {
+    const onSelect = vi.fn()
+    const node: SessionNode = {
+      id: sid('s1'), title: 'One', blank: false, running: false,
+      runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+    }
+    const hidden: SessionRowMenuContribution = {
+      id: 'hidden', label: 'Hidden row', submenu: () => [], onSelect,
+    }
+    const active: SessionRowMenuContribution = {
+      id: 'snooze', label: '延后提醒',
+      submenu: () => [{ id: 'cancel', label: '取消延后', disabled: true }],
+      onSelect,
+    }
+    render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={[hidden, active]} t={t} />)
+    fireEvent.click(screen.getByRole('button', { name: '会话“One”的操作' }))
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent))
+      .toEqual(['重命名', '分叉会话', '归档会话', '延后提醒'])
+    fireEvent.mouseEnter(screen.getByRole('menuitem', { name: '延后提醒' }).parentElement as HTMLElement)
+    expect((screen.getByRole('menuitem', { name: '取消延后' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   // Fork patch (FORK_SURFACE.md): this deployment renders no session hover card,
   // so upstream's dwell/copy, idle-status, and completed-status cases and the
   // card halves of the row cases are deleted with it.
@@ -466,14 +536,14 @@ describe('workspace browser rows', () => {
       hasActiveSchedule: false, updatedAt: 0,
     }
     const view = render(<SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
-      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
+      onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} t={t} />)
     const row = screen.getByRole('treeitem')
     expect(row.querySelector('[data-state="warning"]')).toBeTruthy()
     expect(row.querySelector('[data-state="ongoing"]')).toBeNull()
     expect(screen.getByText(label)).toBeTruthy()
 
     view.rerender(<SessionNodeItem node={{ ...node, running: false }} currentId={undefined} now={0}
-      onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />)
+      onOpen={vi.fn()} onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} t={t} />)
     expect(screen.getByRole('treeitem').querySelector('[data-state="warning"]')).toBeTruthy()
   })
 
@@ -485,7 +555,7 @@ describe('workspace browser rows', () => {
     const inactive = dragProps()
     const { rerender } = render(
       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} drag={inactive} t={t} />,
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} drag={inactive} t={t} />,
     )
     const row = screen.getByRole('treeitem')
     stubRect(row)
@@ -503,7 +573,7 @@ describe('workspace browser rows', () => {
     const active = dragProps({ active: true, marker: 'before' })
     rerender(
       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} drag={active} t={t} />,
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} drag={active} t={t} />,
     )
     stubRect(screen.getByRole('treeitem'))
     // Top half hovers/drops 'before'; bottom half 'after' (row mid = 117).
@@ -517,7 +587,7 @@ describe('workspace browser rows', () => {
     const after = dragProps({ active: true, marker: 'after' })
     rerender(
       <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
-        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} drag={after} t={t} />,
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} rowMenu={noRowMenu} drag={after} t={t} />,
     )
     expect(screen.getByRole('treeitem').className).toMatch(/dropAfter/)
   })

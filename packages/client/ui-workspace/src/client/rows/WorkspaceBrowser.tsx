@@ -19,6 +19,8 @@ import type { SessionSearchResultItem } from '@deepseek-ai/dsh-api-session-contr
 import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { WorkspaceBrowserProps } from '../contract/slots.ts'
+// Fork patch (FORK_SURFACE.md): the session-row `⋯` menu contribution type.
+import type { SessionRowMenuContribution } from '../fork/session-row-menu.ts'
 import type { SessionNode, SessionOrderBy } from '../tree.ts'
 import {
   deriveFlat, deriveGroups, deriveSearchResults, owningGroupKey, UNGROUPED_KEY,
@@ -171,6 +173,9 @@ type SessionTreeProps = Pick<
   'useSessions' | 'useSessionPendingInteraction' | 'startSession' | 'open' | 'forkSession'
   | 'insertWorkspaceBefore' | 'insertSessionBefore' | 't' | 'usePanelInfo'
 > & {
+  // Fork patch (FORK_SURFACE.md): registered session-row `⋯` menu
+  // contributions, threaded to every session row this subtree renders.
+  rowMenu: readonly SessionRowMenuContribution[]
   /** Host account home for POSIX hover-path abbreviation. */
   home?: string | undefined
   workspaces: readonly WorkspaceView[]
@@ -213,7 +218,7 @@ function SessionTree({
   onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive,
   insertWorkspaceBefore, insertSessionBefore, orderBy,
   groupExpansion, setGroupExpanded,
-  sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, t,
+  sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder, home, rowMenu, t,
   revealSessionId, onSessionRevealed,
 }: SessionTreeProps) {
   const panelActive = usePanelInfo(info => info.activePanelId !== null)
@@ -526,6 +531,7 @@ function SessionTree({
                       ? () => { onSessionRevealed(node.id) }
                       : undefined}
                     drag={dragProps}
+                    rowMenu={rowMenu}
                     t={t}
                   />
                 )
@@ -554,7 +560,7 @@ function SessionTree({
 /** The flat "In one list" body: every session is one draggable top-level row. */
 function FlatList({
   useSessions, useSessionPendingInteraction, open, forkSession, onSessionRename, onSessionArchive,
-  archivedSessionIds, usePanelInfo,
+  archivedSessionIds, usePanelInfo, rowMenu,
   orderBy, sessionOrderByAccount, sessionUpdatedAtByAccount, syncSessionOrderAccount, setSessionOrder,
   revealSessionId, onSessionRevealed, t,
 }: Pick<
@@ -567,6 +573,8 @@ function FlatList({
   | 'onSessionArchive'
   | 'archivedSessionIds'
   | 'usePanelInfo'
+  // Fork patch (FORK_SURFACE.md): the flat list renders the same session rows.
+  | 'rowMenu'
   | 'orderBy'
   | 'sessionOrderByAccount'
   | 'sessionUpdatedAtByAccount'
@@ -653,6 +661,7 @@ function FlatList({
                 ? () => { onSessionRevealed(node.id) }
                 : undefined}
               flat
+              rowMenu={rowMenu}
               drag={{
                 start: () => {
                   dropCommitted.current = false
@@ -793,10 +802,13 @@ export function WorkspaceBrowser({
   searchResultLimit,
   useDirectoryFlow,
   useHostInfo,
+  useSessionRowMenu,
   renderSlot,
   t,
 }: WorkspaceBrowserProps) {
   const home = useHostInfo(info => info.home)
+  // Fork patch (FORK_SURFACE.md): the session-row `⋯` menu contributions.
+  const rowMenu = useSessionRowMenu(entries => entries)
   const workspaces = useWorkspaces(state => state.items)
   const workspacePhase = useWorkspaces(state => state.phase)
   const workspaceStreamState = useWorkspaces(state => state.state)
@@ -1218,6 +1230,7 @@ export function WorkspaceBrowser({
                 setSessionOrder={actions.setSessionOrder}
                 revealSessionId={revealSessionId}
                 onSessionRevealed={acknowledgeSessionReveal}
+                rowMenu={rowMenu}
                 t={t}
               />
             )
@@ -1246,6 +1259,7 @@ export function WorkspaceBrowser({
                 revealSessionId={revealSessionId}
                 onSessionRevealed={acknowledgeSessionReveal}
                 home={home}
+                rowMenu={rowMenu}
                 t={t}
                 onRenameRequest={(workspaceId, currentTitle) => {
                   setRenameTarget({ workspaceId, currentTitle })

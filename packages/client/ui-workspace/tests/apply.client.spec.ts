@@ -181,6 +181,25 @@ describe('ui-workspace apply', () => {
     unsubscribe()
   })
 
+  it('provides the session-row menu registry and publishes contributions through the browser hook', async () => {
+    const b = await bench()
+    declare(b.slots, 'sidebar.workspaces')
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const browser = (b.slots.entries('sidebar.workspaces')[0]!.inject as () => WorkspaceBrowserInjected)()
+    const source = browser.hooks.sessionRowMenu
+    expect(source.getSnapshot()).toEqual([])
+
+    const notified = vi.fn()
+    const unsubscribe = source.subscribe(notified)
+    const registry = b.ctx.get('sessionRowMenu')
+    const dispose = registry!.register({ id: 'snooze', label: '延后提醒', submenu: () => [], onSelect: vi.fn() })
+    expect(notified).toHaveBeenCalledOnce()
+    expect(source.getSnapshot()).toHaveLength(1)
+    dispose()
+    expect(source.getSnapshot()).toEqual([])
+    unsubscribe()
+  })
+
   it('rejects the browser search callback on a Session Controller business error', async () => {
     const b = await bench()
     b.search.mockImplementationOnce(async () => ({

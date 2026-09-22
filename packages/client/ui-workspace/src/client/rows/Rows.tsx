@@ -16,6 +16,8 @@ import {
 import type { StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import { abbreviateHomePath } from '@deepseek-ai/dsh-util-workspace-path'
 import type { WorkspaceBrowserProps } from '../contract/slots.ts'
+// Fork patch (FORK_SURFACE.md): the session-row `⋯` menu contribution type.
+import type { SessionRowMenuContribution } from '../fork/session-row-menu.ts'
 import type { GroupNode, SearchResultNode, SessionNode } from '../tree.ts'
 import css from './Rows.module.css'
 
@@ -348,11 +350,12 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
  * @param props.onReveal - scroll this row into view after search navigation, then acknowledge it.
  * @param props.drag - optional draggable-row wiring.
  * @param props.flat - omit the empty status slot in the hierarchy-free flat list.
+ * @param props.rowMenu - registered `⋯` menu contributions (fork extension point).
  * @param props.t - the browser root's locale seat.
  * @returns the session row.
  */
 export function SessionNodeItem({
-  node, currentId, now, onOpen, onRename, onFork, onArchive, onReveal, drag, flat = false, t,
+  node, currentId, now, onOpen, onRename, onFork, onArchive, onReveal, drag, flat = false, rowMenu, t,
 }: {
   node: SessionNode
   currentId: string | undefined
@@ -370,6 +373,8 @@ export function SessionNodeItem({
   drag?: RowDragProps | undefined
   /** The row is rendered without a parent Workspace header. */
   flat?: boolean | undefined
+  /** Registered contributions appended after the built-in menu rows. */
+  rowMenu: readonly SessionRowMenuContribution[]
   t: RowTranslate
 }) {
   const row = node
@@ -393,6 +398,22 @@ export function SessionNodeItem({
     { id: 'fork', label: t('menu.fork'), icon: <IconBranchOutline16 /> },
     // 20-native glyph in the menu's 16px icon slot (Menu.module.css .itemIcon).
     { id: 'archive', label: t('menu.archiveSession'), icon: <IconArchiveOutline20 size={16} /> },
+    // Fork patch (FORK_SURFACE.md): registered contributions follow the
+    // built-in rows; one with no leaf for this row is hidden.
+    ...rowMenu
+      .map(contribution => ({ contribution, leaves: contribution.submenu(node.id) }))
+      .filter(entry => entry.leaves.length > 0)
+      .map(entry => ({
+        id: entry.contribution.id,
+        label: entry.contribution.label,
+        ...(entry.contribution.icon === undefined ? {} : { icon: entry.contribution.icon }),
+        // Leaf ids are namespaced so two registrants cannot collide.
+        submenu: entry.leaves.map(leaf => ({
+          id: `${entry.contribution.id}\u0000${leaf.id}`,
+          label: leaf.label,
+          ...(leaf.disabled === undefined ? {} : { disabled: leaf.disabled }),
+        })),
+      })),
   ]
   // Figma session cell: pad 8, status slot 16, then a 4px title gap.
   const ownRow = (
@@ -457,6 +478,14 @@ export function SessionNodeItem({
               if (id === 'rename') onRename(node.id, row.title)
               if (id === 'fork') onFork(node.id)
               if (id === 'archive') onArchive(node.id)
+              // Fork patch (FORK_SURFACE.md): a contributed leaf carries its
+              // registrant id as a NUL-separated prefix. Resolved after the
+              // built-in chain instead of as its else fallback, so the chain
+              // stays (upstream) unknown-id-free.
+              const separator = id.indexOf('\u0000')
+              if (separator <= 0) return
+              const owner = rowMenu.find(contribution => contribution.id === id.slice(0, separator))
+              owner?.onSelect(node.id, id.slice(separator + 1))
             }}
             portal
             closeOnPointerLeave

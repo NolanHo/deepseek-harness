@@ -31,6 +31,8 @@ import type { SessionSearchResultItem } from '@deepseek-ai/dsh-api-session-contr
 import type { RemoteHostFacts } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+// Fork patch (FORK_SURFACE.md): the session-row `⋯` menu contribution type.
+import type { SessionRowMenuContribution } from '../fork/session-row-menu.ts'
 import type { createWorkspaceViewStore } from '../stores.ts'
 
 /**
@@ -96,6 +98,14 @@ export type WorkspaceBrowserInjected = {
      * saw. Select the field the surface needs (`info => info.home`).
      */
     hostInfo: HostObservable<RemoteHostFacts>
+    /**
+     * Fork patch (FORK_SURFACE.md): the session-row `⋯` menu's live
+     * contributions. An out-of-tree plugin registers them through the provided
+     * `sessionRowMenu` service; each session row appends the snapshot after its
+     * built-in Rename/Fork/Archive rows and hides a contribution whose
+     * `submenu` returns no leaf for that session.
+     */
+    sessionRowMenu: HostObservable<readonly SessionRowMenuContribution[]>
   }
   /**
    * Start a New Session in a Workspace: reuse-or-create its blank session and

@@ -25,6 +25,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contract/slots.ts'
 import { UiWorkspaceService } from './navigation.ts'
+// Fork patch (FORK_SURFACE.md): the session-row `⋯` menu contribution registry.
+import { createSessionRowMenu } from './fork/session-row-menu.ts'
 import { createWorkspaceViewStore } from './stores.ts'
 import { WorkspaceBrowser } from './rows/WorkspaceBrowser.tsx'
 import { WorkspacePicker } from './WorkspacePicker.tsx'
@@ -77,6 +79,10 @@ export function apply(ctx: Context): void {
     ctx, ctx.remote.directoryPicker, workspaces, sessions)
   ctx.slots.provideRoot({ hooks: { workspaces: workspaces.list } })
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-workspace: dictionaries')
+  // Fork patch (FORK_SURFACE.md): publish the session-row `⋯` menu registry, so
+  // an out-of-tree plugin injects `sessionRowMenu` and adds its own row.
+  const sessionRowMenu = createSessionRowMenu()
+  ctx.provide('sessionRowMenu', sessionRowMenu)
 
   const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
     const result = await sessions.search(query, signal)
@@ -130,7 +136,16 @@ export function apply(ctx: Context): void {
       await workspaces.insertSessionBefore(workspaceId, sessionId, beforeSessionId)
     },
     createWorkspace: input => workspaces.create(input),
-    hooks: { directoryFlow: browserFlowSource, hostInfo },
+    hooks: {
+      directoryFlow: browserFlowSource,
+      hostInfo,
+      // Fork patch (FORK_SURFACE.md): the session-row `⋯` menu contribution
+      // source; the renderer binds it into the browser's useSessionRowMenu seat.
+      sessionRowMenu: {
+        getSnapshot: () => sessionRowMenu.snapshot(),
+        subscribe: listener => sessionRowMenu.subscribe(listener),
+      },
+    },
   })
   const pickerInjected = (): WorkspacePickerInjected => ({
     createWorkspace: input => workspaces.create(input),

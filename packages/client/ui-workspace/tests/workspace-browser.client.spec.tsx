@@ -11,6 +11,7 @@ import type { SessionPendingInteractionSnapshot } from '@deepseek-ai/dsh-client-
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
+import type { SessionRowMenuContribution } from '../src/client/fork/session-row-menu.ts'
 import type { WorkspaceBrowserProps } from '../src/client/contract/slots.ts'
 import { createWorkspaceViewStore, FLAT_SESSION_ORDER_KEY } from '../src/client/stores.ts'
 import { UNGROUPED_KEY } from '../src/client/tree.ts'
@@ -98,6 +99,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
     createWorkspace: vi.fn(async () => workspace('created', [])),
     useDirectoryFlow: bindSnapshotSelector({ getSnapshot: () => true, subscribe: () => () => {} }),
     useHostInfo: selector => selector({ home: undefined, isLoopback: true }),
+    useSessionRowMenu: hook([] as readonly SessionRowMenuContribution[]),
     renderSlot: ((_name: string, owner: { open: boolean }) => (owner.open ? <div data-testid="directory-flow" /> : null)) as never,
     t,
     ...overrides,
@@ -518,6 +520,26 @@ describe('WorkspaceBrowser', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: '单列表' }))
     expect(screen.getByText('kept-s')).toBeTruthy()
     expect(screen.queryByText('gone-s')).toBeNull()
+  })
+
+  it('appends the registered session-row menu contributions to session rows', () => {
+    const onSelect = vi.fn()
+    const contribution: SessionRowMenuContribution = {
+      id: 'snooze', label: '延后提醒',
+      submenu: sessionId => [{ id: `until-${sessionId}`, label: '1 小时' }],
+      onSelect,
+    }
+    mount({
+      useSessions: hook(sessionState([summary('alpha-s', 1)])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['alpha-s'])])),
+      useSessionRowMenu: hook([contribution]),
+    })
+    fireEvent.click(screen.getByText('alpha'))
+    fireEvent.click(screen.getByRole('button', { name: '会话“alpha-s”的操作' }))
+    // Leaves are built for the row's own Session, and dispatch unprefixed.
+    fireEvent.focus(screen.getByRole('menuitem', { name: '延后提醒' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '1 小时' }))
+    expect(onSelect).toHaveBeenCalledWith(sid('alpha-s'), 'until-alpha-s')
   })
 
   it('logs and keeps the tree when the archive call rejects', async () => {
