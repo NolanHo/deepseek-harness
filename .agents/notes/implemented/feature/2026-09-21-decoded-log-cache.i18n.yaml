@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-21-decoded-log-cache.md
-2026-09-21-decoded-log-cache.md: 3ec91425c0c620e696ced4f6beebb846341f9ebc
-2026-09-21-decoded-log-cache.zh.md: 89fefc84707cc5a9fdfc6fc812874313e23e0767
+2026-09-21-decoded-log-cache.md: 88abdfe4fcedc8e7e75609d61f453dcafc24aa41
+2026-09-21-decoded-log-cache.zh.md: a381cee9ab56870d7a299305ff0d4b1461e319ba

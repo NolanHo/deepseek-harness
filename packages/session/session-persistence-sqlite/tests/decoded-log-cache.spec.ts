@@ -71,6 +71,50 @@ function secondTurn(): SessionEvent[] {
   ]
 }
 
+/** `extra` more valid turns after {@link oneTurnLog}, contiguous from seq 6. */
+function turnsAfter(extra: number): SessionEvent[] {
+  const events: SessionEvent[] = []
+  let seq = oneTurnLog().length
+  for (let turn = 2; turn < extra + 2; turn += 1) {
+    events.push(
+      { type: 'turn/start', seq: SessionSeq(seq), time: seq + 1, data: { turn } },
+      { type: 'user/message', seq: SessionSeq(seq + 1), time: seq + 2, surfaceOp: 'append', data: freezeMessage({
+        id: MessageId(`turn-${turn}-user`),
+        role: 'user',
+        content: [{ type: 'text', text: `turn ${turn}` }],
+        source: { kind: 'user' },
+      }) },
+      { type: 'step/start', seq: SessionSeq(seq + 2), time: seq + 3, data: { turn, step: 1 } },
+      { type: 'step/end', seq: SessionSeq(seq + 3), time: seq + 4, data: { turn, step: 1 } },
+      { type: 'turn/end', seq: SessionSeq(seq + 4), time: seq + 5, data: { turn, reason: { kind: 'completed' } } },
+    )
+    seq += 5
+  }
+  return events
+}
+
+/**
+ * The content of one stored log without its object identity, so a retained
+ * reader and a fresh reader can be compared after a write.
+ */
+function digest(log: {
+  meta: SessionHeader
+  events: readonly SessionEvent[]
+  revision: unknown
+  inheritedEventCount: unknown
+  storedVersion: unknown
+  tornFrom?: number
+} | undefined): unknown {
+  return {
+    cwd: log?.meta.cwd,
+    revision: String(log?.revision),
+    inheritedEventCount: String(log?.inheritedEventCount),
+    storedVersion: log?.storedVersion,
+    tornFrom: log?.tornFrom ?? null,
+    events: log?.events.map(event => `${event.seq}:${event.type}`),
+  }
+}
+
 /**
  * The decoded JSON text bytes of one stored session, read from the database
  * rather than from the cache under test — the number the ceiling is charged.
@@ -138,6 +182,9 @@ describe('decoded log cache', () => {
 
     expect(emptyFirst?.events).toEqual([])
     expect(emptySecond?.events).not.toBe(emptyFirst?.events)
+    // Header immutability does not depend on retention: a miss freezes the
+    // header it decoded as well, so no configuration hands out a writable one.
+    expect(Object.isFrozen(first?.meta)).toBe(true)
     await store.close()
   })
 
@@ -152,6 +199,7 @@ describe('decoded log cache', () => {
 
     expect(hit).toBe(miss)
     expect(hit?.events).toBe(miss?.events)
+    expect(hit?.meta).toBe(miss?.meta)
     expect(hit?.meta).toEqual(miss?.meta)
     expect(hit?.inheritedEventCount).toBe(miss?.inheritedEventCount)
     expect(hit?.revision).toBe(miss?.revision)
@@ -159,6 +207,28 @@ describe('decoded log cache', () => {
     expect(hit?.tornFrom).toBeUndefined()
     expect(Object.isFrozen(hit?.events)).toBe(true)
     expect(Object.isFrozen(hit?.events[0])).toBe(true)
+    // The header is the one object a hit shares that the format codec did not
+    // freeze: it shallow-copies the decoded header, so the read path must freeze
+    // it before retention makes it visible to every later caller.
+    expect(Object.isFrozen(hit?.meta)).toBe(true)
+    await store.close()
+  })
+
+  it('does not let one caller write into the header every later read shares', async () => {
+    const path = await freshDbPath()
+    const store = openStore(path, 64 * 1024)
+    const header = meta('decoded-cache-frozen-header', '/cached')
+    await store.appendBatch(storage(header), oneTurnLog(), false)
+
+    const first = await store.loadStoredLog(header.id)
+    expect(first).toBeDefined()
+    expect(() => {
+      (first?.meta as unknown as { cwd: string }).cwd = '/poisoned'
+    }).toThrow(TypeError)
+    const second = await store.loadStoredLog(header.id)
+
+    expect(second).toBe(first)
+    expect(second?.meta.cwd).toBe('/cached')
     await store.close()
   })
 
@@ -184,6 +254,68 @@ describe('decoded log cache', () => {
     expect(after).not.toBe(before)
     expect(after?.meta.cwd).toBe('/rewritten')
     await reader.close()
+  })
+
+  it('agrees with an uncached reader across another connection\'s writes', async () => {
+    const path = await freshDbPath()
+    const header = meta('decoded-cache-differential', '/one')
+    const seed = openStore(path)
+    await seed.appendBatch(storage(header), oneTurnLog(), false)
+    await seed.close()
+
+    const cached = openStore(path, 1 << 20)
+    const plain = openStore(path)
+    const writer = openStore(path)
+    // The retention invariant is that a hit answers with what an uncached read
+    // would have returned for the same stored state: every mutation is compared
+    // as content, not as object identity.
+    const compare = async (): Promise<void> => {
+      expect(digest(await cached.loadStoredLog(header.id))).toEqual(digest(await plain.loadStoredLog(header.id)))
+    }
+
+    await compare()
+    await writer.appendBatch(storage(header), secondTurn(), true)
+    await compare()
+    await writer.materializeHeader(storage(meta('decoded-cache-differential', '/two')))
+    await compare()
+    await writer.publishStoredLog(storage(meta('decoded-cache-differential', '/two')), oneTurnLog())
+    await compare()
+    // The cut must land below the stored end, or truncation takes the no-op
+    // branch and leaves the deleting path's revision bump unexercised.
+    await writer.appendBatch(storage(meta('decoded-cache-differential', '/two')), secondTurn(), true)
+    await compare()
+    await writer.truncateLog(storage(meta('decoded-cache-differential', '/two')), 3)
+    await compare()
+
+    await cached.close()
+    await plain.close()
+    await writer.close()
+  })
+
+  it('agrees with an uncached reader after another connection repairs a torn tail', async () => {
+    const path = await freshDbPath()
+    const header = meta('decoded-cache-differential-repair')
+    const seed = openStore(path)
+    await seed.appendBatch(storage(header), oneTurnLog(), false)
+    await seed.close()
+
+    const torn = new DatabaseSync(path)
+    torn.prepare(testSql('insert-corrupt-event')).run(header.id, 6, 'turn/start', 7, '{not json', null)
+    torn.close()
+
+    const cached = openStore(path, 1 << 20)
+    const plain = openStore(path)
+    // The retaining reader holds the torn log, so the foreign repair is the
+    // only change the comparison can miss.
+    expect(digest(await cached.loadStoredLog(header.id))).toEqual(digest(await plain.loadStoredLog(header.id)))
+
+    const repair = openStore(path)
+    await repair.commitRepair(storage(header), 6, [])
+    expect(digest(await cached.loadStoredLog(header.id))).toEqual(digest(await plain.loadStoredLog(header.id)))
+
+    await cached.close()
+    await plain.close()
+    await repair.close()
   })
 
   it('drops the retained log after a local append and serves the appended events', async () => {
@@ -354,6 +486,55 @@ describe('decoded log cache', () => {
     await tooSmall.close()
   })
 
+  it('does not evict a retained log to make room for one that cannot fit', async () => {
+    const path = await freshDbPath()
+    const small = meta('decoded-cache-oversized-small')
+    const huge = meta('decoded-cache-oversized-huge')
+    const writer = openStore(path)
+    await writer.appendBatch(storage(small), oneTurnLog(), false)
+    await writer.appendBatch(storage(huge), [...oneTurnLog(), ...turnsAfter(400)], false)
+    await writer.close()
+
+    const smallBytes = storedTextBytes(path, small.id)
+    expect(smallBytes).toBeGreaterThan(0)
+    expect(storedTextBytes(path, huge.id)).toBeGreaterThan(smallBytes)
+
+    const store = openStore(path, smallBytes)
+    const retained = await store.loadStoredLog(small.id)
+    expect(await store.loadStoredLog(small.id)).toBe(retained)
+    // Admitting the unfit log and evicting it in the same pass would drop the
+    // small entry as a side effect; the ceiling refuses it before inserting.
+    await store.loadStoredLog(huge.id)
+    expect(await store.loadStoredLog(small.id)).toBe(retained)
+    await store.close()
+  })
+
+  it('keeps a repeatedly read session when a third one arrives', async () => {
+    const path = await freshDbPath()
+    const first = meta('decoded-cache-lru-refresh-a')
+    const second = meta('decoded-cache-lru-refresh-b')
+    const third = meta('decoded-cache-lru-refresh-c')
+    const writer = openStore(path)
+    for (const header of [first, second, third]) await writer.appendBatch(storage(header), oneTurnLog(), false)
+    await writer.close()
+
+    const bytes = storedTextBytes(path, first.id)
+    expect(bytes).toBeGreaterThan(0)
+    expect(storedTextBytes(path, second.id)).toBe(bytes)
+    expect(storedTextBytes(path, third.id)).toBe(bytes)
+
+    // Two entries fit. Reading A, then B, then A again makes B the least
+    // recently used, so admitting C evicts B and leaves A retained; a hit that
+    // did not refresh the order would have evicted A instead.
+    const store = openStore(path, bytes * 2)
+    const retained = await store.loadStoredLog(first.id)
+    await store.loadStoredLog(second.id)
+    expect(await store.loadStoredLog(first.id)).toBe(retained)
+    await store.loadStoredLog(third.id)
+    expect(await store.loadStoredLog(first.id)).toBe(retained)
+    await store.close()
+  })
+
   it('charges UTF-8 bytes, not UTF-16 code units, so a multibyte log cannot be under-sized', async () => {
     const path = await freshDbPath()
     const header = meta('decoded-cache-multibyte')
@@ -361,13 +542,13 @@ describe('decoded log cache', () => {
     const log = oneTurnLog().map(event => event.type !== 'user/message'
       ? event
       : {
-          ...event,
-          data: freezeMessage({
-            id: MessageId('one-turn-user'),
-            role: 'user',
-            content: [{ type: 'text', text }], source: { kind: 'user' },
-          }),
-        })
+        ...event,
+        data: freezeMessage({
+          id: MessageId('one-turn-user'),
+          role: 'user',
+          content: [{ type: 'text', text }], source: { kind: 'user' },
+        }),
+      })
     const writer = openStore(path)
     await writer.appendBatch(storage(header), log, false)
     await writer.close()
@@ -467,6 +648,26 @@ describe('decodedLogCacheBytes configuration', () => {
     })
     expect((sized.sessionPersistence as SessionPersistenceSqlite).config.decodedLogCacheBytes).toBe(4096)
     await sizedFiber.dispose()
+  })
+
+  it('hands the configured ceiling to the store behind the mounted service', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const fiber = await ctx.plugin(SessionPersistenceSqlite, {
+      path: await freshDbPath(),
+      decodedLogCacheBytes: 64 * 1024,
+    })
+    try {
+      // The store is the service's own: a ceiling that never left the plugin
+      // config would answer this repeat read with a second decoded log.
+      const store = (ctx.sessionPersistence as unknown as { store: SqliteStore }).store
+      const header = meta('decoded-cache-wiring')
+      await store.appendBatch(storage(header), oneTurnLog(), false)
+      const first = await store.loadStoredLog(header.id)
+      expect(await store.loadStoredLog(header.id)).toBe(first)
+    } finally {
+      await fiber.dispose()
+    }
   })
 
   it('rejects a negative or fractional ceiling', async () => {

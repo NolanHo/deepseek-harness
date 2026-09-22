@@ -19,6 +19,7 @@ export type TestSqlName =
   | 'insert-schema-19-descriptor-events'
   | 'insert-schema-19-descriptor-session'
   | 'insert-schema-19-events'
+  | 'insert-schema-19-multibyte-events'
   | 'insert-schema-19-session'
   | 'measure-write-traffic'
   | 'replace-events-with-nonstrict-table'

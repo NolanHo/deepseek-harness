@@ -57,9 +57,9 @@ function row(record: StorageRecord): EventRow {
   }
 }
 
-/** Decoded JSON text length of one physical row, the scan's cache-size unit. */
+/** Decoded JSON text bytes of one physical row, the scan's cache-size unit. */
 function decodedBytes(physical: EventRow): number {
-  return decodedColumnText(physical.data).length
+  return Buffer.byteLength(decodedColumnText(physical.data))
 }
 
 describe('SQLite compression', () => {
@@ -448,5 +448,21 @@ describe('SQLite compression', () => {
         tornFrom: 1,
         decodedBytes: decodedBytes(packed) + decodedBytes(overlapping),
       })
+  })
+
+  it('reports a packed row decoded text as UTF-8 bytes, not code units', () => {
+    const events = [chunk(0, '你好'), chunk(1, '世界'), chunk(2, '多字节🙂')]
+    const records = packChunks(events)
+    expect(records).toHaveLength(1)
+    const packed = row(records[0]!)
+
+    // The multibyte run data makes the two measures of the same decoded text
+    // diverge, so a scan charging code units reports the shorter number.
+    const serialized = decodedColumnText(packed.data)
+    expect(serialized.length).toBeLessThan(Buffer.byteLength(serialized))
+
+    const scanned = scanRows([packed])
+    expect(scanned.preserved).toEqual(events)
+    expect(scanned.decodedBytes).toBe(decodedBytes(packed))
   })
 })
