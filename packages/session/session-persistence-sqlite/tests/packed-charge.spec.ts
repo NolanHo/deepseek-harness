@@ -4,10 +4,10 @@
  * whole run's run-data document — `texts` carries every member's text — so a
  * run whose texts are multibyte separates that charge from the same text
  * measured in UTF-16 code units. Three ceilings over one unchanged stored
- * session pin the charge to exactly the byte count: the code-unit count admits
- * the log, the byte count retains it, and one byte below the byte count refuses
- * it, so a partial sum that happens to land inside that window also fails the
- * case.
+ * session pin the charge to exactly the byte count: a code-unit charge would be
+ * admitted at the code-unit ceiling, the byte count is retained at the byte
+ * ceiling, and one byte below the byte count refuses the log, so a partial sum
+ * that happens to land inside that window also fails the case.
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
