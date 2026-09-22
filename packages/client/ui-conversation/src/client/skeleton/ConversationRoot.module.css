@@ -499,40 +499,47 @@
 
 /* Fork patch (FORK_SURFACE.md): mobile regime (<768px, matching ui-layout's
    MOBILE_VIEWPORT) — the frame's fixed drawer opener occupies the header's
-   top-left corner, so the session header's leading edge clears it. */
+   top-left corner, so the session header's leading edge clears it and reserves
+   the same top safe-area inset the opener's `top` carries. */
 @media (max-width: 767.98px) {
   .header {
     padding-left: 56px;
+    padding-top: calc(10px + env(safe-area-inset-top));
   }
 }
 
 /* Fork patch (FORK_SURFACE.md): narrow viewports (phones, ~360-560px). The
    drawer opener occupies the header's top-left corner, so the header keeps its
-   56px leading pad and hands the title row what is left after the trailing
-   controls: the breadcrumb stays visible and truncates through `.crumb`'s
-   ellipsis, and the actions shrink instead of pushing the corner seat past the
-   viewport — the corner's -16px margin is tuned for the desktop 28px right
-   padding, while this block's padding is 12px, which landed the control 4px
-   off-screen at every phone width. */
+   56px leading pad, reserves the same top safe-area inset the opener carries
+   (without it the fixed button drops a whole status bar below the title row on
+   a device with a top inset, and the title paints under the system bar), and
+   hands the title row what is left after the trailing controls: the breadcrumb
+   stays visible and truncates through `.crumb`'s ellipsis, and the actions
+   shrink instead of pushing the corner seat past the viewport — the corner's
+   -16px margin is tuned for the desktop 28px right padding, while this block's
+   padding is 12px, which landed the control 4px off-screen at every phone
+   width. */
 @media (max-width: 560px) {
   .header {
-    padding: 8px 12px 0 56px;
+    padding: calc(8px + env(safe-area-inset-top)) 12px 0 56px;
   }
 
+  /* The metadata chips collapse to their counts in this block (the lineage
+     chip and the job badge), so the title floor is 140px. */
   .crumbs {
     display: flex;
-    min-width: 88px;
+    min-width: 140px;
   }
 
   /* The lineage chip stays: for a subagent session it carries that session's
      own title, and it is the only phone entry point into the subagent catalog
-     (the drawer and the session search filter subagent children out). At phone
-     widths `.crumbs` can clip it; the visible part stays tappable. */
+     (the drawer and the session search filter subagent children out). */
 
-  /* The actions give way by shrinking their own content (the preset label renders
-     nothing this narrow, the job badge ellipsizes). They must NOT clip: the job
-     badge's menu is absolutely positioned inside this box, so `overflow: hidden`
-     here would remove the popover from every phone header. */
+  /* The actions give way by shrinking their own content: the preset label
+     renders nothing this narrow, and the job badge renders its count alone in
+     its own phone block. They must NOT clip: the job badge's menu is absolutely
+     positioned inside this box, so `overflow: hidden` here would remove the
+     popover from every phone header. */
   .headerActions {
     flex: 0 1 auto;
     min-width: 0;

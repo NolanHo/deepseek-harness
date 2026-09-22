@@ -174,9 +174,27 @@ describe('ConversationRoot.module.css phone header', () => {
     const crumbs = phoneDeclarations('.crumbs')
     expect(crumbs.get('display'), '.crumbs must not be hidden on phones').not.toBe('none')
     // The floor is what keeps the title readable while the actions shrink; the
-    // title itself truncates through `.crumb`'s existing ellipsis.
+    // title itself truncates through `.crumb`'s existing ellipsis. The metadata
+    // chips collapse to their counts in this block, so the floor covers the
+    // title rather than sharing the row with two full labels.
     expect(px(crumbs, 'min-width'), '.crumbs needs a min-width floor so the title survives')
-      .toBeGreaterThanOrEqual(88)
+      .toBeGreaterThanOrEqual(140)
+  })
+
+  it("reserves the drawer opener's top safe-area inset on the phone header", () => {
+    // The frame's fixed drawer opener is `top: calc(8px + env(safe-area-inset-top))`
+    // (ui-layout AppFrame.module.css). On a device with a top inset (an installed
+    // app, or fullscreen with the shell's `viewport-fit=cover`) the header must
+    // carry the same inset: without it the button drops a whole status bar below
+    // the title row, and the title paints underneath the system bar.
+    const wide = mediaBody('@media (max-width: 767.98px)')
+    expect(wide, '@media (max-width: 767.98px) is missing from ConversationRoot.module.css').toBeDefined()
+    expect(declarationsIn(wide as string, '.header')?.get('padding-top'),
+      'the 768px block must reserve the top safe-area inset for the drawer opener')
+      .toBe('calc(10px + env(safe-area-inset-top))')
+    expect(phoneDeclarations('.header').get('padding'),
+      'the phone block must reserve the top safe-area inset for the drawer opener')
+      .toBe('calc(8px + env(safe-area-inset-top)) 12px 0 56px')
   })
 
   it('lets the header actions shrink instead of overflowing the row', () => {
@@ -221,6 +239,7 @@ describe('ConversationRoot.module.css phone header', () => {
     expect(['0', '0px'], '.headerCorner must stop reaching past the 12px phone padding')
       .toContain(corner.get('margin-right'))
     // Regression guard: the phone block already owns this padding and keeps it.
-    expect(phoneDeclarations('.header').get('padding')).toBe('8px 12px 0 56px')
+    expect(phoneDeclarations('.header').get('padding'))
+      .toBe('calc(8px + env(safe-area-inset-top)) 12px 0 56px')
   })
 })

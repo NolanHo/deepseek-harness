@@ -152,6 +152,9 @@ describe('SubagentHeaderLineage', () => {
     render(<SubagentHeaderLineage {...input} />)
     const trigger = screen.getByRole('button', { name: /2 个子代理/ })
     hoverCatalog(trigger)
+    // The phone block hides the count label and renders the descendant count
+    // alone; the trigger keeps the full localized accessible name.
+    expect(trigger.querySelector('[class*="countCompact"]')?.textContent).toBe('2')
 
     expect(input.setCatalogOpen).toHaveBeenCalledWith(PARENT, true)
     expect(screen.getAllByRole('treeitem')).toHaveLength(3)

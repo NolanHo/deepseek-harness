@@ -325,3 +325,22 @@
 .refresh:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
+
+/* Fork patch (FORK_SURFACE.md): the count alone, without the localized label.
+   The phone block below hides `.count` and renders this instead, so the lineage
+   chip keeps its number without spending the session title's width on the
+   words. The trigger's accessible name stays the full localized count, and the
+   `switcher` variant — a subagent session's own title — is untouched. */
+.countCompact {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .count {
+    display: none;
+  }
+
+  .countCompact {
+    display: inline;
+  }
+}

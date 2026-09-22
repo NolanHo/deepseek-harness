@@ -150,6 +150,10 @@ export function JobListAction({ sessionId, useSessions, t }: JobListActionProps)
       >
         {liveCount > 0 ? <StateDot state="ongoing" className={css.triggerDot} /> : null}
         <span className={css.count}>{countLabel}</span>
+        {/* Fork patch (FORK_SURFACE.md): the phone block hides the full label
+            and keeps this count, so the badge does not take the session
+            title's width. The accessible name stays `countLabel`. */}
+        <span className={css.countCompact}>{liveCount > 0 ? liveCount : jobs.length}</span>
         <IconChevronDownOutline14 className={open ? css.triggerOpen : undefined} />
       </button>
       {open

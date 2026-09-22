@@ -72,10 +72,16 @@ describe('JobListAction visibility', () => {
 
   it('counts only live jobs, and falls back to the total when none are live', () => {
     const { rerender } = render(<JobListAction {...props([job(), job({ id: 'bash-2' as JobView['id'] })])} />)
-    expect(screen.getByRole('button', { name: '2 个后台任务运行中' })).toBeDefined()
+    const live = screen.getByRole('button', { name: '2 个后台任务运行中' })
+    expect(live).toBeDefined()
+    // The phone block hides the label and renders this count alone; the toggle
+    // drops the words, not the number.
+    expect(live.querySelector('[class*="countCompact"]')?.textContent).toBe('2')
 
     rerender(<JobListAction {...props([job({ status: 'completed', finishedAt: START + 3_000 })])} />)
-    expect(screen.getByRole('button', { name: '1 个后台任务' })).toBeDefined()
+    const settled = screen.getByRole('button', { name: '1 个后台任务' })
+    expect(settled).toBeDefined()
+    expect(settled.querySelector('[class*="countCompact"]')?.textContent).toBe('1')
   })
 
   it('closes and unmounts when the last job disappears while the list is open', () => {

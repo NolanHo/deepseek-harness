@@ -1,8 +1,8 @@
 /**
- * JobListAction phone badge: the `@media (max-width: 560px)` block that keeps
- * the background-job count on one line. The desktop `.count` declares no
- * `white-space`, so the label wraps onto ~4 lines and takes the header row
- * from ~30px to 78px with it. Every assertion is scoped to that media body;
+ * JobListAction phone badge: the `@media (max-width: 560px)` block that replaces
+ * the localized count label with the bare count. The desktop label ("4
+ * background jobs") truncates to "4 bac…" in the phone header row and spends the
+ * width the session title needs. Every assertion is scoped to that media body;
  * the top-level rule scan used by the sibling style specs is brace-blind and
  * reports a `@media` prelude as if it were a selector over the whole file.
  */
@@ -15,7 +15,7 @@ const css = readFileSync(
   'utf8',
 )
 
-/** Prelude of the phone regime (spec: the badge narrows and ellipsizes, never wraps or grows). */
+/** Prelude of the phone regime (spec: the badge shows the count alone). */
 const PHONE_PRELUDE = '@media (max-width: 560px)'
 
 /**
@@ -96,32 +96,23 @@ function isRelativeWidth(value: string | undefined): boolean {
     .test(value)
 }
 
-/**
- * Shrink factor of a `flex` shorthand, including the components it omits.
- * @param flex - the shorthand text.
- * @returns the shrink factor as declared, or as defaulted by the shorthand.
- */
-function flexShrinkOf(flex: string): string {
-  const parts = flex.trim().split(/\s+/)
-  // `none` is 0 0 auto; every other shorthand defaults an omitted shrink to 1.
-  if (parts[0] === 'none') return '0'
-  return parts[1] ?? '1'
-}
-
 describe('JobListAction.module.css phone badge', () => {
-  it('declares the phone regime for viewports up to 560px', () => {
-    expect(phone, `${PHONE_PRELUDE} is missing from JobListAction.module.css`).toBeDefined()
+  it('drops the label words on phones and keeps the count alone', () => {
+    // The full localized label ("4 background jobs") truncates to "4 bac…" in
+    // the phone row and spends the width the session title needs; the badge
+    // renders the count in its own span and this block hides the label.
+    expect(phoneDeclarations('.count').get('display'),
+      '.count must not render in the phone row: the truncated label takes the session title’s width')
+      .toBe('none')
+    expect(phoneDeclarations('.countCompact').get('display'),
+      '.countCompact must render in the phone row so the badge still shows how many jobs run')
+      .toBe('inline')
   })
 
-  it('keeps the count label on one line and ellipsizes it', () => {
-    const count = phoneDeclarations('.count')
-    expect(count.get('white-space'),
-      '.count must not wrap: the wrapped "9 background jobs" label grew the phone header row to 78px')
-      .toBe('nowrap')
-    expect(['overflow', 'overflow-x'].some(property => count.get(property) === 'hidden'),
-      '.count needs a clipping box (overflow: hidden or overflow-x: hidden) for the ellipsis to render')
-      .toBe(true)
-    expect(count.get('text-overflow'), '.count must ellipsize the label it clips').toBe('ellipsis')
+  it('keeps the count-only span out of the desktop badge', () => {
+    expect(declarationsIn(css, '.countCompact')?.get('display'),
+      'the compact count is a phone presentation: the desktop badge keeps the full localized label')
+      .toBe('none')
   })
 
   it('lets the badge boxes shrink instead of pushing the row wider', () => {
@@ -129,7 +120,7 @@ describe('JobListAction.module.css phone badge', () => {
       '.root needs min-width: 0 so the badge shrinks inside the phone header actions')
       .toBe(true)
     expect(isZeroWidth(phoneDeclarations('.trigger').get('min-width')),
-      '.trigger needs min-width: 0 so the nowrap count can ellipsize instead of widening the row')
+      '.trigger needs min-width: 0 so the badge shrinks inside the phone header actions')
       .toBe(true)
   })
 
@@ -137,25 +128,13 @@ describe('JobListAction.module.css phone badge', () => {
     const trigger = phoneDeclarations('.trigger')
     const bound = trigger.get('max-width') ?? trigger.get('width')
     // `.trigger` is an inline-flex box inside the shrinking `.root`: without a
-    // width bound its shrink-to-fit resolves to the nowrap label's min-content
-    // and it overflows the containing block instead of narrowing, so the
-    // ellipsis above never engages.
+    // width bound its shrink-to-fit resolves to its content's min-content width
+    // and it overflows the containing block instead of narrowing.
     expect(isRelativeWidth(bound),
       '.trigger must declare a width bound relative to its containing block (`max-width: 100%`, or a '
       + 'width/max-width in relative units): unbounded, the inline-flex trigger grows past the shrunk '
       + '`.root` and the badge overflows the phone header row (declared max-width: '
       + `${trigger.get('max-width')}, width: ${trigger.get('width')})`)
-      .toBe(true)
-
-    const count = phoneDeclarations('.count')
-    const flex = count.get('flex')
-    const shrink = count.get('flex-shrink') ?? (flex === undefined ? undefined : flexShrinkOf(flex))
-    // A flex item defaults to `min-width: auto`, so the nowrap label keeps its
-    // full min-content width and the clipping box has nothing to ellipsize.
-    expect(isZeroWidth(count.get('min-width')) || shrink === '1',
-      '.count must declare min-width: 0 (or flex-shrink: 1 / `flex: 0 1 auto`) so the nowrap label can '
-      + 'narrow below its min-content width and the ellipsis engages (declared min-width: '
-      + `${count.get('min-width') ?? 'unset, i.e. auto'}, flex: ${count.get('flex') ?? 'unset'})`)
       .toBe(true)
   })
 

@@ -758,6 +758,11 @@ function CatalogDropdown({
                 </span>
               )}
               <span className={css.count}>{t(totalCountKey, { count: descendantCount })}</span>
+              {/* Fork patch (FORK_SURFACE.md): the phone block hides the full
+                  count label and keeps this number, so the chip does not take
+                  the session title's width. The accessible name stays the
+                  localized count. */}
+              <span className={css.countCompact}>{descendantCount}</span>
             </>
           )}
         {variant === 'switcher'
