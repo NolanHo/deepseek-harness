@@ -325,14 +325,9 @@
   color: #CFD3D6;
 }
 
-.hoverStatus {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  line-height: 20px;
-  color: #ADB2B8;
-}
+/* Fork patch (FORK_SURFACE.md): the session-row hover card is deleted, so its
+   status row goes with it; the Workspace card above keeps `.hoverContent`,
+   `.hoverTitle`, `.hoverPath`, and `.hoverTime`. */
 
 .iconButton {
   flex: none;

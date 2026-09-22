@@ -2,8 +2,8 @@
  * Workspace browser tree row components (figma Cell set 14:3080): pure presentational —
  * all data and callbacks arrive via props. Hover swaps (folder->chevron,
  * time->ellipsis, action buttons) are CSS-only. Row ... menus are visual-only
- * except workspace Rename/Delete and session Rename/Fork/Archive; the session
- * and workspace hover cards are suppressed while a menu is open.
+ * except workspace Rename/Delete and session Rename/Fork/Archive; a row's hover
+ * card is suppressed while its menu is open.
  */
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
@@ -31,12 +31,6 @@ function displayTitle(node: SessionNode, t: RowTranslate): string {
 function timeLabel(updatedAt: number, now: number, t: RowTranslate): string {
   const { unit, n } = relativeTime(updatedAt, now)
   return unit === 'now' ? t('time.now') : t(`time.${unit}`, { n })
-}
-
-/** Hover-card variant: distances wrap in the ago template; the now bucket stays bare (no "now ago"). */
-function hoverTimeLabel(updatedAt: number, now: number, t: RowTranslate): string {
-  const { unit, n } = relativeTime(updatedAt, now)
-  return unit === 'now' ? t('time.now') : t('time.ago', { t: t(`time.${unit}`, { n }) })
 }
 
 /**
@@ -295,25 +289,6 @@ function ActiveScheduleIndicator({ t, search = false }: { t: RowTranslate; searc
   )
 }
 
-/** Hover-card body: full title, relative time, and every relevant live status. */
-function SessionHoverContent({ node, now, t }: { node: SessionNode; now: number; t: RowTranslate }) {
-  const statuses = sessionStatuses(node, t)
-  return (
-    <div className={css.hoverContent}>
-      <div className={css.hoverTitle}>{displayTitle(node, t)}</div>
-      {/* Same placeholder rule as the row's trailing cell: no timestamp
-          before the first prompt. */}
-      {!node.blank && <div className={css.hoverTime}>{hoverTimeLabel(node.updatedAt, now, t)}</div>}
-      {statuses.map(status => (
-        <div className={css.hoverStatus} key={status.label}>
-          <StateDot state={status.state} />
-          <span>{status.label}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 /**
  * One flat search result: title, Workspace context, and optional content
  * excerpt. Search navigation opens the session only; it does not address an
@@ -500,14 +475,8 @@ export function SessionNodeItem({
       )}
     </div>
   )
-  return (
-    <HoverCard
-      anchor={ownRow}
-      content={<SessionHoverContent node={node} now={now} t={t} />}
-      disabled={menuOpen || drag?.active === true}
-      copyText={row.blank ? undefined : row.title}
-      copyLabel={t('copy')}
-      copiedLabel={t('hover.copied')}
-    />
-  )
+  // Fork patch (FORK_SURFACE.md): this deployment drops the session-row hover
+  // card — the row itself carries the title, relative time, and status dot —
+  // and renders the bare row here; the Workspace-row card above stays upstream's.
+  return ownRow
 }

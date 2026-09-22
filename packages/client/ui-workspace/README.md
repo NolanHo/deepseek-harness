@@ -69,9 +69,9 @@ Each registration declares a **directory-flow child hole** (`single` kind: `conv
 
 Once the Workspace list baseline is ready, browser-persisted expansion and Session-order records retain only current Workspace ids plus Ungrouped and the flat-list account. Real Workspaces initialize from `WorkspaceView.sessionIds`, while Ungrouped and the cross-Workspace flat list initialize from recency. The shared sidebar projection hides rows whose durable Session summary has `origin: 'subagent'`, and each visible ordinary row inherits the blue activity indicator while any descendant reached through uninterrupted subagent-origin lineage is running. The same pure derivation reads the Schedule key from list projection values for grouped, flat, and search nodes; the package uses only the type-only `@deepseek-ai/dsh-schedule/client` dependency and does not import the Schedule runtime or `ui-schedule`.
 
-### Hover cards
+### Workspace hover card
 
-Workspace and Session hover cards copy the value their row clips: activating a Workspace card writes its full directory path, while activating a non-blank Session card writes its full display title. A provisional blank New Session card remains read-only because its localized label is a placeholder rather than session content.
+A Workspace row's hover card copies the value its row clips: activating it writes the full directory path. Session rows carry no hover card — the row itself shows the title, relative time, and status ([decision](../../../.agents/notes/implemented/simplification/2026-09-22-session-hover-card-removal.md)).
 
 </details>
 

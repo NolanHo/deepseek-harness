@@ -68,7 +68,8 @@ export const zh = {
   'time.days': '{n}天',
   'time.months': '{n}个月',
   'time.years': '{n}年',
-  'time.ago': '{t}前',
+  // Fork patch (FORK_SURFACE.md): the ago template is deleted with the
+  // session-row hover card that was its only consumer.
 } satisfies Record<string, string>
 
 /** The workspace namespace key union. */
@@ -138,5 +139,6 @@ export const en = {
   'time.days': '{n}d',
   'time.months': '{n}mo',
   'time.years': '{n}y',
-  'time.ago': '{t} ago',
+  // Fork patch (FORK_SURFACE.md): the ago template is deleted with the
+  // session-row hover card that was its only consumer.
 } satisfies Record<WorkspaceKey, string>

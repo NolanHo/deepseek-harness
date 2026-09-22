@@ -5,11 +5,11 @@
 // trip over the real wire (workspace.rename RPC + durable registry), the
 // duplicate-name pre-check, the
 // flat "In one list" view with its persisted group-by preference, the session
-// hover card and row action menu, and the session archive round trip (row
+// row action menu, and the session archive round trip (row
 // menu → workspace.archiveSession RPC → durable global set → row hidden
 // across reload). Zero model calls: workspace.create/rename/archiveSession
 // are host RPCs with no model involvement, and the one session row the
-// flat/hover/menu/archive scenarios need comes from a seeded fixture (the
+// flat/menu/archive scenarios need comes from a seeded fixture (the
 // seeded-history seed reused verbatim — no new recording).
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -132,7 +132,7 @@ describe('web e2e: workspace management (create / rename / flat view / hover aff
 
   beforeAll(async () => {
     scaffold = await launchWebScaffold({})
-    // Seed one cold session (Ungrouped bucket) for the flat view + hover card.
+    // Seed one cold session (Ungrouped bucket) for the flat view + row menu.
     const sessionCwd = join(scaffold.workspaceCwd, 'workspace')
     await mkdir(sessionCwd, { recursive: true })
     await writeFile(join(sessionCwd, 'a.txt'), 'alpha\n')
@@ -526,41 +526,8 @@ describe('web e2e: workspace management (create / rename / flat view / hover aff
     return rows.first()
   }
 
-  it('shows the session hover card after a dwell on the row', async () => {
-    onTestFailed(() => saveFailureShot(page, 'web-e2e-ws-hover'))
-    // Dwell on the seeded row; the card opens after a 500ms hover delay,
-    // portaled to body.
-    const sessionRow = await seededSessionRow()
-    const rowTitle = await sessionRow.locator('[class*="title"]').innerText()
-    await sessionRow.hover()
-    // Card content: the full title plus the Idle status line (no aria role —
-    // text anchors are the stable selector).
-    await expect.poll(() => page.getByText('Idle', { exact: true }).count(), { timeout: 5_000 }).toBeGreaterThanOrEqual(1)
-    // The card is REACHABLE: it sits 8px off the row, so getting to it means
-    // crossing ground that belongs to neither. Hovering it must not dismiss
-    // it — the hazard this scenario pins.
-    const card = page.getByRole('button', { name: `Copy: ${rowTitle}` })
-    await card.hover()
-    await page.waitForTimeout(POINTER_HOLD_MS)
-    expect(await page.getByText('Idle', { exact: true }).count()).toBeGreaterThanOrEqual(1)
-    // The full title is the card's primary value: activating anywhere on the
-    // card writes it through the browser clipboard and localizes the success
-    // feedback through the English locale seat.
-    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
-    const cardHeight = (await card.boundingBox())?.height
-    await card.click()
-    const copied = page.getByRole('status').getByText('Copied', { exact: true })
-    await copied.waitFor({ timeout: 5_000 })
-    await page.waitForTimeout(POINTER_HOLD_MS)
-    expect((await card.boundingBox())?.height).toBe(cardHeight)
-    expect(await copied.isVisible()).toBe(true)
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(rowTitle)
-    // Leaving anchor and card together closes it after the grace.
-    await page.getByRole('button', { name: 'Settings' }).hover()
-    await expect.poll(() => card.count(), { timeout: 5_000 }).toBe(0)
-    expect(tripwire.pageErrors).toEqual([])
-  }, 60_000)
-
+  // Fork patch (FORK_SURFACE.md): upstream's session-hover-card dwell and copy
+  // case is deleted here — this deployment renders no session hover card.
   it('keeps an open row menu up while the pointer moves between trigger and list', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-ws-row-menu'))
     const sessionRow = await seededSessionRow()

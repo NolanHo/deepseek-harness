@@ -69,9 +69,9 @@ Session 行渲染运行时的实时 `pendingInteraction` 分类：审批显示**
 
 Workspace 列表基线就绪后，浏览器持久化的展开状态与 Session 顺序记录只保留当前 Workspace id、Ungrouped 与单列表记账。真实 Workspace 从 `WorkspaceView.sessionIds` 初始化，Ungrouped 与跨 Workspace 单列表从最近更新时间顺序初始化。共享侧边栏投影会隐藏持久化 Session 摘要中带有 `origin: 'subagent'` 的行；每个可见普通行都会在经不间断的 subagent 谱系可达的任一后代运行时继承蓝色活动指示器。同一份纯派生还会为分组、平铺与搜索节点读取列表 projection value 中的 Schedule key；本包只使用纯类型依赖 `@deepseek-ai/dsh-schedule/client`，不会导入 Schedule runtime 或 `ui-schedule`。
 
-### 悬浮卡片
+### Workspace 悬浮卡片
 
-Workspace 与 Session 悬浮卡片会复制对应行被截断的值：激活 Workspace 卡片会写入其完整目录路径，激活非空白 Session 卡片则会写入其完整显示标题。临时的空白「新会话」卡片保持只读，因为其本地化标签是占位文案，并非会话内容。
+Workspace 行的悬浮卡片会复制该行被截断的值：激活卡片会写入完整目录路径。Session 行不再有悬浮卡片——标题、相对时间与状态都由该行自身呈现（[决策](../../../.agents/notes/implemented/simplification/2026-09-22-session-hover-card-removal.zh.md)）。
 
 </details>
 
