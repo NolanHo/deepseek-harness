@@ -27,6 +27,7 @@ import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contra
 import { UiWorkspaceService } from './navigation.ts'
 // Fork patch (FORK_SURFACE.md): the session-row `⋯` menu contribution registry.
 import { createSessionRowMenu } from './fork/session-row-menu.ts'
+import type { SessionRowMenuContribution } from './fork/session-row-menu.ts'
 import { createWorkspaceViewStore } from './stores.ts'
 import { WorkspaceBrowser } from './rows/WorkspaceBrowser.tsx'
 import { WorkspacePicker } from './WorkspacePicker.tsx'
@@ -83,6 +84,12 @@ export function apply(ctx: Context): void {
   // an out-of-tree plugin injects `sessionRowMenu` and adds its own row.
   const sessionRowMenu = createSessionRowMenu()
   ctx.provide('sessionRowMenu', sessionRowMenu)
+  // One hoisted source, like `hostInfo` above: the hook binding is cached per
+  // source identity, so the inject factory must not mint a new object per call.
+  const sessionRowMenuSource: HostObservable<readonly SessionRowMenuContribution[]> = {
+    getSnapshot: () => sessionRowMenu.snapshot(),
+    subscribe: listener => sessionRowMenu.subscribe(listener),
+  }
 
   const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
     const result = await sessions.search(query, signal)
@@ -141,10 +148,7 @@ export function apply(ctx: Context): void {
       hostInfo,
       // Fork patch (FORK_SURFACE.md): the session-row `⋯` menu contribution
       // source; the renderer binds it into the browser's useSessionRowMenu seat.
-      sessionRowMenu: {
-        getSnapshot: () => sessionRowMenu.snapshot(),
-        subscribe: listener => sessionRowMenu.subscribe(listener),
-      },
+      sessionRowMenu: sessionRowMenuSource,
     },
   })
   const pickerInjected = (): WorkspacePickerInjected => ({

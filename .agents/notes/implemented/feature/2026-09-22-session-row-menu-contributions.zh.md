@@ -23,6 +23,8 @@
 
 `Menu` 的单层悬停子菜单无需改动：`MenuItem.submenu` 是上游能力，延后动作所需的第二层本就存在。
 
+贡献的 `label` 接受 thunk，并在行构建菜单项处重新求值。注册者不能在注册时固化本地化文案：`apply` 运行时客户端 locale 服务仍持其 provisional 值，在那里读取的标签会冻结在引导语言上。该规则与 slot 的 `label` 选项一致。
+
 ## 考虑过的替代方案
 
 **为菜单项开一个 slot。** slot 渲染 React 节点，而 `Menu` 渲染数据数组。slot 要么把行菜单推上它并不使用的 React 组合路径，要么要求注册者渲染原语无法消费的 `MenuItem` 形状节点。

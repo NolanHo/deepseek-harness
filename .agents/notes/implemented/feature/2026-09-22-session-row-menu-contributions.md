@@ -23,6 +23,8 @@ Add one contribution point, owned by the fork module `packages/client/ui-workspa
 
 `Menu`'s one-level hover submenu needs no change: `MenuItem.submenu` is upstream, so the second level the deferral action needs already exists.
 
+A contribution's `label` accepts a thunk and is re-read where the row builds its menu items. The registrant cannot bake localized copy at registration time: the client locale service still carries its provisional value while `apply` runs, so a label read there freezes in the bootstrap language. The rule matches the slot `label` option's.
+
 ## Alternatives considered
 
 **A slot for menu items.** Slots render React nodes; `Menu` renders a data array. A slot would either force the row menu onto a React composition path it does not use, or ask registrants to render `MenuItem`-shaped nodes the primitive cannot consume.

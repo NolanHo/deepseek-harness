@@ -200,6 +200,45 @@ describe('ui-workspace apply', () => {
     unsubscribe()
   })
 
+  it('drops a contribution when the fiber that registered it disposes', async () => {
+    const b = await bench()
+    declare(b.slots, 'sidebar.workspaces')
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const source = (b.slots.entries('sidebar.workspaces')[0]!.inject as () => WorkspaceBrowserInjected)()
+      .hooks.sessionRowMenu
+    const notified = vi.fn()
+    const unsubscribe = source.subscribe(notified)
+    const registry = b.ctx.get('sessionRowMenu')
+    const fiber = await b.ctx.plugin({
+      apply: (child: Context) => {
+        child.effect(
+          () => registry!.register({ id: 'snooze', label: '延后提醒', submenu: () => [], onSelect: vi.fn() }),
+          'test: contribution',
+        )
+      },
+    })
+    expect(source.getSnapshot()).toHaveLength(1)
+
+    await fiber.dispose()
+
+    expect(source.getSnapshot()).toEqual([])
+    expect(notified).toHaveBeenCalledTimes(2)
+    unsubscribe()
+  })
+
+  it('rejects contribution ids the row cannot address or dispatch', async () => {
+    const b = await bench()
+    declare(b.slots, 'sidebar.workspaces')
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const registry = b.ctx.get('sessionRowMenu')!
+
+    for (const id of ['', 'rename', 'fork', 'archive', 'a\u0000b']) {
+      expect(() => registry.register({ id, label: id, submenu: () => [], onSelect: vi.fn() }), id)
+        .toThrow(/unusable contribution id/)
+    }
+    expect(registry.snapshot()).toEqual([])
+  })
+
   it('rejects the browser search callback on a Session Controller business error', async () => {
     const b = await bench()
     b.search.mockImplementationOnce(async () => ({

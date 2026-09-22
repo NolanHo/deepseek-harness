@@ -31,6 +31,10 @@ export interface SessionRowMenuContribution {
   /**
    * Submenu leaves for one session, evaluated per render. An empty array hides
    * the contribution row for that session.
+   *
+   * Must be pure and cheap: the row calls it during every render, not only
+   * when its menu opens, so a registrant reads its own live snapshot here
+   * rather than subscribing the row to it.
    * @param sessionId - The row's Session id.
    * @returns The leaves this contribution offers for that Session.
    */
@@ -49,6 +53,8 @@ export interface SessionRowMenuService {
    * Register one contribution.
    * @param contribution - The menu row and its per-session leaves.
    * @returns The disposer that removes this contribution.
+   * @throws when the id is empty, carries the leaf namespace separator, or
+   *   collides with a built-in row id — ids the row cannot address or dispatch.
    */
   register(contribution: SessionRowMenuContribution): () => void
 }
@@ -87,8 +93,13 @@ export function createSessionRowMenu(): SessionRowMenuHandle {
     current = undefined
     for (const listener of listeners) listener()
   }
+  /** Built-in rows a contribution id must not shadow (same items array). */
+  const RESERVED_IDS = new Set(['rename', 'fork', 'archive'])
   return {
     register: (contribution) => {
+      if (contribution.id === '' || contribution.id.includes('\u0000') || RESERVED_IDS.has(contribution.id)) {
+        throw new Error(`sessionRowMenu: unusable contribution id "${contribution.id}"`)
+      }
       if (contributions.has(contribution.id)) {
         throw new Error(`sessionRowMenu: duplicate contribution id "${contribution.id}"`)
       }
