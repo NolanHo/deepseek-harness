@@ -74,7 +74,7 @@ kind: "package-reference"
 - [ui-settings-plugins](../ui-settings-plugins/README.zh.md)——「插件」分区及其可配置宿主平面卡片。
 - [ui-settings-models](../ui-settings-models/README.zh.md)——建立在本底座之上的 Models 页面与 DeepSeek 引导。
 - [settings](../../settings/README.zh.md)——持久化用户设置 seam 及其文件提供方。
-- [ui-sidebar](../ui-sidebar/README.zh.md)——底部席位承载设置触发控件的侧边栏外壳。
+- [ui-sidebar](../ui-sidebar/README.zh.md)——在栏页脚承载设置触发控件、手机抽屉中改放品牌行的侧边栏外壳。
 
 -----
 

@@ -108,6 +108,23 @@
   justify-content: flex-start;
 }
 
+/* Fork patch (FORK_SURFACE.md): the phone drawer hosts the settings seat in
+   the brand row. The row packs from the leading edge — brand, then the seat —
+   and the toggle stays pinned to the trailing edge; the brand stops growing so
+   the seat lands directly beside it rather than at the far end, and the blank
+   beside the brand is not a New Session target. */
+.drawerLogoRow {
+  justify-content: flex-start;
+}
+
+.drawerLogoRow .brand {
+  flex: 0 1 auto;
+}
+
+.drawerLogoRow .toggle {
+  margin-left: auto;
+}
+
 /* Brand group (figma I133:7632): the full wordmark rides the text ink
    (figma flows: the main-screen instance is black; blue is brand
    emphasis only). A button only in behavior (New Session shortcut): the

@@ -33,7 +33,7 @@ type AttentionSnapshot = Parameters<Parameters<SidebarRootComponentProps['useSes
 const noAttention: AttentionSnapshot = new Map()
 const useSessionPendingInteraction: SidebarRootComponentProps['useSessionPendingInteraction'] = selector => selector(noAttention)
 
-function mountShell({ collapsed = false, width = 300 }: { collapsed?: boolean; width?: number } = {}) {
+function mountShell({ collapsed = false, width = 300, mobile = false }: { collapsed?: boolean; width?: number; mobile?: boolean } = {}) {
   const startSession = vi.fn()
   const toggleSidebar = vi.fn()
   let regionOwner: SidebarSectionOwnerProps | undefined
@@ -41,10 +41,10 @@ function mountShell({ collapsed = false, width = 300 }: { collapsed?: boolean; w
   let footerActionOwner: SidebarFooterActionOwnerProps | undefined
   const brandMark = <span data-testid="custom-brand-mark">M</span>
   const brandName = <span data-testid="custom-brand-name">Custom Brand</span>
-  let current = { collapsed, width }
+  let current = { collapsed, width, mobile }
   const root = () => (
     <SidebarRoot
-      collapsed={current.collapsed} width={current.width}
+      collapsed={current.collapsed} width={current.width} mobile={current.mobile}
       useSessions={neverHook} useSessionPendingInteraction={useSessionPendingInteraction}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
       useResource={useResource} useWorkspaces={neverHook}
@@ -110,7 +110,7 @@ describe('SidebarRoot shell', () => {
     vi.stubEnv('DSH_CLIENT_GIT_DIRTY', 'true')
     vi.stubEnv('DSH_CLIENT_VERSION', '1.2.3-rc.4')
     const { container } = render(<SidebarRoot
-      collapsed={false} width={300}
+      collapsed={false} width={300} mobile={false}
       useSessions={neverHook} useSessionPendingInteraction={useSessionPendingInteraction}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
       useResource={useResource} useWorkspaces={neverHook}
@@ -130,7 +130,7 @@ describe('SidebarRoot shell', () => {
   ])('omits unavailable build-version suffixes from %j', (environment, expected) => {
     for (const [name, value] of Object.entries(environment)) vi.stubEnv(name, value)
     render(<SidebarRoot
-      collapsed={false} width={300}
+      collapsed={false} width={300} mobile={false}
       useSessions={neverHook} useSessionPendingInteraction={useSessionPendingInteraction}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
       useResource={useResource} useWorkspaces={neverHook}
@@ -145,7 +145,7 @@ describe('SidebarRoot shell', () => {
 
   it('retains the local-build fallback without complete build metadata', () => {
     render(<SidebarRoot
-      collapsed={false} width={300}
+      collapsed={false} width={300} mobile={false}
       useSessions={neverHook} useSessionPendingInteraction={useSessionPendingInteraction}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
       useResource={useResource} useWorkspaces={neverHook}
@@ -187,5 +187,48 @@ describe('SidebarRoot shell', () => {
     const b = mountShell({ collapsed: true })
     expect(b.regionOwner().wide).toBe(false)
     expect(screen.getByRole('button', { name: 'Open sidebar' })).toBeTruthy()
+  })
+})
+
+// Fork patch (FORK_SURFACE.md): the phone drawer renders the settings seat in
+// its brand row instead of the column foot.
+describe('SidebarRoot settings seat regime', () => {
+  /** The column toggle and the brand row holding it. */
+  function brandRow(): { toggle: HTMLElement; row: HTMLElement } {
+    const toggle = screen.getByRole('button', { name: 'Collapse sidebar' })
+    const row = toggle.parentElement
+    if (row === null) throw new Error('the column toggle has no parent row')
+    return { toggle, row }
+  }
+
+  it('moves the settings seat into the brand row ahead of the toggle while mobile', () => {
+    const b = mountShell({ mobile: true })
+    const { toggle, row } = brandRow()
+    const seats = screen.getAllByTestId('settings-seat')
+    expect(seats).toHaveLength(1)
+    const seat = seats[0]!
+    expect(seat.parentElement).toBe(row)
+    // Inside the brand row the order is brand button, settings seat, column toggle.
+    const brandButton = screen.getAllByRole('button', { name: 'New session' })
+      .find(button => button.parentElement === row)
+    expect(brandButton).toBeDefined()
+    expect(seat.previousElementSibling).toBe(brandButton)
+    expect(seat.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(b.settingsOwner()).toEqual({ wide: false })
+    // The drawer row keeps the brand from growing; without this class the seat
+    // would sit at the trailing edge instead of beside the brand.
+    expect(row.className).toContain('drawerLogoRow')
+  })
+
+  it('keeps the foot-mounted settings seat wide and out of the brand row on desktop', () => {
+    const b = mountShell()
+    const { row } = brandRow()
+    const seats = screen.getAllByTestId('settings-seat')
+    expect(seats).toHaveLength(1)
+    const seat = seats[0]!
+    expect(b.settingsOwner()).toEqual({ wide: true })
+    expect(seat.parentElement).not.toBe(row)
+    expect(row.contains(seat)).toBe(false)
+    expect(row.className).not.toContain('drawerLogoRow')
   })
 })

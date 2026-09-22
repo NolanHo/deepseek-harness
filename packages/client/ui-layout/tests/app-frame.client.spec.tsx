@@ -2,7 +2,7 @@
 /** Frame interactions with a real store and explicitly driven browser measurements. */
 import type { GlobalStandardProps, RenderOpts } from '@deepseek-ai/dsh-client-ui-slots'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import { AppFrame } from '../src/client/AppFrame.tsx'
 import type { AppFrameProps } from '../src/client/AppFrame.tsx'
@@ -201,7 +201,9 @@ describe('AppFrame', () => {
   it('renders owner props for the default sidebar and prospective right panel', () => {
     const { frame, rightOwner, sidebarOwner, slotCalls } = mountFrame()
     expect(tracks(frame)).toEqual([280, 0])
-    expect(sidebarOwner()).toEqual({ collapsed: false, width: 280 })
+    expect(sidebarOwner()).toEqual({ collapsed: false, width: 280, mobile: false })
+    // The regime is part of the owner share: required, and stated on every render.
+    expectTypeOf<SidebarOwnerProps['mobile']>().toEqualTypeOf<boolean>()
     expect(rightOwner()).toEqual({ width: 864, viewportWidth: 1920, canShow: true })
     expect(slotCalls.find(c => c.key === 'main')).toEqual({ key: 'main', props: {}, options: { entryKey: 'conversation' } })
   })
@@ -226,7 +228,7 @@ describe('AppFrame', () => {
     const { frame, instance, sidebarOwner, getByTestId } = mountFrame()
     act(() => { instance.actions.toggleSidebar() })
     expect(tracks(frame)).toEqual([56, 0])
-    expect(sidebarOwner()).toEqual({ collapsed: true, width: 56 })
+    expect(sidebarOwner()).toEqual({ collapsed: true, width: 56, mobile: false })
     expect(getByTestId('sidebar-content')).toBeTruthy()
     expect(frame.querySelector('[data-side="sidebar"]')).toBeNull()
   })
@@ -444,6 +446,8 @@ describe('AppFrame right panel presentation', () => {
   })
 })
 
+// Fork patch (FORK_SURFACE.md): the phone drawer regime and its hand-off of the
+// `mobile` owner flag.
 describe('AppFrame mobile drawer regime', () => {
   /** The drawer box wrapping the sidebar occupant's slot content. */
   function drawer(frame: HTMLElement): HTMLElement {
@@ -462,9 +466,19 @@ describe('AppFrame mobile drawer regime', () => {
     expect(frame.style.gridTemplateColumns).toBe('minmax(0, 1fr)')
     expect(drawer(frame).dataset.open).toBeUndefined()
     expect(opener(frame)).not.toBeNull()
-    expect(sidebarOwner()).toEqual({ collapsed: false, width: DRAWER_WIDTH })
+    expect(sidebarOwner()).toEqual({ collapsed: false, width: DRAWER_WIDTH, mobile: true })
     expect(instance.getSnapshot().layoutInfo.mobile).toBe(true)
     expect(frame.querySelector('[data-side="sidebar"]')).toBeNull()
+  })
+
+  it('hands the sidebar occupant the drawer regime and clears it above the breakpoint', () => {
+    frameWidth = 700
+    const { sidebarOwner } = mountFrame()
+    expect(sidebarOwner().mobile).toBe(true)
+    // Crossing back above the breakpoint re-renders the column occupant from
+    // the desktop owner props, so the drawer flag must clear with the regime.
+    resize(1280)
+    expect(sidebarOwner().mobile).toBe(false)
   })
 
   it('opens the drawer from the frame-owned opener and closes it on Escape', () => {

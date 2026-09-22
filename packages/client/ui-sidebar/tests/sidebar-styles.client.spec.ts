@@ -72,4 +72,11 @@ describe('SidebarRoot.module.css', () => {
     expect(declarations('.fallbackBrandName')?.get('font-size')).toBe('17px')
     expect(declarations('.fallbackBrandName')?.get('white-space')).toBe('nowrap')
   })
+
+  // Fork patch (FORK_SURFACE.md): the phone drawer's brand row.
+  it('packs the phone drawer brand row from the leading edge around the settings seat', () => {
+    expect(declarations('.drawerLogoRow')?.get('justify-content')).toBe('flex-start')
+    expect(declarations('.drawerLogoRow .brand')?.get('flex')).toBe('0 1 auto')
+    expect(declarations('.drawerLogoRow .toggle')?.get('margin-left')).toBe('auto')
+  })
 })

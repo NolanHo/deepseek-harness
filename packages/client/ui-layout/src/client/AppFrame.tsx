@@ -199,6 +199,7 @@ export function AppFrame({
   const sidebar = useMemo(() => renderSlot('sidebar', {
     collapsed: sidebarCollapsed,
     width: cols.sidebar,
+    mobile: false,
   }), [renderSlot, sidebarCollapsed, cols.sidebar])
   const main = useMemo(() => (
     <MainPanel usePanelInfo={usePanelInfo} renderSlot={renderSlot} />
@@ -236,7 +237,7 @@ export function AppFrame({
             onClose={closeDrawer}
             openLabel={t('sidebar.open')}
           >
-            {renderSlot('sidebar', { collapsed: false, width: DRAWER_WIDTH })}
+            {renderSlot('sidebar', { collapsed: false, width: DRAWER_WIDTH, mobile: true })}
           </MobileNavChrome>
         )
         : <div className={css.sidebarCol}>{sidebar}</div>}

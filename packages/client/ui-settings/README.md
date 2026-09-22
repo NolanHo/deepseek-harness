@@ -74,7 +74,7 @@ These pages cover the settings surface family and the durable seam behind it.
 - [ui-settings-plugins](../ui-settings-plugins/README.md) — the Plugins section and its configurable host-plane cards.
 - [ui-settings-models](../ui-settings-models/README.md) — the Models page and DeepSeek onboarding over this base.
 - [settings](../../settings/README.md) — the durable user-settings seam and its file provider.
-- [ui-sidebar](../ui-sidebar/README.md) — the sidebar shell whose bottom seat hosts the settings trigger.
+- [ui-sidebar](../ui-sidebar/README.md) — the sidebar shell hosting the settings trigger at its column foot, or in the phone drawer's brand row.
 
 -----
 

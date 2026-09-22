@@ -55,8 +55,9 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * the seats it declares disappear with it. To add something to the
      * sidebar, register into one of those inner seats instead.
      *
-     * The occupant receives the frame's live column state (collapsed, width)
-     * and is expected to render the compact control rail while collapsed.
+     * The occupant receives the frame's live column state (collapsed, width,
+     * mobile) and is expected to render the compact control rail while
+     * collapsed; mobile marks the phone overlay drawer instead of a track.
      */
     'sidebar': { kind: 'single'; scope: 'root'; owner: SidebarOwnerProps }
     /**
@@ -104,6 +105,10 @@ export interface SidebarOwnerProps {
   collapsed: boolean
   /** Rendered column width in px (SIDEBAR_COLLAPSED when collapsed). */
   width: number
+  // Fork patch (FORK_SURFACE.md): the phone overlay drawer is the fork's regime
+  // (fork/mobile-shell.tsx); upstream's frame only collapses to a rail.
+  /** True when the frame renders this column inside the phone overlay drawer. */
+  mobile: boolean
 }
 
 /** Right column owner share: resolved normal geometry and opening eligibility. */

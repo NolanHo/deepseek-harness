@@ -5,11 +5,13 @@
  * while the sliding column (AppFrame grid tracks) clips it — nothing reflows
  * mid-slide. At settle the wide-only content unmounts and the upper
  * controls enter the 56px rail from the same horizontal offset (one icon each,
- * same top-down order) on one fade that ends with the slide. The bottom-pinned
+ * same top-down order) on one fade that ends with the slide. The column's
  * settings control only fades. The workspace/session browsing region between
- * global panel rows and the foot is the `sidebar.workspaces` registrant's,
- * and the foot holds `sidebar.settings` plus `sidebar.footer.action`; the shell
- * hands them the wide flag (plus an expand request callback for the browser).
+ * global panel rows and the foot is the `sidebar.workspaces` registrant's; the
+ * foot holds `sidebar.settings` plus `sidebar.footer.action`, except in the
+ * phone drawer, where the settings seat renders beside the brand. The shell
+ * hands every seat the wide flag (plus an expand request callback for the
+ * browser).
  *
  * The column also owns whether the scroll regions nested in it draw a
  * scrollbar at all: the shell tracks the pointer and rebinds ui-theme's
@@ -88,6 +90,7 @@ function PanelRow({ id, label, wide, usePanelInfo, selectPanel, renderSlot }: Pa
 export function SidebarRoot({
   collapsed,
   width,
+  mobile,
   startSession,
   toggleSidebar,
   selectPanel,
@@ -178,7 +181,7 @@ export function SidebarRoot({
       }}
       onPointerLeave={() => { armLinger() }}
     >
-      <div className={css.logoRow}>
+      <div className={clsx(css.logoRow, mobile && css.drawerLogoRow)}>
         {/* Expanded, the brand doubles as a New Session shortcut; the
             collapsed rail's logo is the expand toggle below instead. */}
         {wide && (
@@ -207,6 +210,10 @@ export function SidebarRoot({
             </span>
           </button>
         )}
+        {/* Fork patch (FORK_SURFACE.md): the phone drawer hosts the settings
+            seat in the brand row beside the brand, clear of the foot's thumb
+            zone; only the compact presentation fits that row. */}
+        {mobile && renderSlot('sidebar.settings', { wide: false })}
         {/* Rail resting state is the whale mark; hovering swaps in the panel
             icon (the expand affordance, figma sidebar-hover flow). */}
         <Tooltip label={collapsed ? t('toggle.open') : t('toggle.collapse')} delayMs={500}>
@@ -265,14 +272,17 @@ export function SidebarRoot({
         })}
       </div>
 
-      {/* Footer actions stack above Settings in both sidebar widths. */}
+      {/* Footer actions stack above Settings outside the phone drawer, which
+          moves the settings seat into the brand row. */}
       <div className={css.footArea}>
         <div className={css.footerActions}>
           {renderSlot('sidebar.footer.action', { wide })}
         </div>
-        <div className={css.settingsArea}>
-          {renderSlot('sidebar.settings', { wide })}
-        </div>
+        {!mobile && (
+          <div className={css.settingsArea}>
+            {renderSlot('sidebar.settings', { wide })}
+          </div>
+        )}
       </div>
     </div>
   )
