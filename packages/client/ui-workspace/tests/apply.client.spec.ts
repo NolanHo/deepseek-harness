@@ -230,13 +230,15 @@ describe('ui-workspace apply', () => {
     const b = await bench()
     declare(b.slots, 'sidebar.workspaces')
     await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const source = (b.slots.entries('sidebar.workspaces')[0]!.inject as () => WorkspaceBrowserInjected)()
+      .hooks.sessionRowMenu
     const registry = b.ctx.get('sessionRowMenu')!
 
     for (const id of ['', 'rename', 'fork', 'archive', 'a\u0000b']) {
       expect(() => registry.register({ id, label: id, submenu: () => [], onSelect: vi.fn() }), id)
         .toThrow(/unusable contribution id/)
     }
-    expect(registry.snapshot()).toEqual([])
+    expect(source.getSnapshot()).toEqual([])
   })
 
   it('rejects the browser search callback on a Session Controller business error', async () => {
