@@ -54,7 +54,7 @@ Status: implemented
 
 ## 影响
 
-对未变化会话的重复整日志读取，返回的是首次读取产出的那些对象。在本部署那条 66,736 事件的会话上，重复读取实测 3.5 秒 → 0.30 秒（约 11×），两次命中是同一个冻结对象（`identitySame: true`）；第二次之后的读取仍是同一次命中。复用判定移到事件行查询之前后，一次命中只付一行带索引的会话行读取：在上述合成会话上实测中位 0.025 ms、p95 0.342 ms，而此前为 80.6 ms。内存：该会话的日志被计费 252.2 MB 解码后 JSON 文本，而在同一次实测里，进程 heap 在开启缓存时约 0.69 GB、关闭时约 1.96 GB——保留把一份不断堆积却已无人引用的解码图，换成了它唯一持有的那一份。
+对未变化会话的重复整日志读取，返回的是首次读取产出的那些对象。在本部署那条 66,736 事件的会话上，命中仍要付整行扫描时的重复读取实测 3.5 秒 → 0.30 秒（约 11×），两次命中是同一个冻结对象（`identitySame: true`）；第二次之后的读取仍是同一次命中。复用判定移到事件行查询之前后，一次命中只付一行带索引的会话行读取：在上述合成会话上实测中位 0.025 ms、p95 0.342 ms，而此前为 80.6 ms。内存：该会话的日志被计费 252.2 MB 解码后 JSON 文本，而在同一次实测里，进程 heap 在开启缓存时约 0.69 GB、关闭时约 1.96 GB——保留把一份不断堆积却已无人引用的解码图，换成了它唯一持有的那一份。
 
 两条限制属于设计本身，包 README 以面向运维的措辞给出：计费是被保留内存的下界，且不限制零字节条目的条数；绕过提供方的写方在条目被淘汰前可能被掩盖。保留也是按连接的：同一文件上的两个 store 各解码一次，它们只能通过 revision 校验看到彼此的写入。本包为 fork 自有，因此本次改动不会在其自身文件之外新增任何合并面，fork 清单登记了该字段、store、计费与规格。
 
@@ -64,7 +64,7 @@ Status: implemented
 
 变异轮次（针对这份源码独立施加、逐个进行、每次都在下一次之前还原）：从命中路径去掉 revision 比较，让带外写入用例失败；把复用判定挪回事件行查询之后（即改动前的顺序），让 `tests/hit-no-event-read.spec.ts` 失败；完全不读会话行就回答命中，让该用例的 `select-session` 断言失败；命中路径顺手取一次整数会话键，让该用例的 `select-session-key` 断言失败；把 `Buffer.byteLength` 换成 `String.length`（UTF-16 码元）会让被改那处所属的用例失败（scalar 行那处让 `tests/decoded-log-cache.spec.ts` 的 store 级多字节用例失败，packed 行那处让 `tests/packed-charge.spec.ts` 与 `tests/compression.spec.ts` 的 `scanRows` 用例失败）；把 packed 行的累加改成赋值会让 `tests/packed-charge.spec.ts` 失败——它的上限钉住的是总计费，而不是落在窗口内的某个值；去掉「超限即不保留」判定，让 `does not evict a retained log to make room for one that cannot fit` 失败；去掉淘汰循环，让 `bounds retained bytes with LRU eviction and never retains an oversized log` 失败；去掉命中时的 LRU 刷新，让 `keeps a repeatedly read session when a third one arrives` 失败；去掉 header 物化的 revision 推动，让 `misses when another connection materializes a header over the cached session` 失败；去掉 append、publish、repair 或 truncate 的 revision 推动，各自让 `agrees with an uncached reader across another connection's writes` 失败（repair 那处让撕裂尾变体失败，truncate 那处让落到存储末尾之前的删除型截断失败）；让插件构造 store 时丢掉配置的上限，让 `hands the configured ceiling to the store behind the mounted service` 失败；去掉 header 冻结，让三处「header 已冻结」断言失败。有两个变异什么都不失败，本记录把它们当作结果写下来：去掉提交后的 `forgetDecodedLog` 与去掉 `close()` 的清空只改变字节何时释放，没有任何公开观测能区分。store 在解码之后执行的 inherited-cut 校验在这些规格里没有失败态 fixture：它对这些规格构造的每种日志形态都与所比较的行列一致。
 
-包套件通过：`npx vitest run packages/session/session-persistence-sqlite/tests` → 12 文件通过，173 中 172 通过 / 1 跳过，exit 0。
+包套件通过：`npx vitest run packages/session/session-persistence-sqlite/tests` → 13 文件通过，176 中 175 通过 / 1 跳过，exit 0。
 
 真实会话 A/B 在与生产同构的隔离实例上、针对本部署那条 66,736 事件的会话执行，缓存设置是唯一的配置差异：重复整读 3.5 秒 → 0.30 秒、两次命中是同一个冻结对象、该会话计费 252.2 MB、进程 heap 约 0.69 GB 对 1.96 GB。这些是作者本机对单机会话的观测，不是提交在案的基准，也无法仅凭本 commit 重放；本记录没有重跑它们。
 
@@ -74,5 +74,5 @@ Status: implemented
 
 - 限制单遍发起多少冷读的 listing 上界：[catalog listing 的冷读有了上限](../bug-fix/2026-09-21-subagent-listing-cold-read-bound.zh.md)
 - 挪走未命中仍要支付的解码的兄弟开关：[session 日志编解码器在 libuv 线程池上解压](2026-09-20-async-session-codec.zh.md)
-- 包 README 承载面向运维的字段表、三条限制与冷读行为：[session-persistence-sqlite](../../../../packages/session/session-persistence-sqlite/README.zh.md)
+- 包 README 承载面向运维的字段表、两条限制与冷读行为：[session-persistence-sqlite](../../../../packages/session/session-persistence-sqlite/README.zh.md)
 - 该差异面登记所在的 fork 清单行：[FORK_SURFACE.md](../../../../FORK_SURFACE.md)
