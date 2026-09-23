@@ -332,9 +332,44 @@ export class SessionHistoryController {
         maxMessages: request.maxMessages ?? DEFAULT_MAX_MESSAGES,
         beforeSeq: request.beforeSeq,
         throughSeq: request.throughSeq,
-      }, (meta, events) => {
+      }, (meta, events, readEnd, storedEnd) => {
         if (meta.cwd === undefined) rejectNotFound(request.address)
         validateAddress(request.address, meta, SessionLogOffset(0), undefined)
+        // A read bounded below the request cursor serves an older page: the
+        // bound keeps the read's own tail below the cursor, so the released
+        // cursor checks run against the stored end this read observed instead.
+        // The stored rows are a dense zero-based prefix, so a cursor at or
+        // below that end is present and one above it is past the log.
+        if (readEnd !== undefined && readEnd <= request.throughSeq) {
+          if ((events.at(-1)?.seq ?? -1) >= readEnd) {
+            throw new RemoteError(
+              'gateway/internal',
+              `session page read reached past its bound ${String(readEnd)}`,
+              {},
+            )
+          }
+          // A provider still implementing the released three-argument
+          // `readFrom(id, fromSeq, signal?)` receives the bound as its signal
+          // and reports no observed end: the request fails loud instead of
+          // being answered from a cursor nothing validated.
+          if (storedEnd === undefined) {
+            throw new RemoteError('gateway/internal', 'session page read did not report its stored end', {})
+          }
+          if (request.throughSeq > storedEnd) {
+            throw new RemoteError(
+              'gateway/bad-request',
+              `session page through seq ${String(request.throughSeq)} is past cursor ${String(storedEnd)}`,
+              {},
+            )
+          }
+          /* v8 ignore next 3 -- the stored rows are a dense zero-based prefix,
+             so every seq at or below `storedEnd` exists; the released absence
+             rejection is kept for an end reported above a gap. */
+          if (request.throughSeq >= 0 && storedEnd < request.throughSeq) {
+            throw new RemoteError('gateway/internal', `session log does not contain through seq ${String(request.throughSeq)}`, {})
+          }
+          return
+        }
         if (request.throughSeq > (events.at(-1)?.seq ?? -1)) {
           throw new RemoteError(
             'gateway/bad-request',

@@ -333,20 +333,30 @@ export class SqliteSessionPersistence extends SessionPersistence {
   /**
    * Fork-owned seek surface (see FORK_SURFACE.md row 36): read the stored
    * events from `fromSeq` onward for the session-controller's paged cold
-   * history reads. Current-format sessions seek by seq; historical sessions
-   * restore the whole log once and slice, which cannot address an indexed cut
-   * (see the store's `seekable`).
+   * history reads, optionally only up to an exclusive upper bound so an older
+   * page never reads the rows past its own cut. Current-format sessions seek by
+   * seq; historical sessions restore the whole log once and slice, which cannot
+   * address an indexed cut (see the store's `seekable`).
    * @param id - the stored session to read.
    * @param fromSeq - first event offset to include.
+   * @param throughSeqExclusive - optional exclusive upper bound; rows whose
+   *   first logical seq is at or past it are neither read nor returned.
    * @param signal - optional cancellation for backend read work.
-   * @returns the validated current-format suffix.
+   * @returns the validated current-format suffix, including the highest stored
+   *   logical seq this read observed (-1 for an empty log).
    */
   readFrom(
     id: SessionId,
     fromSeq: number,
+    throughSeqExclusive?: number,
     signal?: AbortSignal,
-  ): Promise<{ meta: SessionHeader; inheritedEventCount: SessionLogOffset; events: readonly SessionEvent[] }> {
-    return this.store.loadStoredFrom(id, fromSeq, signal).then((stored) => {
+  ): Promise<{
+    meta: SessionHeader
+    inheritedEventCount: SessionLogOffset
+    events: readonly SessionEvent[]
+    storedEnd: number
+  }> {
+    return this.store.loadStoredFrom(id, fromSeq, throughSeqExclusive, signal).then((stored) => {
       if (stored === undefined) throw new SessionPersistenceNotFoundError(id)
       return stored
     })

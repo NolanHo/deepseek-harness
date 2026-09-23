@@ -29,6 +29,8 @@ const SQL_RESOURCES = [
   'select-cache-size',
   'select-events',
   'select-events-from',
+  'select-events-from-through',
+  'select-max-seq',
   'select-mmap-size',
   'select-packed-predecessors',
   'select-schema-objects',

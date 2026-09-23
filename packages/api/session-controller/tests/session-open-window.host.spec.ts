@@ -108,10 +108,11 @@ interface Mounted {
   readonly promote: Mock<(observation: SessionObservation) => void>
   readonly inspect: Mock<(id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>>
   readonly stat: Mock<(id: SessionId) => Promise<{ header: SessionHeader; revision: SessionPersistenceRevision } | undefined>>
-  readonly readFrom: Mock<(id: SessionId, fromSeq: number) => Promise<{
+  readonly readFrom: Mock<(id: SessionId, fromSeq: number, throughSeqExclusive?: number) => Promise<{
     meta: SessionHeader
     inheritedEventCount: SessionLogOffset
     events: readonly SessionEvent[]
+    storedEnd: number
   }>>
   readonly messageCut: Mock<(id: SessionId, limit: number, beforeSeq?: number) => Promise<number | undefined>>
   readonly seekable: Mock<(id: SessionId) => Promise<boolean>>
@@ -182,16 +183,19 @@ class TrackerVisiblePersistence extends SessionPersistence {
     return Promise.resolve(prompts.slice(-limit)[0]?.seq)
   }
 
-  readFrom(id: SessionId, fromSeq: number): Promise<{
+  readFrom(id: SessionId, fromSeq: number, throughSeqExclusive?: number): Promise<{
     meta: SessionHeader
     inheritedEventCount: SessionLogOffset
     events: SessionEvent[]
+    storedEnd: number
   }> {
     if (id !== this.storedHeader.id) return Promise.reject(new Error(`unknown session "${id}"`))
     return Promise.resolve({
       meta: this.storedHeader,
       inheritedEventCount: SessionLogOffset(0),
-      events: this.storedEvents.filter(event => event.seq >= fromSeq),
+      events: this.storedEvents.filter(event => event.seq >= fromSeq
+        && (throughSeqExclusive === undefined || event.seq < throughSeqExclusive)),
+      storedEnd: this.storedEvents.at(-1)?.seq ?? -1,
     })
   }
 }
@@ -313,9 +317,15 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
   const stat = vi.fn(async (id: SessionId) => id === sessionId
     ? { header: meta, revision: SessionPersistenceRevision('open-window:1') }
     : undefined)
-  const readFrom = vi.fn(async (id: SessionId, fromSeq: number) => {
+  const readFrom = vi.fn(async (id: SessionId, fromSeq: number, throughSeqExclusive?: number) => {
     if (id !== sessionId) throw new Error(`unknown session "${id}"`)
-    return { meta, inheritedEventCount: SessionLogOffset(0), events: events.filter(event => event.seq >= fromSeq) }
+    return {
+      meta,
+      inheritedEventCount: SessionLogOffset(0),
+      events: events.filter(event => event.seq >= fromSeq
+        && (throughSeqExclusive === undefined || event.seq < throughSeqExclusive)),
+      storedEnd: events.at(-1)?.seq ?? -1,
+    }
   })
   const messageCut = vi.fn(async (id: SessionId, limit: number, beforeSeq?: number) => {
     if (id !== sessionId) throw new Error(`unknown session "${id}"`)
@@ -590,11 +600,13 @@ describe('windowed session open', () => {
         meta: mount.meta,
         inheritedEventCount: SessionLogOffset(0),
         events: mount.events.filter(event => event.seq >= fromSeq),
+        storedEnd: mount.events.at(-1)?.seq ?? -1,
       }))
       .mockImplementation(async () => ({
         meta: other,
         inheritedEventCount: SessionLogOffset(0),
         events: mount.events,
+        storedEnd: mount.events.at(-1)?.seq ?? -1,
       }))
 
     await opening(mount.history, mount.sessionId, mount.maxMessages)
@@ -646,6 +658,7 @@ describe('windowed session open', () => {
       },
       inheritedEventCount: SessionLogOffset(0),
       events: mount.events.filter(event => event.seq >= fromSeq),
+      storedEnd: mount.events.at(-1)?.seq ?? -1,
     }))
 
     await expect(opening(mount.history, mount.sessionId, mount.maxMessages))
@@ -661,6 +674,7 @@ describe('windowed session open', () => {
         meta: mount.meta,
         inheritedEventCount: SessionLogOffset(0),
         events: mount.events.filter(event => event.seq >= fromSeq),
+        storedEnd: mount.events.at(-1)?.seq ?? -1,
       }
     })
 
@@ -823,6 +837,47 @@ describe('windowed session open', () => {
     expect(mount.stat).not.toHaveBeenCalled()
   })
 
+  it('reads an older page through a suffix bounded at its own end', async () => {
+    // The client's older-page cursor is the oldest record it holds, so the read
+    // must stop below it: the released read covered the whole tail and the
+    // validator compared that tail against the request's cursor instead.
+    const mount = await mountSession({ turns: 60, maxMessages: 8 })
+    const beforeSeq = mount.records[0]?.event.seq ?? 0
+    const expected = paginateSuffix(mount.events, beforeSeq, mount.maxMessages, mount.cursor)
+
+    const page = await mount.history.page({
+      address: { kind: 'session', sessionId: mount.sessionId },
+      throughSeq: mount.cursor,
+      beforeSeq,
+      maxMessages: mount.maxMessages,
+    }, new AbortController().signal)
+
+    expect(page.records).toEqual(pageRecords(expected.events))
+    expect(page.hasMore).toBe(expected.hasMore)
+    expect(mount.readFrom.mock.calls[0]?.[1]).toBeGreaterThan(0)
+    expect(mount.readFrom.mock.calls[0]?.[2]).toBe(beforeSeq)
+    // The observation path never ran, so the bounded read served the page.
+    expect(mount.stat).not.toHaveBeenCalled()
+  })
+
+  it('serves the observation path the same older page', async () => {
+    const mount = await mountSession({ turns: 60, maxMessages: 8 })
+    const beforeSeq = mount.records[0]?.event.seq ?? 0
+    const request = {
+      address: { kind: 'session', sessionId: mount.sessionId },
+      throughSeq: mount.cursor,
+      beforeSeq,
+      maxMessages: mount.maxMessages,
+    } as const
+
+    const fast = await mount.history.page(request, new AbortController().signal)
+    expect(mount.readFrom).toHaveBeenCalled()
+    mount.providePersistence(false)
+    const observed = await mount.history.page(request, new AbortController().signal)
+
+    expect(fast).toEqual(observed)
+  })
+
   it('installs the durable cut for a recovered log read through the session reader', { timeout: 30_000 }, async () => {
     // End-to-end wiring for the durable-event count: a crash-interrupted stored
     // log goes through the observation reader, and the checkpoint it installs
@@ -884,7 +939,12 @@ describe('windowed session open', () => {
       parentSession: parentId,
       origin: 'subagent',
     }
-    const readFrom = vi.fn(async () => ({ meta, inheritedEventCount: SessionLogOffset(0), events }))
+    const readFrom = vi.fn(async () => ({
+      meta,
+      inheritedEventCount: SessionLogOffset(0),
+      events,
+      storedEnd: events.at(-1)?.seq ?? -1,
+    }))
     const messageCut = vi.fn(async () => 1)
     ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
       list: () => Promise.resolve([meta]),
@@ -977,6 +1037,7 @@ describe('windowed session open', () => {
       meta: { ...mount.meta, parentSession: sid('open-window-parent'), origin: 'subagent' },
       inheritedEventCount: SessionLogOffset(0),
       events: mount.events,
+      storedEnd: mount.events.at(-1)?.seq ?? -1,
     })
 
     await expect(opening(mount.history, mount.sessionId, mount.maxMessages)).rejects.toMatchObject({
@@ -1042,6 +1103,7 @@ describe('indexed suffix window', () => {
         meta,
         inheritedEventCount: SessionLogOffset(0),
         events: events.filter(event => event.seq >= fromSeq),
+        storedEnd: events.at(-1)?.seq ?? -1,
       }),
     }
     const readFrom = vi.spyOn(persisted, 'readFrom')
@@ -1103,6 +1165,7 @@ describe('indexed suffix window', () => {
           },
           inheritedEventCount: SessionLogOffset(0),
           events: runaway ? [] : events.filter(event => event.seq >= fromSeq),
+          storedEnd: events.at(-1)?.seq ?? -1,
         })
       },
     })
@@ -1170,9 +1233,15 @@ describe('indexed suffix window', () => {
             meta: { ...meta, id: sid('indexed-runaway') },
             inheritedEventCount: SessionLogOffset(0),
             events: [],
+            storedEnd: events.at(-1)?.seq ?? -1,
           })
         }
-        return Promise.resolve({ meta, inheritedEventCount: SessionLogOffset(0), events: events.filter(event => event.seq >= fromSeq) })
+        return Promise.resolve({
+          meta,
+          inheritedEventCount: SessionLogOffset(0),
+          events: events.filter(event => event.seq >= fromSeq),
+          storedEnd: events.at(-1)?.seq ?? -1,
+        })
       },
     }
 
@@ -1199,10 +1268,12 @@ describe('indexed suffix window', () => {
       meta: SessionHeader
       inheritedEventCount: SessionLogOffset
       events: SessionEvent[]
+      storedEnd: number
     }>> = vi.fn(() => Promise.resolve({
       meta: { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/proj', isSeeded: false },
       inheritedEventCount: SessionLogOffset(0),
       events: [] as SessionEvent[],
+      storedEnd: -1,
     }))
 
     await expect(readIndexedSuffix({
@@ -1242,11 +1313,13 @@ describe('indexed suffix window', () => {
       meta,
       inheritedEventCount: SessionLogOffset(0),
       events: events.filter(event => event.seq >= fromSeq),
+      storedEnd: events.at(-1)?.seq ?? -1,
     })
     const readFrom: Mock<(id: SessionId, fromSeq: number) => Promise<{
       meta: SessionHeader
       inheritedEventCount: SessionLogOffset
       events: SessionEvent[]
+      storedEnd: number
     }>> = vi.fn()
       .mockImplementationOnce(suffix)
       .mockImplementationOnce(suffix)
@@ -1256,6 +1329,7 @@ describe('indexed suffix window', () => {
         meta: { ...meta, id: sid('indexed-runaway') },
         inheritedEventCount: SessionLogOffset(0),
         events: [],
+        storedEnd: -1,
       }))
 
     await expect(readIndexedSuffix(
@@ -1287,8 +1361,18 @@ describe('indexed suffix window', () => {
         // Every read after the first answers a different Session: the restart
         // and the deep retry both soft-bail instead of serving page events.
         return Promise.resolve(reads.length === 1
-          ? { meta, inheritedEventCount: SessionLogOffset(0), events: events.filter(event => event.seq >= fromSeq) }
-          : { meta: { ...meta, id: sid('another-session') }, inheritedEventCount: SessionLogOffset(0), events: [] })
+          ? {
+            meta,
+            inheritedEventCount: SessionLogOffset(0),
+            events: events.filter(event => event.seq >= fromSeq),
+            storedEnd: events.at(-1)?.seq ?? -1,
+          }
+          : {
+            meta: { ...meta, id: sid('another-session') },
+            inheritedEventCount: SessionLogOffset(0),
+            events: [],
+            storedEnd: -1,
+          })
       },
     }
 
@@ -1303,7 +1387,12 @@ describe('indexed suffix window', () => {
     // A window that cannot hold the page retries at the deep margin, then bails
     // on the mismatched identity the same way.
     reads.length = 0
-    const shortWindow = { meta, inheritedEventCount: SessionLogOffset(0), events: [] as SessionEvent[] }
+    const shortWindow = {
+      meta,
+      inheritedEventCount: SessionLogOffset(0),
+      events: [] as SessionEvent[],
+      storedEnd: -1,
+    }
     const deepPersisted: SeekablePersistence = {
       ...canSeek,
       messageCut: () => Promise.resolve(promptsCut(events, 4)),
@@ -1311,7 +1400,12 @@ describe('indexed suffix window', () => {
         reads.push(fromSeq)
         return Promise.resolve(reads.length === 1
           ? shortWindow
-          : { meta: { ...meta, id: sid('another-session') }, inheritedEventCount: SessionLogOffset(0), events: [] })
+          : {
+            meta: { ...meta, id: sid('another-session') },
+            inheritedEventCount: SessionLogOffset(0),
+            events: [],
+            storedEnd: -1,
+          })
       },
     }
 
