@@ -40,10 +40,26 @@ export interface SeekablePersistence {
    */
   seekable(id: SessionId, signal?: AbortSignal): Promise<boolean>
   messageCut(id: SessionId, maxMessages: number, beforeSeq?: number, signal?: AbortSignal): Promise<number | undefined>
-  readFrom(id: SessionId, fromSeq: number, signal?: AbortSignal): Promise<{
+  /**
+   * Read the stored events from `fromSeq` on, or only up to
+   * `throughSeqExclusive` when a page end exists: the returned events are then
+   * exactly the stored ones in `[fromSeq, throughSeqExclusive)`, dense and
+   * complete whenever the stored log holds rows at or past that bound.
+   * @param id - the stored session to read.
+   * @param fromSeq - first event offset to include.
+   * @param throughSeqExclusive - optional exclusive upper bound, absent for a
+   *   read that must reach the log's own end (the opening window).
+   * @param signal - optional cancellation for backend read work.
+   * @returns the validated suffix window, including the highest stored logical
+   *   seq it observed: the log's own end for an unbounded read, and for a
+   *   bounded one the end of the stored row space, which that read's window
+   *   never reaches (-1 for an empty log).
+   */
+  readFrom(id: SessionId, fromSeq: number, throughSeqExclusive?: number, signal?: AbortSignal): Promise<{
     meta: SessionHeader
     inheritedEventCount: SessionLogOffset
     events: SessionEvent[]
+    storedEnd: number
   }>
 }
 
@@ -213,15 +229,18 @@ export interface IndexedRead {
 
 /**
  * Read one indexed suffix window. The plan's message cut seeds a shallow
- * suffix read; a projection floor below its start restarts the read there so
- * one window serves both, a window that cannot hold the (compaction-widened)
- * cut retries once at the deep margin, and an unsatisfiable window returns
- * undefined so the caller falls back to the observation path.
+ * suffix read bounded by the page's own exclusive end; a projection floor
+ * below its start restarts the read there so one window serves both, a window
+ * that cannot hold the (compaction-widened) cut retries once at the deep
+ * margin, and an unsatisfiable or unprovable window returns undefined so the
+ * caller falls back to the observation path.
  *
  * @param source - The seekable persistence (messageCut + readFrom).
  * @param plan - The page request's resolved addressing.
  * @param validateSuffix - Caller-owned request validation over each read
- * suffix (identity, address, throughSeq); throws to reject the request.
+ * suffix (identity, address, the exclusive end in force, the stored end the
+ * read observed); throws to reject the request. Callers that only validate
+ * identity and address keep a two-argument closure.
  * @param signal - Cancellation shared with the request.
  * @returns The accepted window and its page, or undefined when the backend
  * cannot answer or the window cannot hold the page.
@@ -229,7 +248,12 @@ export interface IndexedRead {
 export async function readIndexedSuffix(
   source: SeekablePersistence,
   plan: IndexedPagePlan,
-  validateSuffix: (meta: SessionHeader, events: readonly SessionEvent[]) => void,
+  validateSuffix: (
+    meta: SessionHeader,
+    events: readonly SessionEvent[],
+    readEndExclusive?: number,
+    storedEnd?: number,
+  ) => void,
   signal: AbortSignal,
 ): Promise<IndexedRead | undefined> {
   // The capability probe comes first: a backend that cannot address a bounded
@@ -246,10 +270,18 @@ export async function readIndexedSuffix(
   // A mismatched identity is a soft bail (the caller falls back), not a
   // rejected request; each read re-validates, including a restarted one.
   const read = async (fromSeq: number) => {
-    const suffix = await source.readFrom(plan.id, fromSeq, signal)
+    // An end at or below the window start cannot hold a page — the cut below it
+    // would have to precede the window — so the request goes unread.
+    if (end !== undefined && end <= fromSeq) return undefined
+    const suffix = await source.readFrom(plan.id, fromSeq, end, signal)
     signal.throwIfAborted()
     if (suffix.meta.id !== plan.id) return undefined
-    validateSuffix(suffix.meta, suffix.events)
+    validateSuffix(suffix.meta, suffix.events, end, suffix.storedEnd)
+    // A bounded read proves its own end: the backend answers the stored events
+    // dense up to it, or the whole log below it. A suffix that stops short of
+    // the bound cannot be cut into a page — the page would silently drop every
+    // event between its tail and the bound — so the observation path answers.
+    if (end !== undefined && (suffix.events.at(-1)?.seq ?? -1) !== end - 1) return undefined
     return suffix
   }
   let fromSeq = Math.max(0, cut - PAGE_CUT_LEAD_MARGIN)
@@ -296,7 +328,8 @@ export async function readIndexedSuffix(
  * @param source - The seekable persistence (messageCut + readFrom).
  * @param plan - The page request's resolved addressing.
  * @param validateSuffix - Caller-owned request validation over each read
- * suffix (identity, address, throughSeq); throws to reject the request.
+ * suffix (identity, address, the exclusive end in force, the stored end the
+ * read observed); throws to reject the request.
  * @param signal - Cancellation shared with the request.
  * @returns The page events and hasMore, or undefined when the backend
  * cannot answer or the window cannot hold the page.
@@ -304,7 +337,12 @@ export async function readIndexedSuffix(
 export async function readIndexedPage(
   source: SeekablePersistence,
   plan: IndexedPagePlan,
-  validateSuffix: (meta: SessionHeader, events: readonly SessionEvent[]) => void,
+  validateSuffix: (
+    meta: SessionHeader,
+    events: readonly SessionEvent[],
+    readEndExclusive?: number,
+    storedEnd?: number,
+  ) => void,
   signal: AbortSignal,
 ): Promise<{ readonly events: SessionEvent[]; readonly hasMore: boolean } | undefined> {
   const read = await readIndexedSuffix(source, plan, validateSuffix, signal)

@@ -99,6 +99,14 @@ export interface SqliteStoredSuffix {
   readonly inheritedEventCount: SessionLogOffset
   /** Valid contiguous current-format events with `seq >= fromSeq`. */
   readonly events: readonly SessionEvent[]
+  /**
+   * Highest stored logical seq this read observed, or -1 for an empty log. An
+   * unbounded read observes the whole log and reports its validated tail; a
+   * bounded read never reaches at or past its bound, so it reports the
+   * `select-max-seq` answer instead — the end of the stored seq space, which
+   * a caller validating a request cursor above the bound needs.
+   */
+  readonly storedEnd: number
 }
 
 /** One lightweight stored-session observation: migrated header plus revision. */
@@ -267,9 +275,17 @@ export class SqliteStore {
   }
 
   /**
-   * Read the stored events from `fromSeq` onward. Current-format sessions use
-   * the physical suffix seek; historical sessions restore the whole log once
-   * and slice it.
+   * Read the stored events from `fromSeq` up to an optional exclusive bound.
+   * Current-format sessions use the physical suffix seek; historical sessions
+   * restore the whole log once and slice it.
+   *
+   * A bound narrows the physical read to the rows whose FIRST logical seq
+   * precedes it, so a packed row straddling the bound is read whole and its
+   * members are then filtered per logical event. When that bounded scan stops
+   * short of the bound it re-runs unbounded: only the whole-log scan can tell
+   * a removable tail from committed corruption below the bound, and a
+   * truncated suffix must never pass as the requested page. Damage at or above
+   * the bound is never read, so it neither fails nor slows a bounded read.
    *
    * The historical arm cannot serve an indexed page cut: it filters the
    * restored, re-based log by a `fromSeq` taken from the stored physical
@@ -278,12 +294,15 @@ export class SqliteStore {
    * on {@link seekable} instead of relying on this arm.
    * @param id - the stored session to read.
    * @param fromSeq - first event offset to include, in the retired log's own seq space.
+   * @param throughSeqExclusive - optional exclusive upper bound; rows whose first
+   *   logical seq is at or past it are neither read nor returned.
    * @param signal - optional cancellation for backend read work.
    * @returns the validated suffix, or `undefined` when the session is absent.
    */
   async loadStoredFrom(
     id: SessionId,
     fromSeq: number,
+    throughSeqExclusive?: number,
     signal?: AbortSignal,
   ): Promise<SqliteStoredSuffix | undefined> {
     await this.observe(signal)
@@ -296,22 +315,31 @@ export class SqliteStore {
       return {
         meta: full.meta,
         inheritedEventCount: full.inheritedEventCount,
-        events: full.events.filter(event => event.seq >= fromSeq),
+        events: eventsWithin(full.events, fromSeq, throughSeqExclusive),
+        // The historical arm restored the whole log, so its tail is the end
+        // this read observed whatever bound filtered the returned events.
+        storedEnd: full.events.at(-1)?.seq ?? -1,
       }
     }
-    const snapshot = this.readTransaction(() => ({
-      row,
-      ...this.physicalSpanFrom(this.sessionKey(id), fromSeq),
-    }))
-    signal?.throwIfAborted()
-    const { preserved } = await this.scanStoredRows(snapshot.eventRows, snapshot.base)
-    const meta = currentHeaderOf(row)
-    const events = preserved.filter(event => event.seq >= fromSeq) as SessionEvent[]
-    validateStoredEvents(meta, events)
+    const scan = await this.scanStoredPrefix(id, row, fromSeq, throughSeqExclusive, signal)
+    // Fail closed: a bounded scan owns the rows below its bound only. A torn
+    // tail there may still be committed corruption that the later rows prove,
+    // so the whole-log scan owns the classification, and its bound-filtered
+    // answer is what a short bounded read would have to match anyway.
+    const complete = throughSeqExclusive !== undefined
+      && scan.tornFrom !== undefined
+      && scan.tornFrom < throughSeqExclusive
+      ? await this.scanStoredPrefix(id, row, fromSeq, undefined, signal)
+      : scan
+    const events = eventsWithin(complete.preserved, fromSeq, throughSeqExclusive) as SessionEvent[]
+    validateStoredEvents(complete.meta, events)
     return {
-      meta,
-      inheritedEventCount: SessionLogOffset(row.seed_length ?? 0),
+      meta: complete.meta,
+      inheritedEventCount: complete.inheritedEventCount,
       events,
+      // A bounded read answers the stored end from its own statement; the
+      // unbounded read holds the whole validated prefix, whose tail is that end.
+      storedEnd: scan.storedEnd ?? (complete.preserved.at(-1)?.seq ?? -1),
     }
   }
 
@@ -724,10 +752,14 @@ export class SqliteStore {
     return this.physicalSpanFrom(sessionKey, (tail[0] as EventRow).seq).eventRows
   }
 
-  /** Select the bounded physical span that may represent `fromSeq`. */
+  /**
+   * Select the bounded physical span that may represent `fromSeq`, reading only
+   * rows whose first logical seq precedes `throughSeqExclusive` when it is set.
+   */
   private physicalSpanFrom(
     sessionKey: number,
     fromSeq: number,
+    throughSeqExclusive?: number,
   ): { readonly base: number; readonly eventRows: EventRow[] } {
     const packedFloor = Math.max(0, fromSeq - MAX_PACKED_ROW_MEMBERS + 1)
     const packedPredecessors = this.db.prepare(sql('select-packed-predecessors'))
@@ -743,8 +775,64 @@ export class SqliteStore {
         base = Math.min(base, predecessor.seq)
       }
     }
-    const eventRows = this.db.prepare(sql('select-events-from')).all(sessionKey, base).map(decodeEventRow)
+    const eventRows = (throughSeqExclusive === undefined
+      ? this.db.prepare(sql('select-events-from')).all(sessionKey, base)
+      : this.db.prepare(sql('select-events-from-through')).all(sessionKey, base, throughSeqExclusive))
+      .map(decodeEventRow)
     return { base, eventRows }
+  }
+
+  /**
+   * Read and scan one current-format session's physical prefix from `fromSeq`,
+   * with the same optional exclusive bound {@link physicalSpanFrom} applies.
+   * @param id - the stored session being scanned; owns its integer session key.
+   * @param row - the session's stored metadata row, read by the caller.
+   * @param fromSeq - first logical seq the caller wants.
+   * @param throughSeqExclusive - optional exclusive upper bound for the rows read.
+   * @param signal - optional cancellation between the read and the scan.
+   * @returns the current header, its inherited cut, the contiguous prefix, the
+   *   first physical seq of a removable tail when the scan found one, and the
+   *   stored seq space's end when a bound kept the scan away from its tail.
+   */
+  private async scanStoredPrefix(
+    id: SessionId,
+    row: SessionRow,
+    fromSeq: number,
+    throughSeqExclusive: number | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<{
+    readonly meta: SessionHeader
+    readonly inheritedEventCount: SessionLogOffset
+    readonly preserved: readonly StoredLogicalEvent[]
+    readonly tornFrom: number | undefined
+    readonly storedEnd: number | undefined
+  }> {
+    const snapshot = this.readTransaction(() => {
+      const sessionKey = this.sessionKey(id)
+      return {
+        row,
+        ...this.physicalSpanFrom(sessionKey, fromSeq, throughSeqExclusive),
+        // A bounded read never reaches the stored rows' end, so it has to ask
+        // for it; the primary-key index answers without touching a row body.
+        // One transaction with the span keeps the two answers the same log.
+        storedEnd: throughSeqExclusive === undefined ? undefined : this.storedMaxSeq(sessionKey),
+      }
+    })
+    signal?.throwIfAborted()
+    const { preserved, tornFrom } = await this.scanStoredRows(snapshot.eventRows, snapshot.base)
+    return {
+      meta: currentHeaderOf(snapshot.row),
+      inheritedEventCount: SessionLogOffset(snapshot.row.seed_length ?? 0),
+      preserved,
+      tornFrom,
+      storedEnd: snapshot.storedEnd,
+    }
+  }
+
+  /** Read one session's highest stored logical seq inside the caller's transaction. */
+  private storedMaxSeq(sessionKey: number): number {
+    const row = this.db.prepare(sql('select-max-seq')).get(sessionKey) as { stored_end: number }
+    return row.stored_end
   }
 
   /**
@@ -809,6 +897,23 @@ export class SqliteStore {
     ) as { id: number }
     return inserted.id
   }
+}
+
+/**
+ * The stored events a caller asked for: `[fromSeq, throughSeqExclusive)` from a
+ * decoded prefix, with no bound meaning "to the end of the prefix".
+ * @param events - decoded stored events, in seq order.
+ * @param fromSeq - first logical seq to keep.
+ * @param throughSeqExclusive - optional exclusive upper bound to keep below.
+ * @returns the events within the requested span.
+ */
+function eventsWithin<E extends { readonly seq: number }>(
+  events: readonly E[],
+  fromSeq: number,
+  throughSeqExclusive: number | undefined,
+): E[] {
+  return events.filter(event => event.seq >= fromSeq
+    && (throughSeqExclusive === undefined || event.seq < throughSeqExclusive))
 }
 
 function sqliteRevision(storeIdentity: string, row: SessionRow): SessionPersistenceRevision {
