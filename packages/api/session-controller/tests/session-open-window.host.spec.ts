@@ -851,14 +851,16 @@ describe('windowed session open', () => {
     })) as SessionEvent[]
     const session = mountingSession(mount, seeded, firstLiveSeq)
     const snapshotEvents = vi.spyOn(session, 'snapshotEvents')
-    mount.readFrom.mockImplementation(async (id: SessionId, fromSeq: number) => {
+    mount.readFrom.mockImplementation(async (_id: SessionId, fromSeq: number, throughSeqExclusive?: number) => {
       // The mount lands while the window read is in flight, before the follower
       // holds a snapshot cursor to replay above.
       mount.ctx.emit('session/created', session)
       return {
         meta: mount.meta,
         inheritedEventCount: SessionLogOffset(0),
-        events: mount.events.filter(event => event.seq >= fromSeq),
+        events: mount.events.filter(event =>
+          event.seq >= fromSeq && (throughSeqExclusive === undefined || event.seq < throughSeqExclusive)),
+        storedEnd: mount.events.at(-1)?.seq ?? -1,
       }
     })
 
