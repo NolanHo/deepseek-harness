@@ -34,11 +34,11 @@ Web 客户端打开一个会话要走 `session.history.follow`，而它解析的
 
 ### 激活
 
-打开快照在请求路径之外于后台激活该 Session。观测路径直接提升它已持有的那个精确 prepared Session；窗口路径只读了持久化、没有观测对象，因此按 id 通过第二个注入回调激活（`SessionController.activate` → `ApiSessionAgentController.resolveAgent`），每次激活读一次日志。两条路径的激活簿记都由 `SessionController` 拥有。
+打开快照不再激活该 Session。观测路径仍然直接提升它已持有的那个精确 prepared Session；窗口路径只读了持久化，交付快照后即返回，因此整段日志读取与 Agent 挂载都发生在第一次显式解析时（发送消息、追加、Typert 查找，或任何其他 `resolveAgent` 消费方）。只阅读历史的打开两者都不支付。本节此前描述的按 id 急切激活已移除 —— 见 [窗口化打开的会话激活改为延迟](../feature/2026-09-23-lazy-windowed-open-activation.zh.md)。
 
 ### 注入点
 
-Fork 自有模块：`src/fork/open-window.ts`（窗口计划与投影切面）与 `session-projection-cache/src/fork/checkpoint-read.ts`（打开路径所需的检查点读取）。上游自有文件只承载注入：`history.ts` 保留同步服务检查、窗口分支及其观测回落；`index.ts` 接线按 id 的激活；`session-projection-cache/src/index.ts` 为 fork 模块注册其私有检查点查找，并在 `hydratePrepared` 中写回刚恢复的检查点；`page-boundary.ts` 增加窗口化读取（`IndexedRead`、`readIndexedSuffix`，可选 `throughSeq` 与 `windowFloor`），`readIndexedPage` 仍委托给它。注册用的是 symbol 键属性而非实例上的 WeakMap：cordis 交给调用方的是 tracker 代理，调用方看到的服务对象并非构造函数注册的那个对象。同一个代理也是两条快速路径都通过 `history.ts` 的 `seekSurface` 辅助函数取出寻址面的原因：它把 `messageCut` 与 `readFrom` 绑定到 `ctx.get` 返回的那个值上。只有在该代理自身上调用时，服务方法才会拿到提供方自己的 `this`（`vendor/cordis/src/utils.ts` 的 `createShadowMethod`），而把取出的方法包进普通对象——两处站点在本轮之前的写法——会让它们以包装对象为 `this` 调用；凡是从自身状态读取的提供方都会抛错，并被回退逻辑静默吞掉。`session-open-window.host.spec.ts` 中的 tracker 提供方用例把持久化注册为真正的 `Service`，对这种包装对象会直接失败。修好这个共用表面也让既有的 `page()`/`loadOlder` 索引分页重新生效：它在生产中同样从未被触发过。`packages/api/session-controller/tsconfig.host.json` 列出了新源文件。
+Fork 自有模块：`src/fork/open-window.ts`（窗口计划与投影切面）与 `session-projection-cache/src/fork/checkpoint-read.ts`（打开路径所需的检查点读取）。上游自有文件只承载注入：`history.ts` 保留同步服务检查、窗口分支及其观测回落；`session-projection-cache/src/index.ts` 为 fork 模块注册其私有检查点查找，并在 `hydratePrepared` 中写回刚恢复的检查点；`page-boundary.ts` 增加窗口化读取（`IndexedRead`、`readIndexedSuffix`，可选 `throughSeq` 与 `windowFloor`），`readIndexedPage` 仍委托给它。注册用的是 symbol 键属性而非实例上的 WeakMap：cordis 交给调用方的是 tracker 代理，调用方看到的服务对象并非构造函数注册的那个对象。同一个代理也是两条快速路径都通过 `history.ts` 的 `seekSurface` 辅助函数取出寻址面的原因：它把 `messageCut` 与 `readFrom` 绑定到 `ctx.get` 返回的那个值上。只有在该代理自身上调用时，服务方法才会拿到提供方自己的 `this`（`vendor/cordis/src/utils.ts` 的 `createShadowMethod`），而把取出的方法包进普通对象——两处站点在本轮之前的写法——会让它们以包装对象为 `this` 调用；凡是从自身状态读取的提供方都会抛错，并被回退逻辑静默吞掉。`session-open-window.host.spec.ts` 中的 tracker 提供方用例把持久化注册为真正的 `Service`，对这种包装对象会直接失败。修好这个共用表面也让既有的 `page()`/`loadOlder` 索引分页重新生效：它在生产中同样从未被触发过。`packages/api/session-controller/tsconfig.host.json` 列出了新源文件。
 
 ## 考虑过的替代方案
 
@@ -60,4 +60,4 @@ Fork 自有模块：`src/fork/open-window.ts`（窗口计划与投影切面）�
 
 代价：一次打开需要可用的检查点记录与 fork 寻址面，因此 JSONL 后端的部署、以及已存尾部不平衡的会话仍走观测路径（正确但不更快）；已存日志无法触及的记录——从合成 closer 恢复的会话——会让窗口尝试持续退出，直到一次实时写入替换该行，这正是该会话在本次变更之前的行为。旧版本写入、缺少 `formatVersion` 的投影缓存记录依旧不能播种快速路径；首次打开会为下一次装上当前格式记录。
 
-验证落在宿主机测试里：`session-open-window.host.spec.ts` 用**同一 Session 经观测路径取得的快照**作为参照钉住窗口路径结果（记录、`hasMore`、游标、投影值与 `asOfSeq`）、单次尾部窗口读取、`hasMore` 为假的全日志页、落在窗口之外的下限所对应的陈旧检查点、当前单元无法播种的记录、带写回的回退及其后一次窗口打开、后端无寻址面、页长不足、子代理、尾部不平衡、读取失败、截断、其他生命周期、缺少工作区、附加竞态、子代理栅栏等回落分支、读数计划的下限重启与深余量算术，以及经真实控制器按 id 后台激活的两条失败分支；`session-projection-cache/tests/cache.spec.ts` 钉住平衡日志与恢复日志各自的写回切点、在写回行上按下限播种的 restore、其软失败，以及该记录能被 `cachedSnapshot` 服务。冷打开的语言可见成本由基准 worker（`benchmarks/session-open`）覆盖，它组装 JSONL 后端，因而测量的是它当初为之编写的观测路径。
+验证落在宿主机测试里：`session-open-window.host.spec.ts` 用**同一 Session 经观测路径取得的快照**作为参照钉住窗口路径结果（记录、`hasMore`、游标、投影值与 `asOfSeq`）、单次尾部窗口读取、`hasMore` 为假的全日志页、落在窗口之外的下限所对应的陈旧检查点、当前单元无法播种的记录、带写回的回退及其后一次窗口打开、后端无寻址面、页长不足、子代理、尾部不平衡、读取失败、截断、其他生命周期、缺少工作区、附加竞态、子代理栅栏等回落分支、读数计划的下限重启与深余量算术，以及延迟挂载（窗口化打开不读整段日志、id 不进入活存储、按需挂载、快照游标之上的帧重放）；`session-projection-cache/tests/cache.spec.ts` 钉住平衡日志与恢复日志各自的写回切点、在写回行上按下限播种的 restore、其软失败，以及该记录能被 `cachedSnapshot` 服务。冷打开的语言可见成本由基准 worker（`benchmarks/session-open`）覆盖，它组装 JSONL 后端，因而测量的是它当初为之编写的观测路径。

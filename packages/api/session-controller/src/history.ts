@@ -82,13 +82,10 @@ export class SessionHistoryController {
   /**
    * @param ctx - Host context carrying Session query and projection services.
    * @param promote - starts ordinary Session activation after snapshot delivery.
-   * @param activate - starts ordinary Session activation from a session id when
-   *   the opening snapshot was read without an observation.
    */
   constructor(
     private readonly ctx: Context,
     private readonly promote: (observation: SessionObservation) => void,
-    private readonly activate: (sessionId: SessionId) => void,
   ) {
     ctx.on('agent/assistant-stream', ({ agent, frame }) => {
       let stream = this.assistantStreams.get(agent.session.id)
@@ -243,10 +240,6 @@ export class SessionHistoryController {
           projections: projectionBlock(windowed.projections),
           ...assistantStream === undefined ? {} : { assistantStream },
         }
-        // The window read persistence only, so no observation exists to hand
-        // over: the Agent activates from the id, off this request path.
-        // (`windowServices` already gated this branch to ordinary addresses.)
-        this.activate(target)
       } else {
         using source = await this.sourceFor(address, signal, true)
         const events = source.events

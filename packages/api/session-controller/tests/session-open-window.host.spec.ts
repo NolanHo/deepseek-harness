@@ -43,7 +43,7 @@ import {
   type SeekablePersistence,
 } from '@deepseek-ai/dsh-api-session-controller/src/fork/page-boundary.ts'
 import type { SessionFollowFrame } from '@deepseek-ai/dsh-api-session-controller/types'
-import { createSessionTestRemote, testSessionPersistence } from './test-remote.ts'
+import { createSessionTestController, createSessionTestRemote, testSessionPersistence } from './test-remote.ts'
 
 const ownedContexts = new Set<Context>()
 const roots: string[] = []
@@ -104,7 +104,6 @@ interface Mounted {
   readonly hasMore: boolean
   readonly projections: ProjectionSnapshot
   readonly history: SessionHistoryController
-  readonly activate: Mock<(sessionId: SessionId) => void>
   readonly promote: Mock<(observation: SessionObservation) => void>
   readonly inspect: Mock<(id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>>
   readonly stat: Mock<(id: SessionId) => Promise<{ header: SessionHeader; revision: SessionPersistenceRevision } | undefined>>
@@ -350,8 +349,7 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
   }
 
   const promote = vi.fn((observation: SessionObservation) => { observation[Symbol.dispose]() })
-  const activate = vi.fn()
-  const history = new SessionHistoryController(ctx, promote, activate)
+  const history = new SessionHistoryController(ctx, promote)
   await owner.dispose()
   if (options.cached === false || options.staleTurns !== undefined) {
     await ctx.plugin(SessionProjectionCache, cacheConfig)
@@ -367,7 +365,6 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
     hasMore: page.hasMore,
     projections,
     history,
-    activate,
     promote,
     inspect,
     stat,
@@ -379,7 +376,7 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
   }
 }
 
-/** Read and close one snapshot-first follow generation, past its activation. */
+/** Read and close one snapshot-first follow generation. */
 async function opening(
   history: SessionHistoryController,
   sessionId: SessionId,
@@ -392,13 +389,38 @@ async function opening(
   }, abort.signal)[Symbol.asyncIterator]()
   const first = await iterator.next()
   if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
-  // Resume past the opening yield so the post-snapshot activation runs, then
+  // Resume past the opening yield so the follower parks in its live loop, then
   // end the generation.
   const parked = iterator.next()
   abort.abort()
   await parked
   await iterator.return?.()
   return first.value
+}
+
+/**
+ * The live Session face a deferred mount publishes over already-stored events:
+ * enough of the Session contract for the `session/created` and `session/event`
+ * listeners that observe it.
+ * @param mount - mounted fixture whose identity and header the Session carries.
+ * @param events - events the mounting lifecycle holds beyond the constructor seed.
+ * @param firstLiveSeq - first seq this process appended, i.e. the constructor
+ *   seed length; a mount that seeds the stored log resumes one past its end.
+ * @returns the Session face the mount publishes.
+ */
+function mountingSession(
+  mount: Mounted,
+  events: readonly SessionEvent[],
+  firstLiveSeq: SessionLogOffset = SessionLogOffset(0),
+): Session {
+  return {
+    id: mount.sessionId,
+    header: mount.meta,
+    inheritedEventCount: SessionLogOffset(0),
+    firstLiveSeq,
+    snapshotEvents: (fromSeq: SessionLogOffset = SessionLogOffset(0)) =>
+      events.filter(event => event.seq >= fromSeq),
+  } as unknown as Session
 }
 
 describe('windowed session open', () => {
@@ -425,7 +447,6 @@ describe('windowed session open', () => {
     expect(mount.readFrom.mock.calls[0]?.[1]).toBeLessThanOrEqual(promptsCut(mount.events, mount.maxMessages))
     expect(mount.stat).not.toHaveBeenCalled()
     expect(mount.inspect).not.toHaveBeenCalled()
-    expect(mount.activate).toHaveBeenCalledWith(mount.sessionId)
     expect(mount.promote).not.toHaveBeenCalled()
   })
 
@@ -447,22 +468,23 @@ describe('windowed session open', () => {
     // (The window probe read the tail first, found no checkpoint, and bailed.)
     expect(mount.inspect).toHaveBeenCalledOnce()
     expect(mount.promote).toHaveBeenCalledOnce()
-    expect(mount.activate).not.toHaveBeenCalled()
 
     // The write-back is fire-and-forget: settle it, then the record must serve.
     await vi.waitFor(() => {
       expect(mount.ctx.sessionProjectionCache.cachedSnapshot(mount.meta, SessionLogOffset(0))).toBeDefined()
     }, { timeout: 5_000 })
     mount.inspect.mockClear()
+    mount.promote.mockClear()
 
     const second = await opening(mount.history, mount.sessionId, mount.maxMessages)
     expect(second.records).toEqual(expected.records)
     expect(second.hasMore).toBe(expected.hasMore)
     expect(second.cursor).toBe(expected.cursor)
     expect(second.projections).toEqual(expected.projections)
+    // The record serves the window: no whole-log read and nothing mounted.
     expect(mount.inspect).not.toHaveBeenCalled()
     expect(mount.readFrom).toHaveBeenCalled()
-    expect(mount.activate).toHaveBeenCalledWith(mount.sessionId)
+    expect(mount.promote).not.toHaveBeenCalled()
   })
 
   it('keeps the observation path for a persistence without the seek surface', async () => {
@@ -508,18 +530,15 @@ describe('windowed session open', () => {
     // never stats, so these counters independently witness which path served.
     expect(mount.stat).toHaveBeenCalledOnce()
     expect(mount.promote).toHaveBeenCalledOnce()
-    expect(mount.activate).not.toHaveBeenCalled()
     mount.providePersistence(true)
     mount.inspect.mockClear()
     mount.stat.mockClear()
-    mount.activate.mockClear()
     mount.promote.mockClear()
 
     const windowed = await opening(mount.history, mount.sessionId, mount.maxMessages)
 
     expect(mount.inspect).not.toHaveBeenCalled()
     expect(mount.stat).not.toHaveBeenCalled()
-    expect(mount.activate).toHaveBeenCalledWith(mount.sessionId)
     expect(mount.promote).not.toHaveBeenCalled()
     expect(windowed.header).toEqual(reference.header)
     expect(windowed.records).toEqual(reference.records)
@@ -669,14 +688,10 @@ describe('windowed session open', () => {
     // The live store answered instead: no persistence read, the live cut.
     expect(mount.inspect).not.toHaveBeenCalled()
     expect(snapshot.cursor).toBe(-1)
-    expect(mount.activate).not.toHaveBeenCalled()
   })
 
-  it('reports a failed background activation on the windowed path', async () => {
+  it('never reads the whole log for a windowed open', async () => {
     const mount = await mountSession()
-    const reported: string[] = []
-    mount.ctx.on('api-session/error', (_sessionId: SessionId, message: string) => { reported.push(message) })
-    vi.spyOn(mount.ctx.agents, 'resume').mockRejectedValue(new Error('activation exploded'))
     const gateway = createSessionTestRemote(mount.ctx, {
       defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
       cwd: '/proj',
@@ -686,75 +701,204 @@ describe('windowed session open', () => {
       [Symbol.asyncIterator]()
     const first = await iterator.next()
     if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
-    // The opening frame alone came from the window: activation (which reads the
-    // log again) has not run yet, because it starts after the yield.
-    expect(mount.readFrom).toHaveBeenCalled()
+    expect(first.value.cursor).toBe(mount.cursor)
+    // The window served the page: one suffix read, no capability stat, and the
+    // persistence never answered its whole-log point read.
+    expect(mount.readFrom).toHaveBeenCalledOnce()
+    expect(mount.stat).not.toHaveBeenCalled()
     expect(mount.inspect).not.toHaveBeenCalled()
 
-    // The activation runs behind the opening frame; await its settlement.
+    // Park the follower and let everything behind the opening frame run: two
+    // macrotasks and a microtask turn settle both a whole-log read chained off
+    // the yield and one deferred behind a timer or an idle callback.
     const parked = iterator.next()
-    await vi.waitFor(() => { expect(reported).toHaveLength(1) }, { timeout: 5_000 })
-    expect(reported[0]).toContain('activation exploded')
-    abort.abort()
-    await parked
-    await iterator.return?.()
-  })
-
-  it('logs a background activation that rejects outright', async () => {
-    // A throwing agents lookup rejects the facade before it can answer a
-    // failure result: the activation promise rejects and only the log records it.
-    const mount = await mountSession()
-    const logged = vi.spyOn(mount.ctx.logger, 'error').mockImplementation(() => {})
-    vi.spyOn(mount.ctx.agents, 'get').mockImplementation(() => { throw new Error('agents exploded') })
-    const gateway = createSessionTestRemote(mount.ctx, {
-      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
-      cwd: '/proj',
-    })
-    const abort = new AbortController()
-    const iterator = gateway.follow({ address: { kind: 'session', sessionId: mount.sessionId } }, abort.signal)
-      [Symbol.asyncIterator]()
-    const first = await iterator.next()
-    if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
-    // The windowed path served: this is the activation's own rejection.
-    expect(mount.readFrom).toHaveBeenCalled()
-    expect(mount.inspect).not.toHaveBeenCalled()
-
-    const parked = iterator.next()
-    await vi.waitFor(() => {
-      expect(logged).toHaveBeenCalledWith(expect.stringContaining('background activation'))
-    }, { timeout: 5_000 })
-    abort.abort()
-    await parked
-    await iterator.return?.()
-    logged.mockRestore()
-  })
-  it('leaves a successful background activation unreported', async () => {
-    const mount = await mountSession()
-    const reported: string[] = []
-    mount.ctx.on('api-session/error', (_sessionId: SessionId, message: string) => { reported.push(message) })
-    const agent = { id: mount.sessionId } as Agent
-    const resume = vi.spyOn(mount.ctx.agents, 'resume').mockResolvedValue({
-      agent,
-      dispose: () => Promise.resolve(),
-    })
-    const gateway = createSessionTestRemote(mount.ctx, {
-      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
-      cwd: '/proj',
-    })
-    const abort = new AbortController()
-    const iterator = gateway.follow({ address: { kind: 'session', sessionId: mount.sessionId } }, abort.signal)
-      [Symbol.asyncIterator]()
-    const first = await iterator.next()
-    if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
-
-    const parked = iterator.next()
-    await vi.waitFor(() => { expect(resume).toHaveBeenCalledOnce() }, { timeout: 5_000 })
     await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
-    expect(reported).toEqual([])
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    await Promise.resolve()
+    expect(mount.inspect).not.toHaveBeenCalled()
+
+    abort.abort()
+    await parked
+    await iterator.return?.()
+  })
+
+  it('keeps the windowed Session out of the live store until something asks for it', async () => {
+    const mount = await mountSession()
+    const resume = vi.spyOn(mount.ctx.agents, 'resume').mockRejectedValue(new Error('nothing may mount here'))
+    // The gateway's own controller owns the follow request.
+    const gateway = createSessionTestRemote(mount.ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/proj',
+    })
+    const abort = new AbortController()
+    const iterator = gateway.follow({ address: { kind: 'session', sessionId: mount.sessionId } }, abort.signal)
+      [Symbol.asyncIterator]()
+    const first = await iterator.next()
+    if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
+    expect(first.value.cursor).toBe(mount.cursor)
+
+    const parked = iterator.next()
+    await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+    expect(resume).not.toHaveBeenCalled()
+    expect(mount.ctx.sessions.get(mount.sessionId)).toBeUndefined()
+    expect(mount.ctx.agents.get(mount.sessionId)).toBeUndefined()
     abort.abort()
     await parked
     await iterator.return?.()
     resume.mockRestore()
+  })
+
+  it('mounts the windowed Session on demand when a later request resolves it', async () => {
+    const mount = await mountSession()
+    const snapshot = await opening(mount.history, mount.sessionId, mount.maxMessages)
+    expect(snapshot.cursor).toBe(mount.cursor)
+    // The windowed open read no whole log and mounted nothing.
+    expect(mount.inspect).not.toHaveBeenCalled()
+    expect(mount.ctx.sessions.get(mount.sessionId)).toBeUndefined()
+    const resume = vi.spyOn(mount.ctx.agents, 'resume').mockResolvedValue({
+      agent: { id: mount.sessionId } as Agent,
+      dispose: () => Promise.resolve(),
+    })
+    const controller = createSessionTestController(mount.ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/proj',
+    })
+
+    // The deferred resolution pays the whole-log read and reaches the registry
+    // for the same Session.
+    const found = await controller.resolveAgent(mount.sessionId)
+
+    expect('agent' in found).toBe(true)
+    expect(mount.inspect.mock.calls[0]?.[0]).toBe(mount.sessionId)
+    expect(resume).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: mount.sessionId }))
+    resume.mockRestore()
+  })
+
+  it('leaves the still-open follower healthy when the deferred resolution fails', async () => {
+    const mount = await mountSession()
+    const abort = new AbortController()
+    const iterator = mount.history.follow({
+      address: { kind: 'session', sessionId: mount.sessionId },
+      maxMessages: mount.maxMessages,
+    }, abort.signal)[Symbol.asyncIterator]()
+    const first = await iterator.next()
+    if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
+    expect(first.value.cursor).toBe(mount.cursor)
+
+    // The deferred resolution fails: its caller answers the failure the eager
+    // activation used to report on `api-session/error` after the snapshot.
+    const resume = vi.spyOn(mount.ctx.agents, 'resume').mockRejectedValueOnce(new Error('mount exploded'))
+    const controller = createSessionTestController(mount.ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/proj',
+    })
+    const failed = await controller.resolveAgent(mount.sessionId)
+    if (!('error' in failed)) throw new Error('the failed resolution answered an Agent')
+    expect(failed.error.message).toContain('mount exploded')
+    expect(mount.inspect).toHaveBeenCalled()
+    // The failure left neither the live store nor the Agent registry holding it.
+    expect(mount.ctx.sessions.get(mount.sessionId)).toBeUndefined()
+    expect(mount.ctx.agents.get(mount.sessionId)).toBeUndefined()
+
+    // A later resolution still mounts the Session, and the frames that mount
+    // publishes reach the follower that stayed open across the failure.
+    resume.mockResolvedValue({ agent: { id: mount.sessionId } as Agent, dispose: () => Promise.resolve() })
+    const found = await controller.resolveAgent(mount.sessionId)
+    expect('agent' in found).toBe(true)
+    resume.mockRestore()
+    const seeded = [mount.cursor + 1, mount.cursor + 2].map(seq => ({
+      type: 'turn/start' as const,
+      seq: SessionSeq(seq),
+      time: seq,
+      data: { turn: 90 + seq },
+    })) as SessionEvent[]
+    const session = mountingSession(mount, seeded)
+    mount.ctx.emit('session/created', session)
+    mount.ctx.emit('session/event', session, seeded[1] as SessionEvent)
+
+    expect((await iterator.next()).value).toMatchObject({ type: 'event', event: { seq: mount.cursor + 1 } })
+    expect((await iterator.next()).value).toMatchObject({ type: 'event', event: { seq: mount.cursor + 2 } })
+
+    abort.abort()
+    await iterator.return?.()
+  })
+
+  it('replays the constructor suffix when the Session is created during the window read', async () => {
+    const mount = await mountSession()
+    // The mounting lifecycle seeds the Session with the stored log, so its
+    // first live seq is one past the window's cursor: the page tail, and the
+    // seeded events above it, are the only frames the follower still owes.
+    const firstLiveSeq = SessionLogOffset(mount.cursor + 1)
+    const seeded = [mount.cursor + 1, mount.cursor + 2].map(seq => ({
+      type: 'turn/start' as const,
+      seq: SessionSeq(seq),
+      time: seq,
+      data: { turn: 90 + seq },
+    })) as SessionEvent[]
+    const session = mountingSession(mount, seeded, firstLiveSeq)
+    const snapshotEvents = vi.spyOn(session, 'snapshotEvents')
+    mount.readFrom.mockImplementation(async (id: SessionId, fromSeq: number) => {
+      // The mount lands while the window read is in flight, before the follower
+      // holds a snapshot cursor to replay above.
+      mount.ctx.emit('session/created', session)
+      return {
+        meta: mount.meta,
+        inheritedEventCount: SessionLogOffset(0),
+        events: mount.events.filter(event => event.seq >= fromSeq),
+      }
+    })
+
+    const abort = new AbortController()
+    const iterator = mount.history.follow({
+      address: { kind: 'session', sessionId: mount.sessionId },
+      maxMessages: mount.maxMessages,
+    }, abort.signal)[Symbol.asyncIterator]()
+    const first = await iterator.next()
+    if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
+
+    expect(first.value.cursor).toBe(mount.cursor)
+    // Without a cursor yet, the replay starts at the constructor boundary — not
+    // at 0, which would re-push the whole seed — and joins the page tail.
+    expect(snapshotEvents).toHaveBeenCalledWith(firstLiveSeq)
+    expect(first.value.records.at(-1)?.event.seq).toBe(mount.cursor)
+    expect((await iterator.next()).value).toMatchObject({ type: 'event', event: { seq: mount.cursor + 1 } })
+
+    // A live append behind the replayed suffix still lands in seq order.
+    mount.ctx.emit('session/event', session, seeded[1] as SessionEvent)
+    expect((await iterator.next()).value).toMatchObject({ type: 'event', event: { seq: mount.cursor + 2 } })
+
+    abort.abort()
+    await iterator.return?.()
+  })
+
+  it('replays frames after the snapshot cursor when the Session mounts later', async () => {
+    const mount = await mountSession()
+    const abort = new AbortController()
+    const iterator = mount.history.follow({
+      address: { kind: 'session', sessionId: mount.sessionId },
+      maxMessages: mount.maxMessages,
+    }, abort.signal)[Symbol.asyncIterator]()
+    const first = await iterator.next()
+    if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
+    expect(mount.inspect).not.toHaveBeenCalled()
+
+    // The deferred mount publishes the Session it seeded: the follower replays
+    // the constructor suffix above the snapshot cursor, then the live append.
+    const seeded = [mount.cursor + 1, mount.cursor + 2].map(seq => ({
+      type: 'turn/start' as const,
+      seq: SessionSeq(seq),
+      time: seq,
+      data: { turn: 90 + seq },
+    })) as SessionEvent[]
+    const session = mountingSession(mount, seeded)
+    mount.ctx.emit('session/created', session)
+    mount.ctx.emit('session/event', session, seeded[1] as SessionEvent)
+
+    expect((await iterator.next()).value).toMatchObject({ type: 'event', event: { seq: mount.cursor + 1 } })
+    expect((await iterator.next()).value).toMatchObject({ type: 'event', event: { seq: mount.cursor + 2 } })
+
+    abort.abort()
+    await iterator.return?.()
   })
 
   it('never seeks a window for a historical session through the opening path', async () => {
@@ -802,10 +946,10 @@ describe('windowed session open', () => {
     const frame = await opening(mount.history, mount.sessionId, mount.maxMessages)
 
     expect(frame.records).toEqual(mount.records)
-    expect(mount.activate).toHaveBeenCalledWith(mount.sessionId)
     // The observation path stats before opening the log; the windowed one never
-    // reaches it, so a silent fallback cannot pass this test.
+    // reaches either, so a silent fallback cannot pass this test.
     expect(mount.stat).not.toHaveBeenCalled()
+    expect(mount.inspect).not.toHaveBeenCalled()
   })
 
   it('drives the indexed older-page read through a provider tracker proxy', async () => {
@@ -892,7 +1036,7 @@ describe('windowed session open', () => {
       messageCut,
       readFrom,
     }) as never)
-    const childHistory = new SessionHistoryController(ctx, vi.fn(), vi.fn())
+    const childHistory = new SessionHistoryController(ctx, vi.fn())
     const abort = new AbortController()
     const iterator = childHistory.follow({
       address: { kind: 'subagent', parentSessionId: parentId, childSessionId: childId, mode: 'continuable' },
@@ -985,10 +1129,10 @@ describe('windowed session open', () => {
     expect(mount.inspect).not.toHaveBeenCalled()
   })
 
-  it('activates the windowed Session in the background through the real controller', async () => {
+  it('streams an append after the windowed opening through the real controller', async () => {
     const mount = await mountSession()
-    const resume = vi.spyOn(mount.ctx.agents, 'resume').mockRejectedValue(new Error('registry unavailable in this bench'))
-    // The gateway's own controller owns the follow request and its activation.
+    // The gateway's own controller owns the follow request; the mount that
+    // publishes the append happens later, off this opening path.
     const gateway = createSessionTestRemote(mount.ctx, {
       defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
       cwd: '/proj',
@@ -999,13 +1143,20 @@ describe('windowed session open', () => {
     const first = await iterator.next()
     if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
     expect(first.value.cursor).toBe(mount.cursor)
-    // The opening handler's post-snapshot activation runs on the next pull.
-    const parked = iterator.next()
-    await vi.waitFor(() => { expect(resume).toHaveBeenCalledOnce() }, { timeout: 5_000 })
+
+    // A later append continues at the snapshot cursor and reaches the open
+    // generation without a gap.
+    const appended = {
+      type: 'turn/start' as const,
+      seq: SessionSeq(mount.cursor + 1),
+      time: mount.cursor + 1,
+      data: { turn: 61 },
+    } as SessionEvent
+    mount.ctx.emit('session/event', mountingSession(mount, [appended]), appended)
+
+    expect((await iterator.next()).value).toMatchObject({ type: 'event', event: { seq: mount.cursor + 1 } })
     abort.abort()
-    await parked
     await iterator.return?.()
-    resume.mockRestore()
   })
 })
 
