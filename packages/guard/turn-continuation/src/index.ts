@@ -15,6 +15,13 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
+    /**
+     * Attribution of the machine-authored turn this policy opened: readers
+     * derive the message without this producer, and the refill check reads only
+     * the core `user` kind, so an unknown kind changes no validation, replay,
+     * or authority outcome, and the recorded JSON metadata survives reading.
+     * @persistenceAttribution
+     */
     'turn-continuation': { kind: 'turn-continuation' } & ContextFormed
   }
 }

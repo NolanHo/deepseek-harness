@@ -4045,7 +4045,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/guard/turn-continuation/src/index.ts:47`](../packages/guard/turn-continuation/src/index.ts)
+Source: [`packages/guard/turn-continuation/src/index.ts:54`](../packages/guard/turn-continuation/src/index.ts)
 
 <a id="deepseek-aidsh-typert-loader"></a>
 
