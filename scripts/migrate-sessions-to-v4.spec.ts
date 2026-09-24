@@ -84,7 +84,9 @@ async function fixture(
   return { path, bytes, directory }
 }
 
-describe('one-time V4 migration command', () => {
+// Each case builds real session stores and drives the migrator through them;
+// the fixtures outlast the suite's 5 s default once the whole suite runs.
+describe('one-time V4 migration command', { timeout: 30_000 }, () => {
   it('bounds active jobs and retries changed-source inputs only after the initial pass drains', async () => {
     const entered = Array.from({ length: 4 }, () => Promise.withResolvers<undefined>())
     const release = Array.from({ length: 4 }, () => Promise.withResolvers<undefined>())
