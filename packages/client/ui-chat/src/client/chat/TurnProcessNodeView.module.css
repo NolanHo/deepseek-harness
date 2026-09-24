@@ -10,14 +10,23 @@
   width: fit-content;
   max-width: 100%;
   min-width: 0;
-  height: 32px;
+  height: calc(32px + var(--dsh-content-font-delta, 0px));
   padding: 0 10px;
   border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
   text-align: left;
+  transition: color 100ms ease;
+}
+
+.root:disabled {
+  cursor: default;
+}
+
+.root:not(:disabled):hover {
+  color: var(--dsw-alias-label-primary);
 }
 
 .root:not([data-open]) {
@@ -31,28 +40,31 @@
 
 .chevron {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   margin-right: 6px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsw-alias-label-caption);
   transform: rotate(-90deg);
   transition: transform 100ms ease;
 }
 
 .root[data-open] .chevron {
+  /* The leading chevron's closed rotation is rotate(-90deg), so the open state
+     resolves back to the icon's own orientation. */
   transform: rotate(0deg);
 }
 
 .label {
   min-width: 0;
   overflow: hidden;
-  font-size: 14px;
-  line-height: 24px;
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .root,
   .chevron {
     transition: none;
   }

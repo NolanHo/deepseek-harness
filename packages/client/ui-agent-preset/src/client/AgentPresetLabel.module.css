@@ -11,7 +11,7 @@
   background: var(--dsw-alias-fill-tsp-secondary);
   font-size: 12px;
   line-height: 22px;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -22,13 +22,10 @@
   opacity: 0.7;
 }
 
-/* Fork patch (FORK_SURFACE.md): the phone header row spends its width on the
-   session title, the lineage chip and the job badge. This label is static
-   context with no control, its glyph is the same for every preset, and its
-   `title` carries the preset description rather than the name, so a phone shows
-   it nowhere: the session-header seat renders nothing at <=560px. The preset
-   is named in Settings; the new-session seat lists it too, with a label that ellipsizes to its icon when space runs out. */
-@media (max-width: 560px) {
+/* First sacrifice when the title row (the enclosing inline-size container)
+   runs out of width: the preset is passive chrome, so it yields before any
+   interactive header action loses its label. */
+@container (max-width: 540px) {
   .label {
     display: none;
   }

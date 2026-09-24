@@ -1,22 +1,22 @@
 /**
  * Web boot kernel. It owns only the module system, Cordis loader, and a
- * framework-free boot page. The dynamic UI renderer receives the mount
+ * framework-free boot page; plugin composition and the renderer handoff are
+ * `bootClient` and `mountClient`. The dynamic UI renderer receives the mount
  * point after every client entry activates.
  * @module @deepseek-ai/dsh-client-web/src/boot
  */
 import { Context } from '@deepseek-ai/cordis'
-import Loader from '@deepseek-ai/cordis-plugin-loader'
 import type {
   BootManifest, BootPluginRow, ClientModuleCreateOptions, ClientModuleSystem, DshWindow,
 } from '@deepseek-ai/dsh-client-modules/client'
-import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import { assertEntriesActive, bootClient } from './boot-client.ts'
 import { BootPage } from './boot-page.ts'
+import { mountClient } from './mount.ts'
 // Fork patch (FORK_SURFACE.md): the deployment's reduced-motion opt-in and
 // theme palette are applied to the document root before any entry activates.
 import { applyReduceMotion } from './fork/reduce-motion.ts'
 import { applyTheme } from './fork/deployment-theme.ts'
 import { getStaticModules } from './seed.ts'
-import { STATE_LABELS } from './loader-status.ts'
 import './base.css'
 import './fork/themes.css'
 
@@ -49,9 +49,10 @@ export class AppWebEntry {
    * Load and activate every pre-mount client entry, hand the mount point to the
    * UI renderer, then create deferred entries in the background. Plugin
    * failures before the mount remain visible on the boot page.
-   * @returns Resolves after application mount or failure rendering.
+   * @param onFailure - Optional carrier-owned fatal presentation; keeps the boot page visible.
+   * @returns Resolves after application mount or failure reporting.
    */
-  async run(): Promise<void> {
+  async run(onFailure?: (reason: unknown) => void): Promise<void> {
     try {
       // Boot-readiness gate: whichever bootstrap applies the injection table
       // settles this deferred once every row has taken effect — the served
@@ -84,8 +85,20 @@ export class AppWebEntry {
       const prefetching = this.prefetchImmediateTier()
       const ctx = new Context()
       this.ctx = ctx
-      await this.runPluginBoot(ctx, prefetching)
-      await this.mountApp(ctx)
+      // Fork patch (FORK_SURFACE.md): a deferred row is not part of the roster
+      // this boot creates, so its batch bytes stay off the first-paint path.
+      const preMount = this.manifest.plugins.filter(row => !row.deferred)
+      this.page.setTotal(preMount.length)
+      await prefetching
+      await bootClient({
+        ctx,
+        modules: this.modules,
+        manifest: { ...this.manifest, plugins: preMount },
+        onEntryState: (name, state) => {
+          if (onFailure === undefined || state !== 'failed') this.page.setState(name, state)
+        },
+      })
+      await mountClient(ctx, this.container)
       // The application is up: fetch and create the deferred batches whose
       // bytes stayed off the first-paint critical path. Their UI arrives as
       // the slots they fill register; a failure lands in the console (the
@@ -93,7 +106,8 @@ export class AppWebEntry {
       void this.activateDeferred(ctx, this.manifest.plugins.filter(row => row.deferred))
     } catch (reason) {
       console.error(reason)
-      this.page.fail(reason instanceof Error ? reason.message : String(reason))
+      if (onFailure !== undefined) onFailure(reason)
+      else this.page.fail(reason instanceof Error ? reason.message : String(reason))
     }
   }
 
@@ -105,14 +119,6 @@ export class AppWebEntry {
     this.page.dispose()
   }
 
-  /** Mount through a dependency fiber so replacing uiRenderer remounts the application. */
-  private async mountApp(ctx: Context): Promise<void> {
-    const mounted = ctx.inject(['uiRenderer'], (scope) => {
-      scope.effect(() => scope.uiRenderer.mount(this.container), 'web boot: application mount')
-    })
-    await mounted
-  }
-
   /** Prefetch stage-one bundles and their dynamic requests before concurrent plugin imports. */
   private async prefetchImmediateTier(): Promise<void> {
     await Promise.all(this.manifest.plugins
@@ -122,31 +128,8 @@ export class AppWebEntry {
       })))
   }
 
-  /** Mount the Loader, create pre-mount graph entries, await quiescence, and audit activation. */
-  private async runPluginBoot(ctx: Context, prefetching: Promise<void>): Promise<void> {
-    await ctx.plugin(Loader)
-    const loader = ctx.loader
-    loader.internal = this.modules as never
-
-    ctx.on('internal/status', (fiber) => {
-      const entry = fiber.entry
-      if (entry === undefined || entry.fiber === undefined) return
-      this.page.setState(entry.options.name, STATE_LABELS[entry.fiber.state])
-    })
-
-    const preMount = this.manifest.plugins.filter(row => !row.deferred)
-    this.page.setTotal(preMount.length)
-    await prefetching
-    await Promise.all(preMount.map(async (row) => {
-      this.page.setState(row.id, 'loading')
-      const id = await loader.create({ name: row.id })
-      if (loader.resolve(id).fiber === undefined) this.page.setState(row.id, 'failed')
-    }))
-
-    await loader.await()
-    this.assertEntriesActive(ctx, new Set(preMount.map(row => row.id)))
-  }
-
+  // Fork patch (FORK_SURFACE.md): the deferred batches are created here,
+  // after the application is up, so their bytes stay off the first-paint path.
   /** Fetch and create deferred entries after mount, then audit them in the background. */
   private async activateDeferred(ctx: Context, rows: BootPluginRow[]): Promise<void> {
     try {
@@ -158,33 +141,11 @@ export class AppWebEntry {
         }
       }))
       await loader.await()
-      this.assertEntriesActive(ctx, new Set(rows.map(row => row.id)))
+      // Every pre-mount entry was audited before the mount, so a failure here
+      // belongs to a deferred batch.
+      assertEntriesActive(ctx, this.modules)
     } catch (reason) {
       console.error(reason instanceof Error ? reason.message : String(reason))
-    }
-  }
-
-  /** Reject entries that failed import/apply or still wait on missing services. */
-  private assertEntriesActive(ctx: Context, expected: ReadonlySet<string>): void {
-    const failures: string[] = []
-    for (const entry of ctx.loader.entries()) {
-      if (!expected.has(entry.options.name)) continue
-      const name = entry.options.name
-      if (entry.fiber === undefined) {
-        failures.push(`${name}: import failed (see console for the import error)`)
-        continue
-      }
-      const state = STATE_LABELS[entry.fiber.state]
-      if (state === 'active') continue
-      if (state === 'pending') {
-        const missing = Object.keys(entry.fiber.inject).filter(service => ctx.get(service) === undefined)
-        failures.push(`${name}: pending (waiting for service${missing.length === 1 ? '' : 's'}: ${missing.join(', ') || 'unknown'})`)
-      } else {
-        failures.push(`${name}: ${state}`)
-      }
-    }
-    if (failures.length > 0) {
-      throw new Error(`web boot: ${String(failures.length)} entr${failures.length === 1 ? 'y' : 'ies'} did not activate\n${failures.join('\n')}`)
     }
   }
 }
