@@ -25,6 +25,7 @@ import {
   type SessionHandle, SessionAccess,
 } from '@deepseek-ai/dsh-session-persistence'
 import {
+  createSessionTestController,
   createSessionTestRemote,
   testSessionPersistence,
 } from './test-remote.ts'
@@ -540,7 +541,7 @@ describe('indexed page fast path', () => {
   })
 
   it('retries the indexed read once at the deep margin when a replacement widens the cut', async () => {
-    // A compaction replacement carries its whole shadowed range as provenance,
+    // A compaction replacement carries its whole shadowed range as its origin,
     // so its group head reaches far behind the message cut; the shallow lead
     // must widen to the deep margin instead of falling back to the observation.
     const ctx = new Context()
@@ -769,6 +770,50 @@ describe('subagent ownership fence', () => {
     // One log open serves all three cold reads: the observation cache reuses
     // the prepared Session while the stat revision is unchanged.
     expect(inspect).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens a cold child whose own descriptor carries a released generation', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const sessionId = sid('session-released-child')
+    const meta = header('session-released-child', 1000, {
+      parentSession: sid('session-parent'),
+      origin: 'subagent',
+    })
+    // A restored historical log keeps the descriptor generation its writer
+    // stamped; the installed generation is 4 (the fork's per-child cwd and skill
+    // filter), so 3 is the generation every restored child carries.
+    const events = [
+      {
+        type: 'subagent/descriptor',
+        seq: SessionSeq(0),
+        time: 1,
+        data: { version: 3, mode: 'one-shot', provider: 'spawn', label: 'historical child' },
+      },
+      { type: 'turn/end', seq: SessionSeq(1), time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    ] as SessionEvent[]
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: () => Promise.resolve({ meta, events }),
+    })
+    createSessionTestController(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
+    ctx.sessionProjections.register(subagentIdentityProjectionDefinition)
+
+    const history = await new SessionHistoryController(
+      ctx,
+      (observation) => { observation[Symbol.dispose]() },
+    ).page({
+      address: {
+        kind: 'subagent',
+        parentSessionId: meta.parentSession as SessionId,
+        childSessionId: sessionId,
+        mode: 'one-shot',
+      },
+      throughSeq: 1,
+    }, new AbortController().signal)
+    expect(history.records.map(record => record.event.type))
+      .toEqual(events.map(event => event.type))
   })
 
   it('no longer treats a descriptor-only cold child without origin as subagent-owned', async () => {

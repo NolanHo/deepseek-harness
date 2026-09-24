@@ -27,3 +27,7 @@ The JSONL failure-propagation rules below are partially superseded by [session-l
 A historical child with a readable header but no usable descriptor retains unknown-mode membership in its parent's direct-child catalog. Existing catalog entries remain visible. Once a V4 successor is published, opening it does not rescan historical children; automatic later mode backfill is outside this migration. Preparation still rechecks child revisions before publication, so newly available evidence cannot silently bypass source consistency checks.
 
 Unit, JSONL read/write, and Preview packing tests cover unavailable evidence, unchanged source bytes, retained entries, identity conflicts, and evidence changes before publication.
+
+## Related
+
+[Restored children keep their descriptor identity](2026-09-23-restored-child-descriptor-identity.md) owns the other reader of the same descriptor: what a child's own log establishes for its identity, where this migration decides what its parent records.

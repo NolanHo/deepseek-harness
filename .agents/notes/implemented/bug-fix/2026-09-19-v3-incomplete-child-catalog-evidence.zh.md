@@ -27,3 +27,7 @@ JSONL 错误传播规则由[逐会话目录准备](2026-09-19-session-local-suba
 历史子会话具有可读 header 但没有可用 descriptor 时，在父直属子目录中保留未知模式成员关系。已有目录项仍可见。V4 后继发布后，打开它不重新扫描历史子日志；自动补齐后续模式不属于本迁移。准备过程仍在发布前重新检查子修订，因此新出现的证据不能静默绕过来源一致性检查。
 
 单元、JSONL 读写和 Preview 打包测试覆盖不可用证据、源字节不变、条目保留、身份冲突以及发布前的证据变化。
+
+## Related
+
+[被恢复的子会话保住 descriptor identity](2026-09-23-restored-child-descriptor-identity.zh.md) 拥有同一 descriptor 的另一个读取方：子会话自身日志为其 identity 确立的内容，而本迁移决定其父会话记录什么。
