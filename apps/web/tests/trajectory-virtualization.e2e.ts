@@ -71,7 +71,7 @@ async function openSeed(page: Page): Promise<void> {
   // Search collapsed into a header action; expand it before filling.
   const searchButton = page.getByRole('button', { name: 'Search sessions' })
   if (await searchButton.getAttribute('aria-expanded') !== 'true') await searchButton.click()
-  const search = page.getByRole('textbox', { name: 'Search sessions...', exact: true })
+  const search = page.getByRole('textbox', { name: 'Search session names', exact: true })
   await search.fill(FIXTURE.markers.user(1))
   const result = page.getByRole('tree', { name: 'Search results' }).getByRole('treeitem')
   await expect.poll(() => result.count(), { timeout: 60_000 }).toBe(1)
@@ -156,7 +156,10 @@ async function rowTop(page: Page, key: string): Promise<number | null> {
 async function loadToFirstTurn(page: Page): Promise<void> {
   const marker = FIXTURE.markers.user(1)
   const loadMore = page.locator('[data-history-load] button')
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  // Fork patch (FORK_SURFACE.md): the deployment's 8-message page (upstream 50) cuts the
+  // 88-turn fixture into about twenty older-page requests, past the five an upstream-sized
+  // page needs; the bound covers the fork's page count.
+  for (let attempt = 0; attempt < 32; attempt += 1) {
     if (await page.getByText(marker, { exact: false }).count() > 0) return
     await expect.poll(() => loadMore.evaluateAll(buttons =>
       buttons.length === 0 || !(buttons[0] as HTMLButtonElement).disabled,
@@ -175,7 +178,7 @@ async function loadToFirstTurn(page: Page): Promise<void> {
       return top === null ? Number.POSITIVE_INFINITY : Math.abs(top - anchor.top)
     }, { timeout: 15_000 }).toBeLessThanOrEqual(GEOMETRY_TOLERANCE)
   }
-  throw new Error('trajectory did not reach the first turn after twelve older-page requests')
+  throw new Error('trajectory did not reach the first turn after thirty-two older-page requests')
 }
 
 describe('web e2e: Trajectory virtualization over tail-paged history', () => {
@@ -221,6 +224,9 @@ describe('web e2e: Trajectory virtualization over tail-paged history', () => {
     await openSeed(page)
 
     let held = false
+    // Open until the spec has driven the fork's real older-page request once;
+    // the arming site sits below the first press.
+    let gateArmed = false
     let releaseHistory: () => void = () => {}
     let finishHeldRequest: () => void = () => {}
     const gate = new Promise<void>((resolve) => { releaseHistory = resolve })
@@ -230,7 +236,7 @@ describe('web e2e: Trajectory virtualization over tail-paged history', () => {
         method?: string
         payload?: { args?: { request?: { beforeSeq?: number } } }
       }
-      if (!held && request.method === 'session/page'
+      if (gateArmed && !held && request.method === 'session/page'
         && request.payload?.args?.request?.beforeSeq !== undefined) {
         held = true
         await gate
@@ -261,11 +267,17 @@ describe('web e2e: Trajectory virtualization over tail-paged history', () => {
       )
       await compareOrRefreshGolden(LOAD_MORE_EXPECTED, loadMoreSnapshot, MODE)
       // Avoid Playwright scrolling the offscreen first row into the automatic-load threshold.
+      // Fork patch (FORK_SURFACE.md): session.ts pins PAGE_MESSAGES = 8 (upstream 50), so the
+      // tail window holds ~11 rows, below TrajectoryView's HISTORY_PAGE_NODES = 50;
+      // loadEarlierHistory therefore fetches a real older page on this press instead of
+      // revealing resident rows. The gate arms for the press below, which is the request the
+      // scenario holds in flight.
       await loadMore.evaluate((button: HTMLButtonElement) => { button.click() })
       await expect.poll(() => logicalRows(page), { timeout: 15_000 }).toBeGreaterThan(initialRows)
       const residentRows = await logicalRows(page)
       expect(held).toBe(false)
       await expect.poll(() => loadMore.isDisabled(), { timeout: 15_000 }).toBe(false)
+      gateArmed = true
       await loadMore.evaluate((button: HTMLButtonElement) => { button.click() })
       await expect.poll(() => held, { timeout: 15_000 }).toBe(true)
       await expect.poll(async () => ({

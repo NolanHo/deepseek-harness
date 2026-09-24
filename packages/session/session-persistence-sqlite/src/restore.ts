@@ -22,8 +22,10 @@ import {
 } from '@deepseek-ai/dsh-session-persistence'
 import {
   SessionFormatUnsupportedMigrationError,
+  createSessionFormatCatalogWithChildren,
   sessionFormatCatalog,
 } from '@deepseek-ai/dsh-session-format-catalog'
+import type { ChildCatalogEvidence } from './child-catalog.ts'
 import type { StoredLogicalEvent } from './codec.ts'
 
 /** One stored log restored to the current logical format. */
@@ -60,6 +62,9 @@ function freezeEventGraph(event: SessionEvent): void {
  * @param physicalHeader - the stored header record rebuilt from the session row.
  * @param storedEvents - physical-row-decoded stored-format events, in seq order.
  * @param id - the requested session id for identity diagnostics.
+ * @param childEvidence - the parent's complete direct-child evidence; a stored
+ *   version below V4 binds it to the catalog's V3→V4 edge, and a current-format
+ *   row restores through the flat catalog without consulting it.
  * @returns the validated current-format log.
  * @throws {SessionFormatUnsupportedError} when the stored format has no
  *   upgrade path or the migration refuses the contents.
@@ -69,8 +74,9 @@ export function restoreStoredLog(
   physicalHeader: Record<string, unknown>,
   storedEvents: readonly StoredLogicalEvent[],
   id: SessionId,
+  childEvidence: ChildCatalogEvidence,
 ): RestoredStoredLog {
-  const restore = createRestore(physicalHeader, id)
+  const restore = createRestore(physicalHeader, id, childEvidence)
   for (const event of storedEvents) {
     try {
       restore.decodeRow(event)
@@ -134,10 +140,26 @@ export function restoreStoredHeader(
   return meta
 }
 
-/** Create one single-pass restore, translating format-edge failures into the seam vocabulary. */
+/**
+ * Highest stored format version whose restore runs the V3→V4 edge; a
+ * current-format row restores natively and never reaches a migration stage.
+ */
+const CHILD_EVIDENCE_STORED_VERSION = 3
+
+/**
+ * Create one single-pass restore, translating format-edge failures into the seam
+ * vocabulary. A stored version at or below {@link CHILD_EVIDENCE_STORED_VERSION}
+ * binds the parent's direct-child evidence to the V3→V4 edge, which refuses a
+ * historical body without it.
+ * @param physicalHeader - the stored header record rebuilt from the session row.
+ * @param id - the requested session id for identity diagnostics.
+ * @param childEvidence - the parent's complete direct-child evidence.
+ * @returns the restore for the stored header's generation.
+ */
 function createRestore(
   physicalHeader: Record<string, unknown>,
   id: SessionId,
+  childEvidence: ChildCatalogEvidence,
 ): ReturnType<typeof sessionFormatCatalog.createRestore> {
   const classification = sessionFormatCatalog.readHeader(physicalHeader)
   if (classification.status === 'unsupported') {
@@ -153,8 +175,11 @@ function createRestore(
       { cause: new Error(classification.reason) },
     )
   }
+  const catalog = classification.storedVersion <= CHILD_EVIDENCE_STORED_VERSION
+    ? createSessionFormatCatalogWithChildren(childEvidence)
+    : sessionFormatCatalog
   try {
-    return sessionFormatCatalog.createRestore(physicalHeader, {
+    return catalog.createRestore(physicalHeader, {
       recovery: 'recoverable',
       validation: 'transformed',
     })

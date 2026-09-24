@@ -42,4 +42,4 @@ The released-v0 edge admitted `subagent/descriptor` payloads at version 3 alone,
 
 ## Related
 
-[Per-child cwd and skill scoping for in-process subagents](../feature/2026-08-29-subagent-child-cwd-skillfilter.md) owns the version 4 descriptor, its `cwd` and `skillFilter` members, and the version 3 → 4 bump this migration compatibility follows.
+[Per-child cwd and skill scoping for in-process subagents](../feature/2026-08-29-subagent-child-cwd-skillfilter.md) owns the version 4 descriptor, its `cwd` and `skillFilter` members, and the version 3 → 4 bump this migration compatibility follows. [Restored children keep their descriptor identity](2026-09-23-restored-child-descriptor-identity.md) reads the same released generations at projection time, where this edge upgrades them for storage.

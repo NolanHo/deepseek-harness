@@ -1,0 +1,27 @@
+- dialog "Settings":
+  - navigation:
+    - text: Settings
+    - button "General"
+    - button "Models"
+    - button "Built-in plugins"
+    - button "Agent presets"
+  - button "Open configuration file"
+  - button "Close"
+  - text: Language
+  - button "English"
+  - text: Appearance
+  - button "Light"
+  - button "Dark"
+  - button "System" [pressed]
+  - text: Font size Only affects conversation content 14
+  - button "Increase font size"
+  - button "Decrease font size"
+  - text: px Work details Choose how much detail to show for tool calls
+  - button "Standard"
+  - text: Performance & usage Choose how much performance and usage information to show
+  - button "Detailed"
+  - text: Developer tools Show tools and information for debugging and troubleshooting
+  - switch "Developer tools" [checked]
+  - text: Send behavior while busy How Cmd/Ctrl+Enter and the Send button deliver while the agent is running
+  - button "Queue"
+  - text: "Current version: {{version}}"

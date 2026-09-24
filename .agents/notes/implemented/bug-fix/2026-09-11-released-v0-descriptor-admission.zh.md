@@ -42,4 +42,4 @@ released-v0 边界只接受版本 3 的 `subagent/descriptor` 载荷，而版本
 
 ## Related
 
-[in-process 子代理的 per-child cwd 与 skill 过滤](../feature/2026-08-29-subagent-child-cwd-skillfilter.zh.md) 拥有版本 4 descriptor、其 `cwd` 与 `skillFilter` 成员，以及本次迁移兼容所跟随的版本 3 → 4 提升。
+[in-process 子代理的 per-child cwd 与 skill 过滤](../feature/2026-08-29-subagent-child-cwd-skillfilter.zh.md) 拥有版本 4 descriptor、其 `cwd` 与 `skillFilter` 成员，以及本次迁移兼容所跟随的版本 3 → 4 提升。[被恢复的子会话保住 descriptor identity](2026-09-23-restored-child-descriptor-identity.zh.md) 在投影时读取同一批 released 世代，而本边界为存储做升级。

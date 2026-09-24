@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-11-released-v0-descriptor-admission.md
-2026-09-11-released-v0-descriptor-admission.md: 2797cb24b6f1eb77e8d1797e775fd0c0dd6b3798
-2026-09-11-released-v0-descriptor-admission.zh.md: a200c970304c4d7e6e0c3b49aa25e22159adb071
+2026-09-11-released-v0-descriptor-admission.md: 980aec024e66246969eae8129652cdbcc28aeb87
+2026-09-11-released-v0-descriptor-admission.zh.md: 188de3e39da6d8ae9b52de5805120f011e62c7d2

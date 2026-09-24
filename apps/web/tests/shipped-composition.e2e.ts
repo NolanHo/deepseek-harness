@@ -1,32 +1,38 @@
-// Boots the shipped Web composition over the built dist this lane already uses
-// and asserts what that composition produces: the model-visible tool catalog
-// and file-reference guidance plus its HTTP, retry, sandbox, and approval defaults.
-// No browser and no model call — these are composition facts, and the browser
-// scenarios in this lane cover the surface itself.
 import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it } from 'vitest'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { composeEntries, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 // These imports carry the tools/sandboxPolicy/approval Context merges.
 import { RUN_CODE_NAME } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-permission-presets'
-import type {} from '@deepseek-ai/dsh-agent-presets'
+import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-terminal'
 import { launchWebScaffold, type WebScaffold } from './scaffold.ts'
+import { REPO_ROOT } from './support.ts'
 
+// Boots the shipped Web composition over the built dist this lane already
+// uses and asserts its catalog, defaults, and Loader lifecycle. The Auto
+// producer-to-tool scenarios live in shipped-composition-auto.e2e.ts, which
+// this lane excludes because the fork composes no permission service.
 const FILE_REFERENCE_PROMPT = fileURLToPath(new URL(
   './expected/web-runtime-context/file-reference-prompt.expected.md', import.meta.url,
 ))
+const BASE_PATCH_PATH = join(REPO_ROOT, 'packages/bundle/base/cordis.patch.yml')
+const HEADLESS_PATCH_PATH = join(REPO_ROOT, 'packages/bundle/headless/cordis.patch.yml')
 
 /**
  * The catalog the shipped Web composition puts in front of the model, minus the
  * ripgrep-dependent pair below. The absences are deliberate, not incidental
  * gaps: the `cordis_*` toolset executes model-written JavaScript that no
- * sandbox row confines, and `mcp_*` servers spawn outside `ctx.shell`.
+ * sandbox row confines, `mcp_*` servers spawn outside `ctx.shell`, and `ralph`
+ * runs unsupervised rounds whose completion is a worker self-report.
  * `web_fetch` is present because public-address enforcement and one-shot
  * approval now confine its model-selected request target. The composition
  * Agent Note owns the rationale and its sources.
@@ -44,7 +50,6 @@ const EXPECTED_TOOLS = [
   'job_output',
   'list_agents',
   'present',
-  'ralph',
   'read',
   'read_image',
   'send_message',
@@ -77,6 +82,8 @@ afterEach(async () => {
 it('assembles the shipped Web transport, catalog, guidance, and defaults', async () => {
   scaffold = await launchWebScaffold({ deepSeekMissingCredential: true })
   const ctx = scaffold.ctx
+  expect(ctx.llm.listProviders().some(provider => provider.id === 'deepseek-messages')).toBe(false)
+  expect(ctx.agentDefaultModel.currentSelection()).toEqual({ provider: 'deepseek-official', model: 'deepseek-flash' })
   const index = await fetch(`http://127.0.0.1:${String(ctx.webServer.port)}`, {
     headers: { 'accept-encoding': 'gzip' },
   })
@@ -162,18 +169,24 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
   } finally {
     await handle.dispose()
   }
-  // Fork patch (FORK_SURFACE.md): fork decision 2026-09-05 — upstream pinned the sandbox
-  // policy default and the permission preset here, but this fork disables the
-  // sandbox-policy and permission rows (packages/bundle/base/cordis.patch.yml
-  // sets both to `disabled: true`), so the shipped composition mounts neither
-  // service. These absence assertions replace the upstream mode pins;
-  // approval stays mounted and nothing requests it once the escalation fields
-  // are unadvertised. Restore path: clear the two rows' `disabled: true`
-  // flags and restore the upstream assertions (defaultMode and
-  // defaultPreset === 'workspace-write', writableRoots over /tmp).
-  expect(scaffold.ctx.get('sandboxPolicy')).toBeUndefined()
+  // Fork patch (FORK_SURFACE.md): fork decision 2026-09-05 — upstream pins the
+  // default permission preset here, but this fork disables only the
+  // `permission` row (packages/bundle/base/cordis.patch.yml); the
+  // `sandbox-policy` row stays enabled and pinned to `danger-full-access`,
+  // this deployment's only mode. So the composition mounts the sandbox policy
+  // and no permission-presets service. Approval stays mounted and nothing
+  // requests it once the escalation fields are unadvertised. Restore path:
+  // clear the `permission` row's `disabled: true` flag and restore the upstream
+  // assertions (defaultMode `workspace-write`, defaultPreset `workspace-write`,
+  // the three-row preset list, writableRoots over /tmp).
+  expect(scaffold.ctx.sandboxPolicy.defaultMode).toBe('danger-full-access')
   expect(scaffold.ctx.approval.config.policy).toBe('ask')
   expect(scaffold.ctx.get('permissionPresets')).toBeUndefined()
+  const headlessRows = composeEntries([
+    loadOverlayPatches('shipped headless composition', BASE_PATCH_PATH),
+    loadOverlayPatches('shipped headless composition', HEADLESS_PATCH_PATH),
+  ])
+  expect(headlessRows.some(row => row.id === 'auto-review')).toBe(false)
 
   const commandHandle = await scaffold.ctx.agents.create({
     sessionId: SessionId('shipped-command-catalog'),
@@ -182,8 +195,9 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
   })
   try {
     expect(scaffold.ctx.commands.list(commandHandle.agent)).toContainEqual({
+      definitionId: '@deepseek-ai/dsh-command-feedback',
       name: 'feedback',
-      description: 'record feedback about this session',
+      description: 'Record feedback about this session',
       input: { hint: '<text>' },
     })
   } finally {
@@ -202,7 +216,7 @@ it('ships PTC with run_code but without the general workflow SDK binding', async
     const assembly = await ctx.systemPrompt.assemble({ scope: handle.agent })
     expect(assembly.tools.map(tool => tool.name)).toEqual([RUN_CODE_NAME])
     const sdk = assembly.sections.find(section => section.name === 'tools:sdk')?.text ?? ''
-    expect(sdk).toContain('  ralph: {')
+    expect(sdk).not.toContain('  ralph: {')
     expect(sdk).not.toContain('  workflow: {')
   } finally {
     await handle.dispose()

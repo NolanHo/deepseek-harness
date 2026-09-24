@@ -49,9 +49,13 @@ describe('web e2e: /goal human transcript presentation', () => {
       timeout: 15_000,
     }).toBe(1)
     const input = page.locator('[data-composer-input]').first()
-    await input.fill('/goal')
-    await input.press('Control+Enter')
+    await input.fill('/go')
+    const menu = page.getByRole('listbox', { name: 'Trigger suggestions' })
+    await menu.getByRole('option', { name: 'Goal Set or view the goal for a long-running task' })
+      .waitFor({ timeout: 10_000 })
+    await input.press('Tab')
     await expect.poll(() => input.textContent()).toBe('/goal ')
+    await expect.poll(() => menu.count()).toBe(0)
     await input.press('Control+Enter')
 
     const commandInput = page.locator('[data-command-input]')

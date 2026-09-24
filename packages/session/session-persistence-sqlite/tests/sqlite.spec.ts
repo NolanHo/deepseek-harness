@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import { MessageId } from '@deepseek-ai/dsh-llm'
+import { MessageId, type MessageSource } from '@deepseek-ai/dsh-llm'
 import SessionStore, {
   SESSION_FORMAT_VERSION,
   SessionId,
@@ -170,6 +170,9 @@ function trafficLog(count: number): SessionEvent[] {
 const LEGACY_ID = SessionId('v0-chunks')
 const DESCRIPTOR_ID = SessionId('v0-descriptor')
 
+/** Replacement source a compaction backend attaches to its checkpoint message. */
+type CheckpointSource = Extract<MessageSource, { readonly kind: 'compact-checkpoint' }>
+
 /** Seed the schema-19 fixture: one v0 session whose packed text run predates v3. */
 async function writeLegacyV0Fixture(): Promise<string> {
   const path = await freshDbPath('dsh-sqlite-legacy-v0-')
@@ -200,7 +203,7 @@ async function writeLegacyV0DescriptorFixture(): Promise<string> {
 }
 
 /**
- * The exact current-format log the released v0-to-v3 chain restores from
+ * The exact current-format log the released v0-to-v4 chain restores from
  * {@link writeLegacyV0Fixture}: sequence numbers renumbered, a system message
  * synthesized for the open step, and the packed run folded into one attempt.
  */
@@ -219,7 +222,7 @@ function legacyMigratedLog(): SessionEvent[] {
         message: {
           id: MessageId('v2-to-v3-system-a4b68aee9afae52ac153aee39e90ce2172e655a75e62be2b765d4f382095eb50'),
           role: 'system',
-          source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt' },
+          source: { kind: 'system-prompt' },
           content: [],
         },
       },
@@ -521,7 +524,7 @@ describe('SessionPersistenceSqlite physical packing', () => {
       time: seq,
       surfaceOp: { op: 'replace', startSeq: SessionSeq(0), endSeq: SessionSeq(4) },
       sourceEventSeqs: [0, 1, 2, 3, 4].map(SessionSeq),
-      data: { role: 'user', id: `r${seq}` as never, content: [{ type: 'text', text: 'checkpoint' }], source: { kind: 'plugin', plugin: 'compact' } },
+      data: { role: 'user', id: `r${seq}` as never, content: [{ type: 'text', text: 'checkpoint' }], source: { kind: 'compact-checkpoint', compactionId: 'compact' as CheckpointSource['compactionId'] } },
     })
     await store.appendBatch(storage(header), [
       chunk(0),
@@ -1061,7 +1064,7 @@ describe('SessionPersistenceSqlite schema ownership', () => {
       isSeeded: true,
     })
     expect(() => currentHeaderOf(decodeSessionRow(base)))
-      .toThrow(/is format v0, expected v3/)
+      .toThrow(`is format v0, expected v${SESSION_FORMAT_VERSION}`)
   })
 
   it('rejects malformed SQLite row primitives generically', () => {

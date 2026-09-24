@@ -69,7 +69,7 @@ describe('reason gate', () => {
     expect(turnEndReasons(agent)).toEqual([{ kind: 'max-tokens' }, { kind: 'completed' }])
     const continuations = queued(agent)
     expect(continuations).toHaveLength(1)
-    expect(continuations[0]?.source).toEqual({ kind: 'plugin', plugin: 'turn-continuation' })
+    expect(continuations[0]?.source).toEqual({ kind: 'turn-continuation' })
     expect(continuations[0]?.text).toContain('cut off')
   })
 

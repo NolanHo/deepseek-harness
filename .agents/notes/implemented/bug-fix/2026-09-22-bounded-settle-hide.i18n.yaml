@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-22-bounded-settle-hide.md
-2026-09-22-bounded-settle-hide.md: 5ec58c7c26032f3344519159b85254ad79d37ab9
-2026-09-22-bounded-settle-hide.zh.md: 8fcd4f1e0cc6f1c0ccd260b80e7fbba2952a3d4f
+2026-09-22-bounded-settle-hide.md: c56635927d5eee47bc0c2d7260d6e020a4c6f70b
+2026-09-22-bounded-settle-hide.zh.md: 238855ee1d64f7f6f095d276d55873529d70f253

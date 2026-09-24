@@ -43,16 +43,45 @@ export default defineConfig({
     // the same Access-mode chip (`[aria-label^="Access mode"]`) into Read
     // Only: the chip renders only from the host permission service's
     // `permissions` projection (InputBar.tsx), absent on the fork, so the
-    // suite cannot reach its approval-takeover subject either.
-    // Restore path: clear the `disabled: true` flags on
+    // suite cannot reach its approval-takeover subject either. ptc-escalation
+    // (new in dsh-v0.1.7-rc.1) drives the same absent chip into Read Only to
+    // record a sandbox escalation, so the fork composition cannot reach its
+    // subject. Restore path: clear the `disabled: true` flags on
     // sandbox/sandbox-policy/permission and revert the executor rows' `name`s
     // in packages/bundle/base/cordis.patch.yml, then delete this list.
+    //
+    // reasoning-preview (new in dsh-v0.1.7-rc.1) pins upstream's streaming
+    // reasoning preview — the first-line text behind a fade mask. The fork's
+    // ReasoningRow patch replaces that surface with the character-count summary
+    // (FORK_SURFACE.md: reasoning row summary), so the preview it drives does
+    // not exist here. Restore path: drop the fork's ReasoningRow patch and
+    // re-record snapshots/web/reasoning-preview.
+    //
+    // shipped-composition-auto (split out of shipped-composition.e2e.ts) drives
+    // the host `permissionPresets` service to switch a Session into Auto. The
+    // same disabled `permission` row leaves the `auto-review` entry pending on
+    // that service, so the Auto producer never activates and no case can reach
+    // its subject. Restore path: clear the `permission` row's `disabled: true`
+    // flag and fold the file's cases back into shipped-composition.e2e.ts.
+    //
+    // github-ready-review drives the shipped webhook runtime's ingress route,
+    // which the same disabled `permission` row keeps unregistered:
+    // webhook-runtime injects `permissionPresets`, so its entry stays pending
+    // and a signed ping answers 404 where the scenario expects 202. The gap
+    // predates this sync (the pre-upgrade branch disables the same row and the
+    // spec asserts the same 202), and the lane records it here instead of
+    // claiming the feature works. Restore path: clear the `permission` row's
+    // `disabled: true` flag.
     exclude: [
       'apps/web/tests/settings-chrome.e2e.ts',
       'apps/web/tests/permission-policy-context.e2e.ts',
       'apps/web/tests/access-confirmation.e2e.ts',
       'apps/web/tests/seeded-history.e2e.ts',
       'apps/web/tests/approval-composer.e2e.ts',
+      'apps/web/tests/ptc-escalation.e2e.ts',
+      'apps/web/tests/reasoning-preview.e2e.ts',
+      'apps/web/tests/shipped-composition-auto.e2e.ts',
+      'apps/web/tests/github-ready-review.e2e.ts',
     ],
     // Local and record runs stay serial. CI runs workspace-mutating HMR and
     // dynamic Cordis lifecycle coverage before parallelizing the remaining files.

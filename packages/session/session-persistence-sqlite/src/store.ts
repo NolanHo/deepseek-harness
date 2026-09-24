@@ -24,6 +24,7 @@ import {
   type SessionStorageMetadata,
 } from '@deepseek-ai/dsh-session-persistence'
 import { type StoredLogicalEvent, MAX_PACKED_ROW_MEMBERS, packChunkRuns } from './codec.ts'
+import { collectChildCatalogEvidence, type ChildCatalogEvidence } from './child-catalog.ts'
 import {
   bindRecord,
   decodeRow,
@@ -152,6 +153,13 @@ export class SqliteStore {
   private retainedDecodedLogBytes = 0
   /** Configured ceiling on {@link retainedDecodedLogBytes}; zero retains nothing. */
   private readonly decodedLogCacheBytes: number
+  /**
+   * Direct-child catalog evidence per historical parent, collected from this
+   * database at most once per connection. A V3 restore binds it to the catalog's
+   * V3→V4 edge; the whole restored log is cached under the same revision rule,
+   * and every committed mutation and `close()` drop both.
+   */
+  private readonly childCatalogs = new Map<SessionId, ChildCatalogEvidence>()
 
   constructor(private readonly options: SqliteStoreOptions) {
     this.scanStoredRows = options.asyncCodec === true ? scanRowsOnThreadPool : scanRows
@@ -256,7 +264,12 @@ export class SqliteStore {
       return read.cached.log
     }
     const scanned = await this.scanStoredRows(read.eventRows)
-    const restored = restoreStoredLog(storedPhysicalHeaderOf(read.row), scanned.preserved, id)
+    const restored = restoreStoredLog(
+      storedPhysicalHeaderOf(read.row),
+      scanned.preserved,
+      id,
+      this.childCatalogEvidence(id, read.row),
+    )
     if (read.row.version === SESSION_FORMAT_VERSION
       && Number(restored.inheritedEventCount) !== (read.row.seed_length ?? 0)) {
       throw new SessionPersistenceCorruptionError(
@@ -651,6 +664,7 @@ export class SqliteStore {
     if (!this.opened) return
     this.opened = false
     this.decodedLogs.clear()
+    this.childCatalogs.clear()
     this.retainedDecodedLogBytes = 0
     this.db.close()
   }
@@ -680,6 +694,24 @@ export class SqliteStore {
   }
 
   /**
+   * The complete direct-child evidence one stored session's restore binds to
+   * its catalog. A current-format row restores natively and declares none; a
+   * historical row's children are collected from this database once per
+   * connection and retained until a committed mutation or {@link close}.
+   * @param id - the stored session whose children this call answers for.
+   * @param row - the session's stored metadata row, read by the caller.
+   * @returns the child evidence, an empty array declaring a parent without children.
+   */
+  private childCatalogEvidence(id: SessionId, row: SessionRow): ChildCatalogEvidence {
+    if (row.version >= SESSION_FORMAT_VERSION) return []
+    const memoized = this.childCatalogs.get(id)
+    if (memoized !== undefined) return memoized
+    const collected = collectChildCatalogEvidence(this.db, id)
+    this.childCatalogs.set(id, collected)
+    return collected
+  }
+
+  /**
    * Drop one session's retained log and release the bytes it was charged.
    * @param id - the session whose entry this call drops.
    */
@@ -700,6 +732,9 @@ export class SqliteStore {
   private commitSessionMutation(id: SessionId): void {
     this.db.exec(sql('commit'))
     this.forgetDecodedLog(id)
+    // A committed write can add, replace, or remove a session row, so every
+    // retained child set is stale: the next historical read collects again.
+    this.childCatalogs.clear()
   }
 
   private sessionKey(id: SessionId): number {

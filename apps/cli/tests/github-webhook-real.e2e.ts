@@ -327,10 +327,10 @@ async function sendGitHubDelivery(origin: string): Promise<Response> {
   const body = JSON.stringify({
     action: 'ready_for_review',
     number: 4242,
-    repository: { full_name: 'deepseek-harness/deepseek-harness' },
+    repository: { full_name: 'deepseek-ai/deepseek-harness' },
     pull_request: {
       title: 'Real CLI webhook e2e',
-      html_url: 'https://github.com/deepseek-harness/deepseek-harness/pull/4242',
+      html_url: 'https://github.com/deepseek-ai/deepseek-harness/pull/4242',
       draft: false,
       user: { login: 'octocat' },
       base: { ref: 'master', sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
@@ -416,8 +416,8 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('GitHub webhook through the real 
         // FORK_CHANGES.md — the `permission/preset read-only`
         // event this test used to pin is produced by permission-presets,
         // which the fork disables with the sandbox capability; the fork keeps
-        // the provenance and title checks. Restore the conjunct on re-enable.
-        'webhook provenance and title',
+        // the webhook-source and title checks. Restore the conjunct on re-enable.
+        'webhook source and title',
         async () => await history(baseUrl, sessionId),
         (page) => {
           const events = historyEvents(page)

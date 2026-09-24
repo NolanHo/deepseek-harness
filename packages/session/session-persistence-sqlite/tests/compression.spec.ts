@@ -257,7 +257,7 @@ describe('SQLite compression', () => {
     expect(decodeRow(row(event))).toEqual([event])
   })
 
-  it('compresses large data and run-encodes consecutive provenance arrays', () => {
+  it('compresses large data and run-encodes consecutive source-event sequence arrays', () => {
     const sources = Array.from({ length: 2_000 }, (_, index) => index + 10)
     const event = {
       type: 'assistant/message',
@@ -278,7 +278,7 @@ describe('SQLite compression', () => {
     expect(typeof small.data).toBe('string')
   })
 
-  it('round-trips empty, descending, and maximum-safe provenance deltas', () => {
+  it('round-trips empty, descending, and maximum-safe source-event sequence deltas', () => {
     for (const sources of [
       [],
       [1, 3, 4, 5, 10],
@@ -296,7 +296,7 @@ describe('SQLite compression', () => {
     }
   })
 
-  it('does not impose a persistence-only provenance length limit', () => {
+  it('does not impose a persistence-only source-event-sequence length limit', () => {
     const sources = Array.from({ length: 1_000_001 }, (_, index) => index)
     const event = {
       type: 'assistant/message',
@@ -309,7 +309,7 @@ describe('SQLite compression', () => {
     expect(bindRecord(event).sourceEventSeqs?.[0]).toBe(1)
   })
 
-  it.each([-1, 0.5])('rejects invalid provenance sequence %s before encoding', (sourceSeq) => {
+  it.each([-1, 0.5])('rejects invalid source-event sequence %s before encoding', (sourceSeq) => {
     const event = {
       type: 'assistant/message',
       seq: 1,

@@ -11,6 +11,8 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { foldSubagentDescriptor } from './descriptor.ts'
 import type { SubagentDescriptorData } from './descriptor.ts'
+// Fork patch (FORK_SURFACE.md): identity survives a released descriptor generation.
+import { foldReleasedDescriptorIdentity } from './fork/released-descriptor-identity.ts'
 import type { SubagentIdentityProjection, SubagentTimingProjection } from './projection-types.ts'
 
 /** Fold state for a subagent's latest timing snapshot. */
@@ -23,6 +25,8 @@ export interface TimingState {
   pendingTurnStart?: number | undefined
   /** Whether the fold has crossed a descriptor in this logical log. */
   descriptorSeen: boolean
+  /** Whether the latest closed post-descriptor turn completed normally; absent while a turn is open or before one closes. */
+  lastTurnCompleted?: boolean | undefined
 }
 
 const activeIntervalSchema = z.object({
@@ -33,9 +37,11 @@ const activeIntervalSchema = z.object({
 const projectionSchema: z.ZodType<SubagentTimingProjection> = z.object({
   settledMs: z.number().int().nonnegative(),
   active: activeIntervalSchema.optional(),
-}).strict().transform(({ settledMs, active }) => ({
+  lastTurnCompleted: z.boolean().optional(),
+}).strict().transform(({ settledMs, active, lastTurnCompleted }) => ({
   settledMs,
   ...active === undefined ? {} : { active },
+  ...lastTurnCompleted === undefined ? {} : { lastTurnCompleted },
 }))
 
 const timingStateSchema: z.ZodType<TimingState> = z.object({
@@ -43,6 +49,7 @@ const timingStateSchema: z.ZodType<TimingState> = z.object({
   active: activeIntervalSchema.optional(),
   pendingTurnStart: z.number().int().nonnegative().optional(),
   descriptorSeen: z.boolean(),
+  lastTurnCompleted: z.boolean().optional(),
 }).strict()
 
 declare module '@deepseek-ai/dsh-session-projection/types' {
@@ -66,9 +73,10 @@ export const subagentTimingProjectionDefinition = {
   init: () => ({ descriptorSeen: false, settledMs: 0 }),
   apply: (state, event) => {
     if (event.type === 'turn/start') {
+      const { lastTurnCompleted: _closed, ...openState } = state
       return state.descriptorSeen
-        ? { ...state, active: { since: event.time, through: event.time } }
-        : { ...state, pendingTurnStart: event.time }
+        ? { ...openState, active: { since: event.time, through: event.time } }
+        : { ...openState, pendingTurnStart: event.time }
     }
     if (event.type === 'subagent/descriptor') {
       const activeSince = state.active?.since ?? state.pendingTurnStart
@@ -91,6 +99,7 @@ export const subagentTimingProjectionDefinition = {
       return {
         ...rest,
         settledMs: state.settledMs + Math.max(0, event.time - active.since),
+        lastTurnCompleted: event.data.reason.kind === 'completed',
       }
     }
     if (state.active === undefined) return state
@@ -101,9 +110,10 @@ export const subagentTimingProjectionDefinition = {
     view: state => ({
       settledMs: state.settledMs,
       ...(state.active === undefined ? {} : { active: state.active }),
+      ...(state.lastTurnCompleted === undefined ? {} : { lastTurnCompleted: state.lastTurnCompleted }),
     }),
   },
-  stateVersion: 2,
+  stateVersion: 3,
 } satisfies ProjectionDefinition<'subagentTiming', TimingState>
 
 interface IdentityState {
@@ -145,6 +155,9 @@ function descriptorIdentity(event: SessionEvent): SubagentIdentityProjection | u
     // a projection fold must never throw, so damage folds to no value.
     descriptor = undefined
   }
+  // Fork patch (FORK_SURFACE.md): a released generation keeps the identity its
+  // payload declares, so a restored child is not read as a corrupt descriptor.
+  descriptor ??= foldReleasedDescriptorIdentity(event)
   if (descriptor === undefined) return undefined
   return descriptor.mode === 'one-shot'
     ? {
@@ -178,5 +191,7 @@ export const subagentIdentityProjectionDefinition = {
   wire: { viewSchema: identitySchema, view: state => state.identity ?? null },
   // Bumped when the identity gained its `seq` field: an older checkpoint row
   // would replay into a value the schema rejects, so it must refold instead.
-  stateVersion: 2,
+  // Fork patch (FORK_SURFACE.md): version 3 also reads released descriptor
+  // generations, so a row cached as the `null` sentinel before that refolds.
+  stateVersion: 3,
 } satisfies ProjectionDefinition<'subagent', IdentityState>

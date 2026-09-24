@@ -29,7 +29,7 @@ Status: implemented
 
 **把父可用性分支从 `settling` 中整个删掉。** 这样会丢掉读取落定为 `false` 时的防闪烁保护，也无法解决历史打开分支的无上限问题；加上限同时保住两者。
 
-**移植上游基于摘要的父可用性。** 上游已把该事实换成 Host 摘要投影（`e55093b47d`，`agentAvailable` + `updateParentAvailability`）；fork 落后于这次迁移，其摘要 wire 并不携带该字段，因此移植属于下一次上游同步，而不是一次客户端缺陷修复。
+**移植上游基于摘要的父可用性。** 上游已把该事实换成 Host 摘要投影（`agentAvailable` + `updateParentAvailability`）；fork 落后于这次迁移，其摘要 wire 并不携带该字段，因此移植属于下一次上游同步，而不是一次客户端缺陷修复。
 
 **给 Remote RPC 层加超时。** 那同样能让挂起的读取落定，但它是传输层的全局策略决定（所有 RPC、所有消费者），而不是针对该症状的修复。
 

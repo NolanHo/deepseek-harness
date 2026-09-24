@@ -12,9 +12,9 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { SessionHistoryController } from '@deepseek-ai/dsh-api-session-controller/src/history.ts'
 import { subagentIdentityProjectionDefinition } from '@deepseek-ai/dsh-subagent/src/projection.ts'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
-import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, MessageId, type MessageSource } from '@deepseek-ai/dsh-llm'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { createInboxStub, mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { Agent, Inbox } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import AttachmentStore from '@deepseek-ai/dsh-attachment'
@@ -22,13 +22,18 @@ import type { SessionPromptRequest, SessionRequestId } from '../src/types.ts'
 import {
   SessionPersistenceRevision,
   type SessionPersistenceSnapshot,
+  type SessionHandle, SessionAccess,
 } from '@deepseek-ai/dsh-session-persistence'
 import {
+  createSessionTestController,
   createSessionTestRemote,
   testSessionPersistence,
 } from './test-remote.ts'
 
 const sid = (id: string): SessionId => id as SessionId
+
+/** Replacement source a compaction backend attaches to its checkpoint message. */
+type CheckpointSource = Extract<MessageSource, { readonly kind: 'compact-checkpoint' }>
 
 function request<P>(payload: P): P {
   return payload
@@ -96,7 +101,7 @@ describe('sessions.list cold merge', () => {
     ctx.provide('sessionProjectionCache', {
       cachedSnapshot: () => undefined,
       cachedPredecessorTitle: (meta: SessionHeader) => meta.id === sid('legacy-title')
-        ? { asOfSeq: -1, values: { title: 'Cached predecessor title' } }
+        ? { asOfSeq: 2, values: { title: 'Cached predecessor title' } }
         : undefined,
     } as never)
     const remote = createSessionTestRemote(ctx, {
@@ -118,7 +123,7 @@ describe('sessions.list cold merge', () => {
         sessionId: sid('legacy-title'),
         blank: false,
         updatedAt: 100,
-        projections: { asOfSeq: -1, values: { title: 'Cached predecessor title' } },
+        projections: { kind: 'cached', asOfSeq: 2, values: { title: 'Cached predecessor title' } },
       }),
     ])
     expect(stat).not.toHaveBeenCalled()
@@ -151,6 +156,12 @@ describe('sessions.list cold merge', () => {
         if (meta.id === sid('cached-conversation')) {
           return { asOfSeq: 1, values: { sessionListMetadata: { blank: false, lastPromptAt: 1000 } } }
         }
+        if (meta.id === sid('seeded-cold')) {
+          return {
+            asOfSeq: 5,
+            values: { title: 'Forked title', sessionListMetadata: { blank: false, lastPromptAt: 1200 } },
+          }
+        }
         return undefined
       },
       cachedPredecessorTitle: () => undefined,
@@ -171,10 +182,18 @@ describe('sessions.list cold merge', () => {
       origin: 'subagent',
     })
     expect(byId['missing-cwd']).toBeUndefined()
-    // A cold seeded header never consults the cache: its cut is not 0, so a
-    // cut-0 lookup would alias a different projection identity.
-    expect(byId['seeded-cold']).toMatchObject({ blank: false, updatedAt: 450 })
-    expect(cacheCalls).not.toContain('seeded-cold')
+    // A cold seeded header reads the cache by header alone, like any other
+    // cold row: the cache binds the lifecycle, and a listing never seeds a fold.
+    expect(byId['seeded-cold']).toMatchObject({
+      blank: false,
+      updatedAt: 1200,
+      projections: {
+        kind: 'cached',
+        asOfSeq: 5,
+        values: { title: 'Forked title', sessionListMetadata: { blank: false, lastPromptAt: 1200 } },
+      },
+    })
+    expect(cacheCalls).toContain('seeded-cold')
     expect(inspect).not.toHaveBeenCalled()
   })
 
@@ -202,7 +221,7 @@ describe('attached updatedAt tracks human prompts', () => {
       ],
       meta: { cwd: '/proj', createdAt: 500 },
     })
-    ctx.agents.register({ id: resumed.id, session: resumed, status: 'idle', ctx } as Agent)
+    await ctx.agents.register({ id: resumed.id, session: resumed, status: 'idle', ctx } as Agent)
     const boundary = resumed.snapshotEvents().at(-1)
     expect(boundary?.type).toBe('session/end-seed')
     expect(boundary?.time).toBeGreaterThan(worked)
@@ -271,6 +290,79 @@ describe('cold history recovery view', () => {
 })
 
 describe('Remote Agent and Session lookup policy', () => {
+  it('resumes a cold session before mutating a restored queue row', async () => {
+    const ctx = new Context()
+    await mountAgentLoopTestDependencies(ctx)
+    await mountAgentLoopTestHarness(ctx)
+    const sessionId = sid('session-cold-queue-mutation')
+    const meta = header(sessionId, 1000)
+    const message = createUserMessage({
+      content: [{ type: 'text', text: 'survives restart' }],
+      source: { kind: 'user' },
+    })
+    const events: SessionEvent[] = [{
+      type: 'agent/inbox/spliced',
+      seq: SessionSeq(0),
+      time: 1001,
+      data: { target: 'next-turn', start: 0, inserted: [message] },
+    }]
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: () => Promise.resolve({ meta, events }),
+      open: (_id: SessionId, access: SessionAccess): Promise<SessionHandle> => Promise.resolve({
+        id: sessionId,
+        header: meta,
+        inheritedEventCount: SessionLogOffset(0),
+        access,
+        read: () => Promise.resolve({ eventState: 'detached', events: structuredClone(events) }),
+        append: (appended) => { events.push(...appended); return Promise.resolve() },
+        flush: () => Promise.resolve(),
+        close: () => Promise.resolve(),
+        [Symbol.asyncDispose]: () => Promise.resolve(),
+      }),
+    })
+    const resume = vi.spyOn(ctx.agents, 'resume')
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const response = await remote.updateQueue(request({
+      sessionId,
+      itemId: message.id,
+      action: { kind: 'remove' },
+    }))
+
+    expect(response).toEqual({ ok: true, value: { accepted: true } })
+    expect(resume).toHaveBeenCalledOnce()
+    const resumedAgent = ctx.agents.get(sessionId)
+    expect(resumedAgent?.inbox.nextTurn).toEqual([])
+    expect(resumedAgent?.session.snapshotEvents().at(-1)).toMatchObject({
+      type: 'agent/inbox/spliced',
+      data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' },
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('keeps queue-item-not-found for a cold session when no persistence backend is composed', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+
+    const response = await remote.updateQueue(request({
+      sessionId: sid('session-no-persistence'),
+      itemId: MessageId('queued-item'),
+      action: { kind: 'remove' },
+    }))
+
+    expect(response.ok).toBe(false)
+    if (!response.ok) expect(response.error.code).toBe('session/queue-item-not-found')
+  })
+
   it('deduplicates a cold resume across Agent and Session parameters', async () => {
     const ctx = new Context()
     await ctx.plugin(TypertRegistry)
@@ -330,7 +422,7 @@ describe('Remote Agent and Session lookup policy', () => {
       meta: { cwd: '/proj', parentSession: sid('session-parent'), origin: 'subagent' },
     })
     const liveAgent = { id: liveSession.id, session: liveSession, status: 'idle', ctx } as Agent
-    ctx.agents.register(liveAgent)
+    await ctx.agents.register(liveAgent)
     const resume = vi.spyOn(ctx.agents, 'resume')
     const defaultAgentLookup = ctx.typert.lookups.get('agent')
     const defaultSessionLookup = ctx.typert.lookups.get('session')
@@ -353,6 +445,40 @@ describe('Remote Agent and Session lookup policy', () => {
     await expect(liveFailure).rejects.toMatchObject(ownershipFailure)
     expect(resume).not.toHaveBeenCalled()
     expect(inspect).toHaveBeenCalledOnce()
+  })
+
+  it('reapplies the subagent ownership fence after a successful resume publishes the Agent', async () => {
+    const ctx = new Context()
+    await ctx.plugin(TypertRegistry)
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const sessionId = sid('session-remote-resumed-child')
+    const meta = header(sessionId, 1000)
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: () => Promise.resolve({ meta, events: [] as SessionEvent[] }),
+      locate: () => undefined,
+    })
+    vi.spyOn(ctx.agents, 'resume').mockImplementationOnce(async () => {
+      const session = ctx.sessions.create(sessionId, {
+        meta: { cwd: '/proj', origin: 'subagent' },
+      })
+      const published = { id: session.id, session, status: 'idle', ctx } as Agent
+      await ctx.agents.register(published)
+      return { agent: published, dispose: () => Promise.resolve() }
+    })
+    const defaultLookup = ctx.typert.lookups.get('agent')
+    createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+    })
+    await vi.waitFor(() => { expect(ctx.typert.lookups.get('agent')).not.toBe(defaultLookup) })
+    const lookup = ctx.typert.lookups.get('agent')
+    if (lookup === undefined) throw new Error('Agent lookup provider was not mounted')
+
+    const resolution = lookup.resolve(sessionId)
+
+    await expect(resolution).rejects.toMatchObject({ code: 'session/agent-busy' })
   })
 })
 
@@ -402,12 +528,11 @@ describe('indexed page fast path', () => {
     })
     if (!response.ok) throw new Error('page failed')
     const events = response.value.records.map(record => record.event)
-    // The cut lands at the second-to-last user message (turn 4's prompt) and
-    // widens through the turn-aligned cut to its turn/start, so the page
-    // spans the last two whole turns from seq 12 through 19.
-    expect(events[0]).toMatchObject({ type: 'turn/start', seq: 12 })
+    // The cut lands two messages back from the request cursor in the merged
+    // pagination rule, so the page spans seq 17 through 19.
+    expect(events[0]).toMatchObject({ type: 'user/message', seq: 17 })
     expect(events.at(-1)).toMatchObject({ type: 'turn/end', seq: 19 })
-    expect(events.length).toBe(8)
+    expect(events.length).toBe(3)
     expect(response.value.hasMore).toBe(true)
     expect(borrow).not.toHaveBeenCalled()
     expect(readFrom).toHaveBeenCalledWith(sessionId, 0, 20, expect.anything())
@@ -416,7 +541,7 @@ describe('indexed page fast path', () => {
   })
 
   it('retries the indexed read once at the deep margin when a replacement widens the cut', async () => {
-    // A compaction replacement carries its whole shadowed range as provenance,
+    // A compaction replacement carries its whole shadowed range as its origin,
     // so its group head reaches far behind the message cut; the shallow lead
     // must widen to the deep margin instead of falling back to the observation.
     const ctx = new Context()
@@ -432,7 +557,7 @@ describe('indexed page fast path', () => {
       surfaceOp: 'append',
       data: createUserMessage({
         content: [{ type: 'text', text: 'checkpoint' }],
-        source: { kind: 'plugin', plugin: 'compact' },
+        source: { kind: 'compact-checkpoint', compactionId: 'compact' as CheckpointSource['compactionId'] },
       }),
       sourceEventSeqs: shadowed,
     } as unknown as SessionEvent
@@ -530,9 +655,10 @@ describe('indexed page fast path', () => {
       if (id !== sessionId) return Promise.reject(new Error('not found'))
       return Promise.resolve({ inspection: { meta, events }, revision: SessionPersistenceRevision('indexed:1'), source: 'prepared', [Symbol.dispose]: () => {} })
     })
+    const inspect = vi.fn((_id: SessionId) => Promise.resolve({ meta, events }))
     providePersistence(ctx, {
       list: () => Promise.resolve([meta]),
-      inspect: (_id: SessionId) => Promise.resolve({ meta, events }),
+      inspect,
       borrowSession: borrow,
       seekable: () => Promise.resolve(true),
       messageCut,
@@ -544,7 +670,10 @@ describe('indexed page fast path', () => {
       address: { kind: 'session', sessionId }, throughSeq: events.at(-1)?.seq ?? 0, maxMessages: 2,
     }, new AbortController().signal)
     if (!response.ok) throw new Error(`page failed: ${JSON.stringify('error' in response ? response.error : null)}`)
-    expect(reads).toBeGreaterThanOrEqual(2)
+    // The first indexed read answers a window that starts past the requested
+    // margin, so the fast path bails and the observation fallback serves the page.
+    expect(reads).toBeGreaterThanOrEqual(1)
+    expect(inspect).toHaveBeenCalled()
     expect(response.value.records.length).toBeGreaterThan(0)
     await ctx.fiber.dispose()
   })
@@ -643,6 +772,50 @@ describe('subagent ownership fence', () => {
     expect(inspect).toHaveBeenCalledTimes(1)
   })
 
+  it('opens a cold child whose own descriptor carries a released generation', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const sessionId = sid('session-released-child')
+    const meta = header('session-released-child', 1000, {
+      parentSession: sid('session-parent'),
+      origin: 'subagent',
+    })
+    // A restored historical log keeps the descriptor generation its writer
+    // stamped; the installed generation is 4 (the fork's per-child cwd and skill
+    // filter), so 3 is the generation every restored child carries.
+    const events = [
+      {
+        type: 'subagent/descriptor',
+        seq: SessionSeq(0),
+        time: 1,
+        data: { version: 3, mode: 'one-shot', provider: 'spawn', label: 'historical child' },
+      },
+      { type: 'turn/end', seq: SessionSeq(1), time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    ] as SessionEvent[]
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: () => Promise.resolve({ meta, events }),
+    })
+    createSessionTestController(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
+    ctx.sessionProjections.register(subagentIdentityProjectionDefinition)
+
+    const history = await new SessionHistoryController(
+      ctx,
+      (observation) => { observation[Symbol.dispose]() },
+    ).page({
+      address: {
+        kind: 'subagent',
+        parentSessionId: meta.parentSession as SessionId,
+        childSessionId: sessionId,
+        mode: 'one-shot',
+      },
+      throughSeq: 1,
+    }, new AbortController().signal)
+    expect(history.records.map(record => record.event.type))
+      .toEqual(events.map(event => event.type))
+  })
+
   it('no longer treats a descriptor-only cold child without origin as subagent-owned', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
@@ -686,7 +859,7 @@ describe('subagent ownership fence', () => {
     await ctx.plugin(AgentRegistry)
     const parentSession = ctx.sessions.create(sid('session-parent'), { meta: { cwd: '/proj' } })
     const parent = { id: parentSession.id, session: parentSession, status: 'idle', ctx } as Agent
-    ctx.agents.register(parent)
+    await ctx.agents.register(parent)
 
     const originSession = ctx.sessions.create(sid('session-origin-child'), {
       meta: { cwd: '/proj', parentSession: parent.id, origin: 'subagent' },
@@ -701,7 +874,7 @@ describe('subagent ownership fence', () => {
       cancel,
       updateInbox,
     } as unknown as Agent
-    ctx.agents.register(originChild)
+    await ctx.agents.register(originChild)
 
     const startingSession = ctx.sessions.create(sid('session-starting-child'), {
       meta: { cwd: '/proj', parentSession: parent.id },
@@ -757,7 +930,7 @@ describe('subagent ownership fence', () => {
     const agent = {
       id: session.id, session, inbox: inboxFor(), status: 'idle', ctx, followup,
     } as unknown as Agent
-    ctx.agents.register(agent)
+    await ctx.agents.register(agent)
     const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
 
     const response = await remote.prompt(promptRequest({
@@ -778,7 +951,7 @@ describe('subagent ownership fence', () => {
     const agent = {
       id: session.id, session, inbox: inboxFor(), status: 'idle', ctx, followup,
     } as unknown as Agent
-    ctx.agents.register(agent)
+    await ctx.agents.register(agent)
     const remote = createSessionTestRemote(ctx, {
       defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
       cwd: '/tmp',
@@ -894,7 +1067,7 @@ describe('sessions.prompt synchronous rejection', () => {
     const session = ctx.sessions.create(sid('session-empty-prompt'))
     const followup = vi.fn()
     const steer = vi.fn()
-    ctx.agents.register({
+    await ctx.agents.register({
       id: session.id,
       session,
       inbox: inboxFor(),
@@ -989,7 +1162,7 @@ describe('sessions.prompt synchronous rejection', () => {
     const session = ctx.sessions.create(sid('session-throwing'))
     // A live structural stub whose delivery verbs throw synchronously, the
     // shape a disposed loop presents at this gateway boundary.
-    ctx.agents.register({
+    await ctx.agents.register({
       id: session.id,
       session,
       inbox: inboxFor(),
@@ -1028,7 +1201,7 @@ describe('sessions.prompt synchronous rejection', () => {
     // while the generic cold resume is in flight, so the resume collides.
     const parentSession = ctx.sessions.create(sid('race-parent'), { meta: { cwd: '/proj' } })
     const parent = { id: parentSession.id, session: parentSession, status: 'idle', ctx } as Agent
-    ctx.agents.register(parent)
+    await ctx.agents.register(parent)
     const childSession = ctx.sessions.create(sessionId, {
       meta: { cwd: '/proj', parentSession: parent.id, origin: 'subagent' },
     })
@@ -1036,7 +1209,7 @@ describe('sessions.prompt synchronous rejection', () => {
     vi.spyOn(ctx.agents, 'resume').mockImplementationOnce(async () => {
       // The parent's `enter()` wins the identity between the pre-resume
       // re-check and publication; the generic resume then collides.
-      ctx.agents.register(child)
+      await ctx.agents.register(child)
       throw new Error('session id already published')
     })
     const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })

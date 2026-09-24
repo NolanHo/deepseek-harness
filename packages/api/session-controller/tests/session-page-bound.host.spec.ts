@@ -19,11 +19,13 @@ import SessionStore, {
   type SessionHeader,
 } from '@deepseek-ai/dsh-session'
 import {
-  paginateSuffix,
   readIndexedPage,
   readIndexedSuffix,
   type SeekablePersistence,
+  type WindowPageCut,
 } from '@deepseek-ai/dsh-api-session-controller/src/fork/page-boundary.ts'
+import { paginate } from '@deepseek-ai/dsh-api-session-controller/src/history.ts'
+import type { SessionPageRequest } from '@deepseek-ai/dsh-api-session-controller/types'
 import { createSessionTestRemote, testSessionPersistence } from './test-remote.ts'
 
 const ownedContexts = new Set<Context>()
@@ -80,6 +82,38 @@ function cutOf(events: readonly SessionEvent[], maxMessages: number, beforeSeq?:
   return prompts.slice(-maxMessages)[0]?.seq
 }
 
+/**
+ * The page rule the controller hands the indexed read: upstream's `paginate`
+ * bound to one request. A windowed read must serve what this returns for the
+ * same window, and what it returns for the whole log is the observation page.
+ */
+function windowCut(maxMessages: number, beforeSeq?: number): WindowPageCut {
+  const bound = beforeSeq === undefined ? undefined : SessionLogOffset(beforeSeq)
+  return (window, baseSeq, throughSeq) => paginate(
+    window,
+    bound,
+    maxMessages,
+    throughSeq === -1 ? -1 : SessionSeq(throughSeq),
+    undefined,
+    baseSeq,
+  )
+}
+
+/** The page upstream's rule yields over a whole dense log. */
+function wholeLogPage(
+  events: readonly SessionEvent[],
+  maxMessages: number,
+  beforeSeq?: number,
+): { readonly events: SessionEvent[]; readonly hasMore: boolean } {
+  const cursor = events.at(-1)?.seq ?? -1
+  return paginate(
+    events,
+    beforeSeq === undefined ? undefined : SessionLogOffset(beforeSeq),
+    maxMessages,
+    cursor === -1 ? -1 : SessionSeq(cursor),
+  )
+}
+
 /** One recorded seek-surface read: its session, window start, exclusive end, and observed stored end. */
 type ReadFromMock = Mock<(id: SessionId, fromSeq: number, throughSeqExclusive?: number) => Promise<{
   meta: SessionHeader
@@ -95,6 +129,10 @@ interface SourceOptions {
   readonly cut?: number
   /** Stop this many seqs below the bound, as a truncated backend would. */
   readonly stopBelowBound?: number
+  /** Start this many seqs above the requested window start, as a trimming backend would. */
+  readonly trimHead?: number
+  /** Omit this seq from the answered window, as a backend with a hole would. */
+  readonly gapAt?: number
 }
 
 /** One seek surface over `events`; without `honorBound` it keeps the released two-argument tail read. */
@@ -107,7 +145,8 @@ function source(
     return {
       meta: header(),
       inheritedEventCount: SessionLogOffset(0),
-      events: events.filter(event => event.seq >= fromSeq
+      events: events.filter(event => event.seq >= fromSeq + (options.trimHead ?? 0)
+        && event.seq !== options.gapAt
         && (options.honorBound !== true
           ? true
           : throughSeqExclusive === undefined
@@ -129,14 +168,14 @@ const signal = (): AbortSignal => new AbortController().signal
 describe('indexed page reads with an exclusive bound', () => {
   const events = turnLog(400)
   const cursor = events.at(-1)?.seq ?? -1
-  const older = { id: SESSION_ID, maxMessages: 3, beforeSeq: 901, throughSeq: cursor }
+  const older = { id: SESSION_ID, seedMessages: 3, beforeSeq: 901, throughSeq: cursor }
 
   it('reads an older page only up to its bound and serves the whole-log page', async () => {
     const bounded = source(events, { honorBound: true })
-    const served = await readIndexedPage(bounded, older, () => {}, signal())
+    const served = await readIndexedPage(bounded, older, windowCut(3, 901), () => {}, signal())
     // The page the whole log yields for this request: the released read covered
-    // the tail past the bound, which `paginateSuffix` filtered out anyway.
-    const whole = paginateSuffix(events, older.beforeSeq, older.maxMessages, cursor)
+    // the tail past the bound, which upstream's cut filtered out anyway.
+    const whole = wholeLogPage(events, older.seedMessages, older.beforeSeq)
 
     expect(served?.events.map(event => event.seq)).toEqual(whole.events.map(event => event.seq))
     expect(served?.hasMore).toBe(whole.hasMore)
@@ -147,7 +186,7 @@ describe('indexed page reads with an exclusive bound', () => {
   it('hands each read its own bound for caller-owned validation', async () => {
     const bounded = source(events, { honorBound: true })
     const seen: (number | undefined)[] = []
-    await readIndexedPage(bounded, older, (_meta, _events, readEnd) => { seen.push(readEnd) }, signal())
+    await readIndexedPage(bounded, older, windowCut(3, 901), (_meta, _events, readEnd) => { seen.push(readEnd) }, signal())
     expect(seen).toEqual([901])
   })
 
@@ -158,13 +197,13 @@ describe('indexed page reads with an exclusive bound', () => {
     // exclusive end exists and the read keeps the released whole-tail form.
     const read = await readIndexedSuffix(bounded, {
       id: SESSION_ID,
-      maxMessages: 3,
+      seedMessages: 3,
       beforeSeq: undefined,
       windowFloor: () => 700,
-    }, (_meta, _events, readEnd) => { seen.push(readEnd) }, signal())
+    }, windowCut(3), (_meta, _events, readEnd) => { seen.push(readEnd) }, signal())
 
     expect(read?.page.events.map(event => event.seq))
-      .toEqual(paginateSuffix(events, undefined, 3, cursor).events.map(event => event.seq))
+      .toEqual(wholeLogPage(events, 3).events.map(event => event.seq))
     expect(bounded.readFrom.mock.calls.map(call => call[2])).toEqual([undefined, undefined])
     expect(seen).toEqual([undefined, undefined])
   })
@@ -172,9 +211,9 @@ describe('indexed page reads with an exclusive bound', () => {
   it('bounds the opening page at its cursor and serves the unbounded page', async () => {
     const bounded = source(events, { honorBound: true })
     const released = source(events)
-    const plan = { id: SESSION_ID, maxMessages: 3, beforeSeq: undefined, throughSeq: cursor }
-    const served = await readIndexedPage(bounded, plan, () => {}, signal())
-    const whole = await readIndexedPage(released, plan, () => {}, signal())
+    const plan = { id: SESSION_ID, seedMessages: 3, beforeSeq: undefined, throughSeq: cursor }
+    const served = await readIndexedPage(bounded, plan, windowCut(3), () => {}, signal())
+    const whole = await readIndexedPage(released, plan, windowCut(3), () => {}, signal())
 
     expect(served).toEqual(whole)
     expect(bounded.readFrom.mock.calls[0]?.[2]).toBe(cursor + 1)
@@ -184,7 +223,8 @@ describe('indexed page reads with an exclusive bound', () => {
     const bounded = source(events, { honorBound: true, cut: 50 })
     const page = await readIndexedPage(
       bounded,
-      { id: SESSION_ID, maxMessages: 3, beforeSeq: 0, throughSeq: cursor },
+      { id: SESSION_ID, seedMessages: 3, beforeSeq: 0, throughSeq: cursor },
+      windowCut(3, 0),
       () => {},
       signal(),
     )
@@ -198,36 +238,56 @@ describe('indexed page reads with an exclusive bound', () => {
     // page would silently drop every event between the suffix tail and the
     // bound. The caller's observation path owns the request instead.
     const short = source(events, { honorBound: true, stopBelowBound: 5 })
-    await expect(readIndexedPage(short, older, () => {}, signal())).resolves.toBeUndefined()
+    await expect(readIndexedPage(short, older, windowCut(3, 901), () => {}, signal())).resolves.toBeUndefined()
     expect(short.readFrom).toHaveBeenCalled()
     // Answering nothing at all under the bound is the same refusal.
     const empty = source(events, { honorBound: true, stopBelowBound: 100_000 })
-    await expect(readIndexedPage(empty, older, () => {}, signal())).resolves.toBeUndefined()
+    await expect(readIndexedPage(empty, older, windowCut(3, 901), () => {}, signal())).resolves.toBeUndefined()
 
     // The same short suffix answers the opening plan, where no bound exists to
     // prove: the read is the whole tail and the page is cut from it.
     const opened = await readIndexedSuffix(short, {
       id: SESSION_ID,
-      maxMessages: 3,
+      seedMessages: 3,
       beforeSeq: undefined,
-    }, () => {}, signal())
+    }, windowCut(3), () => {}, signal())
     expect(opened?.page.events.length).toBeGreaterThan(0)
+  })
+
+  it('serves no page from a window that is not the dense range it was asked for', async () => {
+    // The cut arithmetic indexes the window by the seq it was read from, so a
+    // backend answering a later start — or one with a hole — cannot be cut into
+    // a page: the observation path answers instead of a page sliced at the
+    // wrong offsets.
+    const trimmed = source(events, { honorBound: true, trimHead: 40 })
+    await expect(readIndexedPage(trimmed, older, windowCut(3, 901), () => {}, signal())).resolves.toBeUndefined()
+    expect(trimmed.readFrom).toHaveBeenCalled()
+    const gapped = source(events, { honorBound: true, gapAt: 800 })
+    await expect(readIndexedPage(gapped, older, windowCut(3, 901), () => {}, signal())).resolves.toBeUndefined()
+    expect(gapped.readFrom).toHaveBeenCalled()
   })
 
   it('accepts a two-argument validation closure', async () => {
     const bounded = source(events, { honorBound: true })
     let validated = 0
     const legacy = (_meta: SessionHeader, _events: readonly SessionEvent[]): void => { validated++ }
-    const page = await readIndexedPage(bounded, older, legacy, signal())
+    const page = await readIndexedPage(bounded, older, windowCut(3, 901), legacy, signal())
     expect(page?.events.length).toBeGreaterThan(0)
     expect(validated).toBe(1)
   })
 })
 
+/** The wire page the remote result carries, for the seq-level assertions. */
+interface PageResponse {
+  readonly ok: boolean
+  readonly value?: { readonly records: readonly { readonly event: { readonly seq: number } }[] }
+}
+
 interface PageRequest {
   readonly throughSeq: number
   readonly beforeSeq?: number
   readonly maxMessages?: number
+  readonly turnWindow?: SessionPageRequest['turnWindow']
 }
 
 /** Mount one controller over a provided persistence double. */
@@ -288,6 +348,7 @@ async function mountController(options: {
       throughSeq: request.throughSeq,
       ...request.beforeSeq === undefined ? {} : { beforeSeq: request.beforeSeq },
       ...request.maxMessages === undefined ? {} : { maxMessages: request.maxMessages },
+      ...request.turnWindow === undefined ? {} : { turnWindow: request.turnWindow },
     }),
   }
 }
@@ -395,10 +456,40 @@ describe('history controller older pages', () => {
       { throughSeq: -1, maxMessages: 3 },
       { throughSeq: -1, beforeSeq: 901, maxMessages: 3 },
       { throughSeq: -1, beforeSeq: 0, maxMessages: 3 },
+      { throughSeq: 1_199, maxMessages: 500, turnWindow: { minMessages: 2, minTurns: 3 } },
+      { throughSeq: 1_199, beforeSeq: 901, maxMessages: 500, turnWindow: { minMessages: 2, minTurns: 3 } },
+      { throughSeq: 600, maxMessages: 500, turnWindow: { minMessages: 3, minTurns: 2 } },
+      { throughSeq: 1_199, maxMessages: 500, turnWindow: { minMessages: 1, minTurns: 400 } },
+      { throughSeq: 1_199, maxMessages: 8, turnWindow: { minMessages: 8, minTurns: 2 } },
     ]
 
     for (const shape of shapes) {
       expect(await bounded.page(shape), JSON.stringify(shape)).toEqual(await observed.page(shape))
     }
+  })
+
+  it('widens a turn-windowed page to the Turn start the observation cuts', async () => {
+    // The production older-page request carries a turn window. Its cut needs a
+    // message floor of two and three Turn starts crossed, which the page cap of
+    // 500 never reaches, so the cut is the third Turn start back — not the
+    // maxMessages-th message and not the turn window's own message floor.
+    const bounded = await mountController({ seekable: true })
+    const observed = await mountController({ seekable: false })
+    const request: PageRequest = {
+      throughSeq: 1_199,
+      beforeSeq: 901,
+      maxMessages: 500,
+      turnWindow: { minMessages: 2, minTurns: 3 },
+    }
+    const page = await bounded.page(request) as PageResponse
+    const reference = await observed.page(request) as PageResponse
+
+    expect(page).toEqual(reference)
+    // The cut is turn 299's Turn start; only the 500-message cap could cut
+    // later, and only the turn window's message floor could cut at the prompt.
+    expect(page.value?.records.map(record => record.event.seq))
+      .toEqual([894, 895, 896, 897, 898, 899, 900])
+    // The bounded read starts below the seed prompt, so the fast path served it.
+    expect(bounded.readFrom.mock.calls[0]?.[1]).toBeGreaterThan(0)
   })
 })

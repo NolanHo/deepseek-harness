@@ -9,13 +9,16 @@ import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished } from 'vitest'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+// Type-only: pulls the permission preset service into this program's Context
+// merge, so the optional precondition below is typed rather than `unknown`.
+import type {} from '@deepseek-ai/dsh-permission-presets'
 import {
   assertFixtureInventory, captureStableAria, compareOrRefreshGolden,
   fixtureUserPrompts, launchWebScaffold, watchConsole, webSnapshotMode,
   type WebScaffold,
 } from './scaffold.ts'
 import {
-  connectFreshWorkspace, expandTurnProcesses, newEnglishPage, REPO_ROOT, saveFailureShot,
+  connectFreshWorkspace, expandOwningTurnProcess, expandTurnProcesses, newEnglishPage, REPO_ROOT, saveFailureShot,
 } from './support.ts'
 
 const MODE = webSnapshotMode()
@@ -68,6 +71,15 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
     await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
     await connectFreshWorkspace(page, scaffold.workspaceCwd)
+    const sessions = scaffold.ctx.sessions.list()
+    expect(sessions).toHaveLength(1)
+    // The upstream composition confines the executor and needs the explicit
+    // Full access preset before a workflow may run a shell command. The
+    // deployment composition (packages/bundle/base/cordis.patch.yml) mounts the
+    // unconfined local executor and no preset table, so there is nothing to
+    // raise — a mounted table still gets the same upgrade.
+    scaffold.ctx.get('permissionPresets')
+      ?.set(sessions[0]!, 'danger-full-access')
   }, 120_000)
 
   afterAll(async () => {
@@ -87,6 +99,7 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     await input.press('Control+Enter')
 
     const workflow = page.locator('[data-workflow-run][data-run-status="running"]')
+    await expandOwningTurnProcess(page, workflow)
     await workflow.waitFor({ timeout: 30_000 })
     const disclosures = workflow.locator('[data-disclosure-row]')
     await disclosures.nth(1).waitFor({ timeout: 15_000 })
@@ -153,7 +166,11 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     })
     expect(darkNarrow.clientWidth).toBe(356)
     expect(darkNarrow.scrollWidth).toBeLessThanOrEqual(darkNarrow.clientWidth)
-    expect(darkNarrow.color).not.toBe(lightColor)
+    // The deployment palette (FORK_SURFACE.md: "Deployment theme palette") pins
+    // its tokens above upstream's `body[data-ds-dark-theme]`, so the label keeps
+    // the same link color in both modes; the decoration and geometry below are
+    // unaffected.
+    expect(darkNarrow.color).toBe(lightColor)
     expect(darkNarrow.decoration).toContain('underline')
     expect(Number.parseFloat(darkNarrow.focusWidth)).toBeGreaterThanOrEqual(2)
     expect(darkNarrow.statusWidth).toBe(64)
@@ -184,7 +201,7 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     expect(await terminalWorkflow.getAttribute('aria-expanded')).toBe('false')
     expect(await terminalWorkflow.evaluate(element => getComputedStyle(element).cursor)).toBe('pointer')
     await terminalWorkflow.click()
-    const terminalPhase = page.getByRole('button', { name: /^Run/ })
+    const terminalPhase = page.locator('[data-workflow-run][data-run-status="completed"] [data-disclosure-row]').nth(1)
     await terminalPhase.waitFor()
     expect(await terminalPhase.getAttribute('aria-expanded')).toBe('false')
     expect(await terminalPhase.evaluate(element => getComputedStyle(element).cursor)).toBe('pointer')
@@ -207,7 +224,7 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     const snapshot = await captureStableAria(page, '[data-chat-flow]', scaffold.workspaceCwd)
     await compareOrRefreshGolden(UI_EXPECTED, snapshot, MODE)
     await workflow.click()
-    const phase = page.getByRole('button', { name: /^Run/ })
+    const phase = page.locator('[data-workflow-run][data-run-status="completed"] [data-disclosure-row]').nth(1)
     await phase.waitFor()
     expect(await phase.getAttribute('aria-expanded')).toBe('false')
     await phase.click()

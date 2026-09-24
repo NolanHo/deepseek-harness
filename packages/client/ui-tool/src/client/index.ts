@@ -5,5 +5,6 @@ export { apply, inject } from './apply.ts'
 export { GenericToolCard } from './tool/toolviews/GenericToolCard.tsx'
 export type { GenericToolCardProps } from './tool/toolviews/GenericToolCard.tsx'
 export type {
-  ToolCallOwnerProps, ToolCallViewProps, ToolHostInfoInjected, ToolTreeProps,
+  StartedToolCallViewProps, ToolCallCommonProps, ToolCallOwnerProps, ToolCallPhaseProps, ToolCallViewProps,
+  ToolCallHookContext, ToolCallInjected, ToolHostInfoInjected, ToolTreeProps, UseToolCallArgumentsPartial,
 } from './contract/slots.ts'

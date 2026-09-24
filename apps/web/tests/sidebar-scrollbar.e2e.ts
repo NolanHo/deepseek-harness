@@ -83,7 +83,7 @@ function measureList(page: Page): Promise<ListMetrics> {
       })
       .filter((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule)
       .filter(rule => rule.selectorText === '::-webkit-scrollbar-thumb:hover')
-      .map(rule => rule.style.getPropertyValue('background'))
+      .map(rule => rule.style.getPropertyValue('background-color'))
     const style = getComputedStyle(list)
     const pseudoWidth = getComputedStyle(list, '::-webkit-scrollbar').width
     const barWidth = pseudoWidth === 'auto' ? 15 : Number.parseFloat(pseudoWidth)
@@ -376,9 +376,9 @@ describe('web e2e: sidebar session list scrollbar (reserved gutter / themed thum
     // the hover token included.
     expect(light.standardWidth).toBe('auto')
     expect(light.standardColor).toBe('auto')
-    // The pseudo-element path is the one in force: the sheet's own 8px sizing
+    // The pseudo-element path is the one in force: the sheet's own 5px sizing
     // and transparent track reached a container it never names.
-    expect(light.width).toBe('8px')
+    expect(light.width).toBe('5px')
     expect(light.track).toBe('rgba(0, 0, 0, 0)')
     // The resting and the hover rule each read the rebindable indirection, and
     // the two resolve to DIFFERENT colours on this list: the l1 pair arrived
@@ -386,14 +386,15 @@ describe('web e2e: sidebar session list scrollbar (reserved gutter / themed thum
     expect(light.hoverRules).toEqual(['var(--dsh-scrollbar-thumb-hover)'])
     expect(light.token).toMatch(/^rgba?\(/)
     expect(light.hoverToken).not.toBe(light.token)
-    // The dark palette declares different scrollbar tokens; driving the body
-    // attribute pins the cascade the way lifecycle-chrome does (the Settings
-    // gesture that sets it is owned there).
+    // The deployment palette (FORK_SURFACE.md: "Deployment theme palette")
+    // declares its scrollbar tokens on the marked root and on its body above
+    // upstream's `body[data-ds-dark-theme]`, so the skin pins one palette and
+    // the attribute must not repaint this list.
     await page.evaluate(() => { document.body.setAttribute('data-ds-dark-theme', '') })
     const dark = await measureList(page)
-    expect(dark.token).not.toBe(light.token)
+    expect(dark.token).toBe(light.token)
     expect(dark.hoverToken).not.toBe(dark.token)
-    expect(dark.hoverToken).not.toBe(light.hoverToken)
+    expect(dark.hoverToken).toBe(light.hoverToken)
     await page.evaluate(() => { document.body.removeAttribute('data-ds-dark-theme') })
     const restored = await measureList(page)
     expect(restored.token).toBe(light.token)
