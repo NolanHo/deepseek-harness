@@ -277,3 +277,20 @@ export async function openSettings(page: Page, locale: 'en' | 'zh'): Promise<voi
     await page.getByRole('button', { name: label, exact: true }).click()
   }
 }
+
+/** Store the deployment theme's documented per-browser opt-out before boot.
+ *
+ * Fork patch (FORK_SURFACE.md): this deployment marks
+ * `<html data-dsh-theme="harbor">` on every boot and pins a dark-only palette
+ * in `packages/client/web/src/fork/themes.css`, so a spec whose subject is
+ * upstream's own light/dark rendering opts out. The deployed host authenticates
+ * a boot by minting its cookie and redirecting to the clean `./`
+ * (`authorizeIndex` in the connection plugin), which drops the
+ * `?theme=default` query before the client reads it, so the opt-out is written
+ * to the storage key that query owns. The key persists, so later reloads and
+ * plain `authenticatedUrl` navigations keep upstream's rendering.
+ * @param page - the page that will boot the Web client.
+ */
+export async function optOutDeploymentTheme(page: Page): Promise<void> {
+  await page.addInitScript(() => { localStorage.setItem('dsh:theme', 'default') })
+}

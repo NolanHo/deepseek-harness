@@ -38,6 +38,8 @@ describe.skipIf(process.platform === 'win32' || release().toLowerCase().includes
   let openLog: string
   const opened = async (): Promise<Array<{ path: string; content: string | null; action: 'open' | 'reveal' }>> => (await readFile(openLog, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line) as { path: string; content: string | null; action: 'open' | 'reveal' })
   const downloads: string[] = []
+  let setNativeOpen: ((enabled: boolean) => void) | undefined
+  let withdrawnOpens = 0
 
   beforeAll(async () => {
     nativeRoot = await mkdtemp(join(tmpdir(), 'dsh-present-native-'))
@@ -66,6 +68,20 @@ fs.appendFileSync(${JSON.stringify(openLog)}, JSON.stringify({ path, action, con
     if (typeof nativeQuery !== 'function') throw new Error('present requires native association discovery')
     Reflect.set(controller, 'fileApplications', async () => [{ id: 'test-editor', name: 'Test Editor', default: true, icon: null }])
     scaffold.ctx.effect(() => () => { Reflect.set(controller, 'fileApplications', nativeQuery) }, 'present: native association fixture')
+    // Fork patch (FORK_SURFACE.md): the fork's chat file opener tries the native desktop
+    // before the official Sidebar (chat/fork/open-file-routing.ts), so a prose mention would
+    // return after the OS open and never reach the preview this case asserts. Withdraw the
+    // bare native open while the mentions run and count what it refused: the mention
+    // resolves its desktop probe asynchronously, so the window closes only once every
+    // refused open has reached this host. The reveal and the application open the delivery
+    // card drives stay real, and a refused mention falls back to `sidebarRight.openResource`.
+    const nativeOpen = Reflect.get(controller, 'openPath') as (path: string, signal: AbortSignal) => Promise<void>
+    setNativeOpen = (enabled) => {
+      Reflect.set(controller, 'openPath', enabled ? nativeOpen : () => {
+        withdrawnOpens += 1
+        return Promise.reject(new Error('present: bare native open withdrawn for the prose mention'))
+      })
+    }
     disposeApproval = scaffold.ctx.on('approval/request', () => Promise.resolve('allowed-once'), { prepend: true })
     scaffold.ctx.on('session/event', (_session, event) => { events.push(event) })
     browser = await chromium.launch()
@@ -146,6 +162,8 @@ fs.appendFileSync(${JSON.stringify(openLog)}, JSON.stringify({ path, action, con
       await page.mouse.move(0, 0)
       const beforePreview = (await opened()).length
       const column = page.locator('[data-rightbar-col]')
+      const withdrawnBefore = withdrawnOpens
+      setNativeOpen?.(false)
       for (const [name, content] of [['report.txt', 'EDITED_REPORT'], ['说明.txt', 'EDITED_NOTE']] as const) {
         const mention = page.locator('code').getByRole('button', { name: `Open ${name} in sidebar`, exact: true })
         await mention.click()
@@ -156,7 +174,11 @@ fs.appendFileSync(${JSON.stringify(openLog)}, JSON.stringify({ path, action, con
         await mention.click()
         expect(await column.locator('[data-dockkit-tab]').filter({ hasText: name }).count()).toBe(1)
       }
+      // One refused bare open per mention click; waiting for all four closes the window
+      // after the last asynchronous probe, so none reaches the desktop restored below.
+      await expect.poll(() => withdrawnOpens, { timeout: 10_000 }).toBe(withdrawnBefore + 4)
       expect(await opened()).toHaveLength(beforePreview)
+      setNativeOpen?.(true)
       expect(downloads).toEqual([])
       await page.getByRole('button', { name: 'Collapse right sidebar', exact: true }).click()
       const beforeReveal = (await opened()).length

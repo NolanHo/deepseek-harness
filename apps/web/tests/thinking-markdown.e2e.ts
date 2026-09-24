@@ -16,7 +16,7 @@ import {
   webSnapshotMode,
   type WebScaffold,
 } from './scaffold.ts'
-import { expandTurnProcesses, newEnglishPage, saveFailureShot, scrollIntoView } from './support.ts'
+import { expandTurnProcesses, newEnglishPage, optOutDeploymentTheme, saveFailureShot, scrollIntoView } from './support.ts'
 
 const EXPECTED_DIR = fileURLToPath(new URL('./expected/thinking-markdown', import.meta.url))
 const UI_EXPECTED = fileURLToPath(new URL('./expected/thinking-markdown/ui.expected.md', import.meta.url))
@@ -116,6 +116,8 @@ describe('web e2e: secondary Thinking Markdown', () => {
     browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] })
     page = await newEnglishPage(browser)
     tripwire = watchConsole(page)
+    // Deployment-palette opt-out (FORK_SURFACE.md): see optOutDeploymentTheme.
+    await optOutDeploymentTheme(page)
     await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
     await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
     await page.locator('[role="treeitem"]').first().click()

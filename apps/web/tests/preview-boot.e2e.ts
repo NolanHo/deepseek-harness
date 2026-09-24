@@ -459,7 +459,7 @@ async function bootPreview(origin: string, browser: Browser): Promise<void> {
     await catalog.getByRole('treeitem', { name: /Continue preview verification/ }).waitFor()
     await catalog.press('Escape')
 
-    await expect(
+    expect(
       await loadEarlierUntil(page, async () => await page.getByText(SHOWCASE_OLDEST, { exact: true }).count() > 0),
       'load-earlier pages in the oldest preview turn',
     ).toBe(true)

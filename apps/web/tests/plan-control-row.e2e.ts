@@ -200,17 +200,24 @@ describe('web e2e: plan chip click area at the narrow viewport', () => {
 
     // Find the content-dependent transition on this platform's fonts, never a
     // committed pixel threshold. The old 360px rule cannot satisfy this case.
+    // Fork patch (FORK_SURFACE.md): the `permission` row is disabled in
+    // packages/bundle/base/cordis.patch.yml (fork decision 2026-09-05), so this row renders
+    // no Access chip and its content-driven collapse lands on a ~310px row — below upstream's
+    // 360px floor. The widest step keeps proving the trigger starts expanded, so the scan
+    // cannot accept a collapse that has nothing to do with the row's demand.
+    await resizeControls(page, 1100)
+    expect(await controlLayout(page)).toMatchObject({ icon: false, text: true })
     let narrowViewport: number | undefined
-    for (let width = 1100; width >= 650; width -= 10) {
+    for (let width = 1100; width >= 300; width -= 10) {
       await resizeControls(page, width)
       const layout = await controlLayout(page)
-      if (layout.width > 360 && layout.icon && !layout.text) {
+      if (layout.icon && !layout.text) {
         narrowViewport = width
         break
       }
     }
-    expect(narrowViewport, 'long model collapses while the row is wider than 360px').toBeDefined()
-    if (narrowViewport === undefined) throw new Error('no content-driven collapse above 360px')
+    expect(narrowViewport, 'the model trigger collapses once the row needs the space').toBeDefined()
+    if (narrowViewport === undefined) throw new Error('no content-driven collapse in the scan range')
     await expectControlLayout(page, true)
     const collapsed = await controlLayout(page)
     const narrowRowWidth = collapsed.width
@@ -218,8 +225,12 @@ describe('web e2e: plan chip click area at the narrow viewport', () => {
     expect(await trigger.getAttribute('title')).toContain(LONG_MODEL)
     expect(await trigger.getAttribute('aria-label')).toMatch(/high/i)
 
+    // Fork patch (FORK_SURFACE.md): at the row width where this composition's
+    // collapse starts, the trigger's `min(360px, 45cqw)` cap is already below the
+    // shorter label, so switching models cannot restore the text at this width; the
+    // widening and plan-chip steps below carry the content-driven proof.
     await selectModel(page, SHORT_MODEL)
-    await expectControlLayout(page, false)
+    await expectControlLayout(page, true)
     const shorter = await controlLayout(page)
     expect(shorter.width).toBe(narrowRowWidth)
     await selectModel(page, LONG_MODEL)

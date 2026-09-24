@@ -97,6 +97,17 @@ async function openSeed(page: Page): Promise<void> {
   // (tool calls, intermediate replies) render behind folds; these scenarios
   // locate rows by semantic identity, so expand every fold after the open.
   await expandAllTurnFolds(page)
+  // Fork patch (FORK_SURFACE.md): expanding every fold grows the transcript above the
+  // reader, and the fork's reflow-stable scroll anchor keeps that reading position, so the
+  // rail marks the reading-line turn instead of the last one. Re-pin the tail once the
+  // growth settles; this runs from `beforeAll`, so it waits through the page rather than
+  // through `expect.poll`, which only works inside a case.
+  await page.waitForFunction(() => {
+    const host = document.querySelector('[data-conversation-scroll]')
+    if (host === null) return false
+    host.scrollTop = host.scrollHeight
+    return Math.abs(host.scrollHeight - host.clientHeight - host.scrollTop) <= 1
+  }, undefined, { timeout: 10_000 })
   await nextPaint(page)
 }
 

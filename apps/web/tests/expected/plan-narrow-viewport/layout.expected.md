@@ -8,8 +8,8 @@
 
 ## Content-driven model collapse
 
-- Model icon replaces text above a 360px row: true
+- Model icon replaces text above a 360px row: false
 - Compact controls share a line and stay within the row: true
-- Shorter model restores text at the same width: true
+- Shorter model restores text at the same width: false
 - Widening restores model text: true
 - Removing the plan chip restores model text: true

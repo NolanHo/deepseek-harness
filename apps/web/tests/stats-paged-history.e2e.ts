@@ -130,7 +130,7 @@ describe('web e2e: whole-session stats survive history paging', () => {
     // PAGE_MESSAGES=8 (FORK_SURFACE.md), so the whole log takes several
     // requests; the Turn navigation drops its "Load and jump" wording once
     // every Turn is in the window.
-    await expect(
+    expect(
       await loadEarlierUntil(page, async () =>
         await page.getByRole('button', { name: 'Load earlier', exact: true }).count() === 0),
       'load-earlier pages in the whole log',

@@ -417,7 +417,11 @@ describe.skipIf(MODE === 'record')('web e2e: details panel follows the current S
       await expect.poll(() => columns(page)).toEqual([420, viewport.width - 420 - normalWidth, normalWidth])
       await page.setViewportSize({ width: 767, height: viewport.height })
       await expect.poll(() => panel.boundingBox()).toEqual({ x: 0, y: 0, width: 767, height: viewport.height })
-      await expect.poll(() => columns(page)).toEqual([56, 711, 0])
+      // Fork patch (FORK_SURFACE.md): the fork's mobile regime starts below
+      // MOBILE_VIEWPORT = 768 (client/fork/mobile-shell.tsx), so this width renders the
+      // single-column phone frame with the panel over it; upstream keeps the
+      // [rail, center] tracks. The panel still covers the viewport at this width.
+      await expect.poll(() => columns(page)).toEqual([767])
       expect(await sidebarSnapshot(page)).toMatchObject({ mode: 'fullscreen', resizeHandleWidth: 0, coversViewport: true })
       await checkpoint('A automatic fullscreen at 767px')
       await column.locator('[data-sidebar-right-mode="push"]').click()

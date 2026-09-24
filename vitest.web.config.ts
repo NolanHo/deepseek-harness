@@ -56,6 +56,22 @@ export default defineConfig({
     // (FORK_SURFACE.md: reasoning row summary), so the preview it drives does
     // not exist here. Restore path: drop the fork's ReasoningRow patch and
     // re-record snapshots/web/reasoning-preview.
+    //
+    // shipped-composition-auto (split out of shipped-composition.e2e.ts) drives
+    // the host `permissionPresets` service to switch a Session into Auto. The
+    // same disabled `permission` row leaves the `auto-review` entry pending on
+    // that service, so the Auto producer never activates and no case can reach
+    // its subject. Restore path: clear the `permission` row's `disabled: true`
+    // flag and fold the file's cases back into shipped-composition.e2e.ts.
+    //
+    // github-ready-review drives the shipped webhook runtime's ingress route,
+    // which the same disabled `permission` row keeps unregistered:
+    // webhook-runtime injects `permissionPresets`, so its entry stays pending
+    // and a signed ping answers 404 where the scenario expects 202. The gap
+    // predates this sync (the pre-upgrade branch disables the same row and the
+    // spec asserts the same 202), and the lane records it here instead of
+    // claiming the feature works. Restore path: clear the `permission` row's
+    // `disabled: true` flag.
     exclude: [
       'apps/web/tests/settings-chrome.e2e.ts',
       'apps/web/tests/permission-policy-context.e2e.ts',
@@ -64,6 +80,8 @@ export default defineConfig({
       'apps/web/tests/approval-composer.e2e.ts',
       'apps/web/tests/ptc-escalation.e2e.ts',
       'apps/web/tests/reasoning-preview.e2e.ts',
+      'apps/web/tests/shipped-composition-auto.e2e.ts',
+      'apps/web/tests/github-ready-review.e2e.ts',
     ],
     // Local and record runs stay serial. CI runs workspace-mutating HMR and
     // dynamic Cordis lifecycle coverage before parallelizing the remaining files.
