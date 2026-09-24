@@ -40,10 +40,10 @@ interface WebBootEntry {
 
 ```ts type-equiv
 /**
- * Initial scheduling phase for one revisioned combo script. Bootstrap
- * scripts block the parser; application scripts are preloaded before the shell
- * runs; deferred scripts stay unfetched until the shell asks for their
- * entries after first mount.
+ * Initial scheduling phase for one revisioned combo script. Bootstrap scripts
+ * block the parser; application scripts are preloaded before the shell runs;
+ * deferred scripts stay unfetched until the shell asks for their entries after
+ * first mount.
  */
 type WebBootBatchPhase = 'bootstrap' | 'application' | 'deferred'
 ```

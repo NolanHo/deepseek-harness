@@ -29,7 +29,7 @@ The hide keeps its anti-flash job for the sub-second settles it was written for 
 
 **Drop the parent-availability clause from `settling` entirely.** It removes the flash protection for a read that lands `false`, and leaves the history-open clause unbounded; the ceiling keeps both properties.
 
-**Port upstream's summary-based parent availability.** Upstream replaced the read-derived fact with a Host-summary projection (`e55093b47d`, `agentAvailable` + `updateParentAvailability`); the fork is behind that migration and its summary wire carries no such field, so the port belongs to the next upstream sync rather than to a client bug fix.
+**Port upstream's summary-based parent availability.** Upstream replaced the read-derived fact with a Host-summary projection (`agentAvailable` + `updateParentAvailability`); the fork is behind that migration and its summary wire carries no such field, so the port belongs to the next upstream sync rather than to a client bug fix.
 
 **Add a timeout to the Remote RPC layer.** That settles a stalled read too, but it is a transport-wide policy decision (every RPC, every consumer) rather than a fix for this symptom.
 

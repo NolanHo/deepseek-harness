@@ -14,7 +14,7 @@ The deployment's `dsh-session-snooze` plugin needs exactly that row: its first v
 
 ## Decision
 
-Add one contribution point, owned by the fork module `packages/client/ui-workspace/src/client/fork/session-row-menu.ts`:
+Add one contribution point, owned by the fork's `session-row-menu.ts` module in `ui-workspace`'s client `fork/` directory — retired in the `dsh-v0.1.7-rc.1` sync, where the seat moved to upstream's `sidebar.workspaces.session.menu.item` and `sidebar.workspaces.session.row.action` list slots in `packages/client/ui-workspace/src/client/contract/slots.ts`:
 
 - `createSessionRowMenu()` returns a registry with `register(contribution)` (duplicate `id` throws, the returned disposer removes it), `snapshot()` (one array reference until a registration changes) and `subscribe(listener)`.
 - `SessionRowMenuContribution` is `{ id, label, icon?, submenu(sessionId), onSelect(sessionId, leafId) }` — data, not React: the registrant localizes its own copy, decides per Session which leaves exist (an empty array hides the row for that Session), and receives the Session id with the leaf it selected.

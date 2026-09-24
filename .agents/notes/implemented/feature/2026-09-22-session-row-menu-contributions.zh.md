@@ -14,7 +14,7 @@
 
 ## 决定
 
-新增一个贡献点，由 fork 模块 `packages/client/ui-workspace/src/client/fork/session-row-menu.ts`拥有：
+新增一个贡献点，由 `ui-workspace` 客户端 `fork/` 目录下的 fork 模块 `session-row-menu.ts` 拥有——该模块已随 `dsh-v0.1.7-rc.1` 同步退役，座位转到 `packages/client/ui-workspace/src/client/contract/slots.ts` 中上游的 `sidebar.workspaces.session.menu.item` 与 `sidebar.workspaces.session.row.action` list slot：
 
 - `createSessionRowMenu()` 返回注册表：`register(contribution)`（重复 `id` 抛错，返回的 disposer 移除它）、`snapshot()`（在注册变化前返回同一数组引用）、`subscribe(listener)`。
 - `SessionRowMenuContribution` 是 `{ id, label, icon?, submenu(sessionId), onSelect(sessionId, leafId) }`——是数据而不是 React：注册者自己本地化文案、按会话决定有哪些叶子（空数组即对该会话隐藏这一行），并在选择时收到会话 id 与所选叶子。
