@@ -89,7 +89,8 @@ describe('Remote stream mux server carrier lifecycle', () => {
 
     client.send(JSON.stringify({ type: 'open', streamId: 's1', endpoint: 'x', payload: null }))
     const [message] = await once(client, 'message') as [RawData, boolean]
-    expect(JSON.parse(rawJson(message)).type).toBe('item')
+    const frame = JSON.parse(rawJson(message)) as { type: string }
+    expect(frame.type).toBe('item')
 
     const closed = once(client, 'close')
     await entry.mux.close()
@@ -537,7 +538,7 @@ describe('Remote stream mux diagnostics', () => {
     const recorded = recordDiagnostics(3_000)
     const entry = await startDiagnosticMux(
       async (_endpoint, _payload, _uplink, _peer, control) =>
-      waitForAbort(control.signal),
+        waitForAbort(control.signal),
       20,
       recorded.options,
     )
@@ -585,7 +586,7 @@ describe('Remote stream mux diagnostics', () => {
     const recorded = recordDiagnostics(3_000)
     const entry = await startDiagnosticMux(
       async (_endpoint, _payload, _uplink, _peer, control) =>
-      waitForAbort(control.signal),
+        waitForAbort(control.signal),
       30_000,
       recorded.options,
     )
@@ -658,7 +659,7 @@ describe('Remote stream mux diagnostics', () => {
     const recorded = recordDiagnostics(10)
     const entry = await startDiagnosticMux(
       async (_endpoint, _payload, _uplink, _peer, control) =>
-      waitForAbort(control.signal),
+        waitForAbort(control.signal),
       20,
       recorded.options,
     )
@@ -742,10 +743,9 @@ function stallEventLoop(ms: number): void {
 
 /** Decode one ws text frame to its JSON string, across every RawData shape. */
 function rawJson(data: RawData): string {
-  const raw = Array.isArray(data) ? Buffer.concat(data)
-    : data instanceof ArrayBuffer ? Buffer.from(data)
-      : Buffer.from(data as Buffer)
-  return raw.toString('utf8')
+  if (Array.isArray(data)) return Buffer.concat(data).toString('utf8')
+  const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data
+  return Buffer.from(bytes).toString('utf8')
 }
 
 async function startMux(

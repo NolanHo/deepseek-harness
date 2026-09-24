@@ -665,7 +665,7 @@ function rejectNotFound(address: SessionAddress): never {
 
 /**
  * Cut one backwards page with the session's page rule: the walk stops at the
- * max-th append-origin message below the page end (widening to its provenance
+ * max-th append-origin message below the page end (widening to its origin
  * group head), or, when `turnWindow` is set, at the turn/start carrying both
  * its minima.
  *
@@ -698,7 +698,7 @@ export function paginate(
   readonly hasMore: boolean
   /**
    * Absolute seq of the page's first event, or `baseSeq` when the walk ran out
-   * of window; below `baseSeq` when the cut's provenance group reaches past the
+   * of window; below `baseSeq` when the cut's origin group reaches past the
    * window head, which the caller reads as an unproven window.
    */
   readonly cut: number
@@ -735,7 +735,7 @@ export function paginate(
       break
     }
   }
-  // A cut below the window head widens a provenance group past this read: the
+  // A cut below the window head widens an origin group past this read: the
   // caller reads that off `cut` and widens its window instead of serving this
   // slice.
   return {

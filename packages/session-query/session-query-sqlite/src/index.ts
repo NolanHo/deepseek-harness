@@ -573,6 +573,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     // Fork patch (FORK_SURFACE.md): memo lookup, recompute, and eviction are owned by the fork memo.
     return this._liveObservationMemo.observe(
       session.id,
+      // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
       session.snapshotEvents(),
       () => observeLive(session),
     )

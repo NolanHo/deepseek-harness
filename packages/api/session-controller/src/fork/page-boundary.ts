@@ -79,7 +79,7 @@ export interface WindowPage {
  * @param baseSeq - absolute seq of the window's first event; 0 for a whole log.
  * @param throughSeq - inclusive absolute page end.
  * @returns the page events, the cut seq, and whether the walk ran out of window
- *   before cutting: a cut below the window head widens a provenance group past
+ *   before cutting: a cut below the window head widens an origin group past
  *   this read, so the caller widens the window or falls back.
  */
 export type WindowPageCut = (
@@ -215,7 +215,7 @@ export async function readIndexedSuffix(
     // decision the observation path's walk makes from the same page end. A walk
     // that ran out of window proves its cut only when the window is the log
     // prefix below that end (`fromSeq === 0`); a cut below the window head
-    // widens a provenance group past the read. Both unproven shapes take the
+    // widens an origin group past the read. Both unproven shapes take the
     // ladder rather than serving a page the observation path would not.
     const proven = !page.exhausted && page.cut >= fromSeq
     // A page-less window is never worth serving: the observation path answers

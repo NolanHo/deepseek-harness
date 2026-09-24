@@ -155,13 +155,13 @@ it('publishes live chunk frames at frame cadence, not once per chunk', async ({ 
   const attempt = LlmAttemptId('session:cadence')
   mock.streams.push(FOLLOW, { type: 'assistant-stream', frame: {
     type: 'start', attemptId: attempt, revision: 1, startedAfterSeq: -1, turn: 1, step: 1,
-  } } as never)
+  } })
   await mock.streams.drained(FOLLOW)
   for (const index of [0, 1, 2]) {
     mock.streams.push(FOLLOW, { type: 'assistant-stream', frame: {
       type: 'chunk', attemptId: attempt, revision: index + 2, index, time: 20 + index,
       chunk: { type: 'text-delta', index: 0, text: `chunk-${String(index)}` },
-    } } as never)
+    } })
     await mock.streams.drained(FOLLOW)
   }
   for (let turn = 0; turn < 4; turn++) await new Promise<void>((resolve) => { queueMicrotask(() => { resolve() }) })

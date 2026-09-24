@@ -88,7 +88,9 @@ export class SkillRestrictionStore {
   constructor(onChange: () => void) {
     this.layers = new ScopedLayers<RestrictionLayer>(
       () => new RestrictionLayer(),
-      () => onChange(),
+      () => {
+        onChange()
+      },
     )
   }
 

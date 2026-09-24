@@ -21,7 +21,7 @@ export const THEME_MARKER = 'harbor'
  */
 function stored(): typeof THEME_MARKER | 'default' | undefined {
   try {
-    const value = globalThis.localStorage?.getItem(THEME_STORAGE_KEY)
+    const value = globalThis.localStorage.getItem(THEME_STORAGE_KEY)
     return value === THEME_MARKER || value === 'default' ? value : undefined
   } catch {
     // A blocked storage (private mode, disabled cookies) only costs persistence;
@@ -33,8 +33,8 @@ function stored(): typeof THEME_MARKER | 'default' | undefined {
 /** Persist or clear the opt-out, ignoring a blocked storage. */
 function store(value: typeof THEME_MARKER | 'default' | undefined): void {
   try {
-    if (value === undefined) globalThis.localStorage?.removeItem(THEME_STORAGE_KEY)
-    else globalThis.localStorage?.setItem(THEME_STORAGE_KEY, value)
+    if (value === undefined) globalThis.localStorage.removeItem(THEME_STORAGE_KEY)
+    else globalThis.localStorage.setItem(THEME_STORAGE_KEY, value)
   } catch {
     // Same blocked-storage case as `stored`: this page still gets the attribute.
   }

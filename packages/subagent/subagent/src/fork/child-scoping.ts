@@ -48,7 +48,7 @@ export function applyChildSkillFilter(childCtx: Context, filter: SkillFilter): v
   // `ctx.get` returns `any` for untyped names, and this package deliberately
   // does not depend on the registry's declarations, so the structural surface
   // narrows it.
-  const skills: SkillsRestrictSurface | undefined = childCtx.get('skills')
+  const skills = childCtx.get('skills') as SkillsRestrictSurface | undefined
   if (skills === undefined) {
     throw new Error('skillFilter requires the skill registry: compose @deepseek-ai/dsh-skill before restricting a child\'s skills')
   }

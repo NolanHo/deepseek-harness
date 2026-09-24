@@ -16,7 +16,7 @@ export const REDUCE_MOTION_QUERY_KEY = 'reduce-motion'
  */
 function stored(): '1' | '0' | undefined {
   try {
-    const value = globalThis.localStorage?.getItem(REDUCE_MOTION_STORAGE_KEY)
+    const value = globalThis.localStorage.getItem(REDUCE_MOTION_STORAGE_KEY)
     return value === '1' || value === '0' ? value : undefined
   } catch {
     // A blocked storage (private mode, disabled cookies) only costs persistence;
@@ -28,8 +28,8 @@ function stored(): '1' | '0' | undefined {
 /** Persist or clear the opt-out, ignoring a blocked storage. */
 function store(value: '1' | '0' | undefined): void {
   try {
-    if (value === undefined) globalThis.localStorage?.removeItem(REDUCE_MOTION_STORAGE_KEY)
-    else globalThis.localStorage?.setItem(REDUCE_MOTION_STORAGE_KEY, value)
+    if (value === undefined) globalThis.localStorage.removeItem(REDUCE_MOTION_STORAGE_KEY)
+    else globalThis.localStorage.setItem(REDUCE_MOTION_STORAGE_KEY, value)
   } catch {
     // Same blocked-storage case as `stored`: this page still gets the attribute.
   }

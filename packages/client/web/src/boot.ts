@@ -40,8 +40,8 @@ export class AppWebEntry {
   constructor(container: HTMLElement, seams?: BootSeams) {
     this.container = container
     this.seams = seams
-    applyReduceMotion(document.documentElement, globalThis.location?.search ?? '')
-    applyTheme(document.documentElement, globalThis.location?.search ?? '')
+    applyReduceMotion(document.documentElement, globalThis.location.search)
+    applyTheme(document.documentElement, globalThis.location.search)
     this.page = new BootPage(container)
   }
 
