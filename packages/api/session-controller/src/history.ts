@@ -8,9 +8,10 @@ import {
   SessionLogOffset,
   SessionSeq,
 } from '@deepseek-ai/dsh-session'
-// Fork patch (FORK_SURFACE.md): user-aligned turn-complete paging lives in the
-// fork-owned page-boundary module; this file keeps only the injection.
-import { readIndexedPage, type SeekablePersistence } from './fork/page-boundary.ts'
+// Fork patch (FORK_SURFACE.md): the indexed physical read behind both history
+// fast paths lives in the fork-owned page-boundary module, which cuts every
+// window with this file's own `paginate`; this file keeps the injections.
+import { readIndexedPage, type SeekablePersistence, type WindowPageCut } from './fork/page-boundary.ts'
 // Fork patch (FORK_SURFACE.md): the cold opening snapshot's windowed read lives
 // in the fork-owned open-window module; this file keeps the try and its fallback.
 import { readOpeningWindow, type OpeningWindow, type OpeningWindowServices } from './fork/open-window.ts'
@@ -308,13 +309,14 @@ export class SessionHistoryController {
 
   /**
    * Indexed-seek fast path for ordinary Session pages: the persistence
-   * backend answers the maxMessages-th append-origin user message below the
-   * page end in one indexed scan (~3ms on SQLite), so the page reads only
-   * its minimal suffix instead of observing the whole log. Subagent pages
+   * backend answers the page floor's append-origin user message (the turn
+   * window's `minMessages`, else the request's cap) below the page end in one
+   * indexed scan (~3ms on SQLite), so the page reads only the suffix that
+   * holds it instead of observing the whole log. Subagent pages
    * need catalog projections and stay on the observation path. Returns
    * undefined whenever the backend cannot answer or the suffix does not
-   * provably hold a complete page — the caller then falls back to the full
-   * observation path.
+   * provably hold the page the observation path cuts — the caller then falls
+   * back to the full observation path.
    */
   private async tryIndexedPage(
     request: SessionPageRequest,
@@ -328,10 +330,14 @@ export class SessionHistoryController {
         id: addressId(request.address),
         // Fork patch (FORK_SURFACE.md): the client's turn window carries the page
         // floor; `maxMessages` is only the cap the observation path also applies.
-        maxMessages: request.turnWindow?.minMessages ?? request.maxMessages ?? DEFAULT_MAX_MESSAGES,
+        seedMessages: request.turnWindow?.minMessages ?? request.maxMessages ?? DEFAULT_MAX_MESSAGES,
         beforeSeq: request.beforeSeq,
         throughSeq: request.throughSeq,
-      }, (meta, events, readEnd, storedEnd) => {
+      },
+      // Fork patch (FORK_SURFACE.md): the window is cut by this file's own
+      // `paginate`, so the indexed read serves the observation page.
+      this.windowCut(request.beforeSeq, request.maxMessages ?? DEFAULT_MAX_MESSAGES, request.turnWindow),
+      (meta, events, readEnd, storedEnd) => {
         if (meta.cwd === undefined) rejectNotFound(request.address)
         validateAddress(request.address, meta, SessionLogOffset(0), undefined)
         // A read bounded below the request cursor serves an older page: the
@@ -415,7 +421,11 @@ export class SessionHistoryController {
         services,
         // Fork patch (FORK_SURFACE.md): the client's turn window carries the page
         // floor; `maxMessages` is only the cap the observation path also applies.
-        { sessionId, maxMessages: request.turnWindow?.minMessages ?? request.maxMessages ?? DEFAULT_MAX_MESSAGES },
+        { sessionId, seedMessages: request.turnWindow?.minMessages ?? request.maxMessages ?? DEFAULT_MAX_MESSAGES },
+        // Fork patch (FORK_SURFACE.md): the opening window is cut by this file's
+        // own `paginate` under the request's turn window, exactly as the
+        // observation branch below cuts it.
+        this.windowCut(undefined, request.maxMessages ?? DEFAULT_MAX_MESSAGES, request.turnWindow),
         (meta, _events) => {
           if (meta.cwd === undefined) rejectNotFound(address)
           validateAddress(address, meta, SessionLogOffset(0), undefined)
@@ -433,6 +443,34 @@ export class SessionHistoryController {
       if (error instanceof RemoteError) throw error
       return undefined
     }
+  }
+
+  /**
+   * Fork patch (FORK_SURFACE.md): the page rule the indexed fast paths cut a
+   * read window with — this file's own `paginate`, bound to the request's page
+   * size, page-before bound, and turn window. One rule for both paths is what
+   * keeps an indexed suffix read and the whole-log observation serving the same
+   * page for the same request.
+   * @param beforeSeq - the request's exclusive page bound, undefined when the
+   *   page ends at the read's own cursor (the opening page).
+   * @param maxMessages - the request's page cap in messages.
+   * @param turnWindow - the request's turn window, undefined when it carries none.
+   * @returns the rule the fork read plan applies to each window it accepts.
+   */
+  private windowCut(
+    beforeSeq: number | undefined,
+    maxMessages: number,
+    turnWindow: SessionPageRequest['turnWindow'],
+  ): WindowPageCut {
+    const bound = beforeSeq === undefined ? undefined : SessionLogOffset(beforeSeq)
+    return (window, baseSeq, throughSeq) => paginate(
+      window,
+      bound,
+      maxMessages,
+      throughSeq === -1 ? -1 : SessionSeq(throughSeq),
+      turnWindow,
+      baseSeq,
+    )
   }
 
   /**
@@ -625,23 +663,60 @@ function rejectNotFound(address: SessionAddress): never {
   })
 }
 
-function paginate(
+/**
+ * Cut one backwards page with the session's page rule: the walk stops at the
+ * max-th append-origin message below the page end (widening to its provenance
+ * group head), or, when `turnWindow` is set, at the turn/start carrying both
+ * its minima.
+ *
+ * Fork patch (FORK_SURFACE.md): the indexed fast path applies this same walk to
+ * a dense suffix window (`baseSeq` is that window's first seq), so the indexed
+ * read and the observation cut one page; the export serves that seam and the
+ * paging specs' differential oracle.
+ *
+ * @param events - the log or one dense suffix window of it, in seq order.
+ * @param beforeSeq - exclusive page-before bound, undefined when the page ends at `throughSeq`.
+ * @param maxMessages - page cap in append-origin messages.
+ * @param throughSeq - inclusive page end seq, -1 before any event exists.
+ * @param turnWindow - optional turn minima the walk also stops at.
+ * @param baseSeq - absolute seq of `events[0]`; 0 for a whole log.
+ * @returns the page events, whether older history exists, the absolute cut seq,
+ *   and whether the walk reached the window head without cutting.
+ */
+export function paginate(
   events: readonly SessionEvent[],
   beforeSeq: SessionLogOffsetType | undefined,
   maxMessages: number,
   throughSeq: SessionSeqCursor,
   turnWindow?: SessionPageRequest['turnWindow'],
-): { readonly events: SessionEvent[]; readonly hasMore: boolean } {
+  // Fork patch (FORK_SURFACE.md): the indexed fast path hands this walk a dense
+  // suffix window whose first element sits at `baseSeq`; the observation path
+  // reads the whole log and leaves it at 0, so both paths cut one page.
+  baseSeq = 0,
+): {
+  readonly events: SessionEvent[]
+  readonly hasMore: boolean
+  /**
+   * Absolute seq of the page's first event, or `baseSeq` when the walk ran out
+   * of window; below `baseSeq` when the cut's provenance group reaches past the
+   * window head, which the caller reads as an unproven window.
+   */
+  readonly cut: number
+  /** Whether the backwards walk reached the window head without cutting. */
+  readonly exhausted: boolean
+} {
   const end = SessionLogOffset(Math.min(throughSeq + 1, beforeSeq ?? throughSeq + 1))
   let count = 0
   let turns = 0
-  let cut = SessionLogOffset(0)
-  for (let index = end - 1; index >= 0; index--) {
+  let cut = baseSeq
+  let exhausted = true
+  for (let index = end - 1 - baseSeq; index >= 0; index--) {
     const event = events[index] as SessionEvent
     if (turnWindow !== undefined && event.type === 'turn/start') {
       turns++
       if (count >= turnWindow.minMessages && turns >= turnWindow.minTurns) {
-        cut = SessionLogOffset(index)
+        cut = SessionLogOffset(index + baseSeq)
+        exhausted = false
         break
       }
     }
@@ -656,10 +731,19 @@ function paginate(
     }
     if (count >= maxMessages) {
       cut = SessionLogOffset(groupStart)
+      exhausted = false
       break
     }
   }
-  return { events: events.slice(cut, end), hasMore: cut > 0 }
+  // A cut below the window head widens a provenance group past this read: the
+  // caller reads that off `cut` and widens its window instead of serving this
+  // slice.
+  return {
+    events: events.slice(Math.max(cut - baseSeq, 0), Math.max(end - baseSeq, 0)),
+    hasMore: cut > 0,
+    cut,
+    exhausted,
+  }
 }
 
 /** Translate current logical Session metadata to the browser wire. */

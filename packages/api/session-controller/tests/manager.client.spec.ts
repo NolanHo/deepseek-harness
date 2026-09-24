@@ -1437,10 +1437,13 @@ describe('connected generation', () => {
     expect(remote.session.page).toHaveBeenCalledTimes(historyCallsBefore)
   })
 
-  it('re-opens failed session windows on reset', async ({ mock, remote }) => {
-    const manager = makeManager(mock, remote)
-    onTestFinished(() => manager.dispose())
+  it('re-opens failed session windows on reset', async ({ mock, start }) => {
+    // Opening a window goes through the Gateway stream factory, which the narrow
+    // makeManager Remote does not carry; this case needs the booted client's Remote.
     mock.stream(FOLLOW, followScript(err(new RemoteError('gateway/internal', 'carrier reset', {}))))
+    const client = await start()
+    const manager = new SessionManager(client.ctx.remote)
+    onTestFinished(() => manager.dispose())
     const openedSession = manager.get(S1)
     await openedSession.open().catch(() => {})
     expect(openedSession.getSnapshot().openState).toBe('error')

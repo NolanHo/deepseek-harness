@@ -397,7 +397,7 @@ describe('Chat inject API', () => {
 
   it('gates a delivered prose mention on Host native-opening availability', async () => {
     const b = await bench()
-    const { injected } = b.chatViewApi(ROOT)
+    const { injected } = b.chatViewApi(b.rootReference)
     const nativeOpen = vi.fn()
     const hit = { open: nativeOpen, label: 'open', title: 'site/report.html' }
     const resolve = vi.fn<() => typeof hit | undefined>(() => hit)

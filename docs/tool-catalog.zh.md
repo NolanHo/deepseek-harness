@@ -2509,7 +2509,7 @@ todo_write 是会话所有的状态；UI 将最新的 todo/write 事件渲染为
 
 ### `web_search`
 
-在 Web 上搜索最新信息。在必填的 `queries` 数组中提供 1–4 个查询。返回可选的摘要答案和来源 URL 列表。
+在 Web 上搜索最新信息。在必填的 `queries` 数组中提供 1–4 个查询。可选择通过 `backend` 参数指定搜索后端，仅覆盖本次调用的已配置默认值。返回可选的摘要答案和来源 URL 列表。
 
 ```json
 {
@@ -2521,6 +2521,10 @@ todo_write 是会话所有的状态；UI 将最新的 todo/write 事件渲染为
       "items": {
         "type": "string"
       }
+    },
+    "backend": {
+      "type": "string",
+      "description": "Optional search backend override. Omit to use the default backend. Naming a backend that is not registered fails with the list of available backends."
     }
   },
   "required": [

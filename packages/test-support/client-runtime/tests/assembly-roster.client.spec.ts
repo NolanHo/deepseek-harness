@@ -14,6 +14,7 @@ describe('graphFromRoster', () => {
   it('synthesizes one application batch over every row with placeholder references', () => {
     expect(graphFromRoster(ROWS)).toEqual({
       rev: 'local',
+      trustedAuthorities: [],
       entries: [
         { id: MODULES_PACKAGE, url: `plugins/${MODULES_PACKAGE}/client.js`, rev: 'local', immediately: true },
         { id: '@x/a', url: 'plugins/@x/a/client.js', rev: 'local' },
@@ -25,7 +26,9 @@ describe('graphFromRoster', () => {
 
   it('parses through the production validator to plugin rows that mirror the roster, refusing duplicates and an empty roster', () => {
     const manifest = parseBootManifest(graphFromRoster(ROWS))
-    expect(manifest.plugins).toEqual(ROWS.map(row => ({ id: row.name, inject: [...row.inject], immediately: row.immediately })))
+    expect(manifest.plugins).toEqual(ROWS.map(row => ({
+      id: row.name, inject: [...row.inject], immediately: row.immediately, deferred: false,
+    })))
     expect(manifest.modules.map(row => row.initialUrl)).toEqual(['plugins/local.js', 'plugins/local.js', 'plugins/local.js'])
     const row = ROWS[1]!
     expect(() => parseBootManifest(graphFromRoster([row, row]))).toThrow('duplicate graph entry "@x/a"')

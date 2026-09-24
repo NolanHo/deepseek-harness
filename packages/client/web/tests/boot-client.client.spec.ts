@@ -14,6 +14,7 @@ function graphOf(ids: readonly string[]): WebBootGraph {
   const entries: WebBootEntry[] = ids.map(id => ({ id, url: `/${id}.js`, rev: '1' }))
   return {
     rev: 'graph',
+    trustedAuthorities: [],
     entries,
     batches: [{ phase: 'application', url: '/application.js', rev: 'batch', entries: [...ids] }],
   }

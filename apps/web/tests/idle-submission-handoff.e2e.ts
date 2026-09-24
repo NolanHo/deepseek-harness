@@ -136,7 +136,7 @@ it.skipIf(webSnapshotMode() === 'record').each(['inbox-first', 'transcript-first
       gate.holding = true
       const input = page.locator('[data-composer-input]').first()
       await input.fill(TEXT)
-      await input.press('Enter')
+      await input.press('Control+Enter')
       await promptBlocked.promise
       await expect.poll(() => placement(page)).toMatchObject({ echo: 1, dock: 0, durable: 0 })
       trace.push({ phase: 'optimistic', ...await placement(page) })
@@ -229,7 +229,7 @@ it.skipIf(webSnapshotMode() === 'record').each(['ABC', 'ACB', 'BAC', 'BCA', 'CAB
       const input = page.locator('[data-composer-input]').first()
       for (const id of releases.keys()) {
         await input.fill(text(id))
-        await input.press('Enter')
+        await input.press('Control+Enter')
         await expect.poll(() => blocked.has(id)).toBe(true)
         await expect.poll(() => placement(page, text(id))).toMatchObject({ echo: 1, dock: 0, durable: 0 })
       }

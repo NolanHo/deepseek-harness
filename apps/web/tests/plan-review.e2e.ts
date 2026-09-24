@@ -281,7 +281,7 @@ describe('web e2e: dismissed plan history', () => {
       const input = page.locator('[data-composer-input]').first()
       const settled = scaffold.whenTurnSettled(30_000)
       await input.fill(LINE)
-      await input.press('Enter')
+      await input.press('Control+Enter')
       const review = page.locator('[data-plan-review-key]')
       await review.waitFor({ state: 'visible' })
       await page.locator('[data-plan-preview]').waitFor({ state: 'visible' })

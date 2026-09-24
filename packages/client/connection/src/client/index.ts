@@ -118,6 +118,12 @@ interface ClientTransportGlobal {
 /** Browser location fields used to classify loopback authority. */
 export interface ConnectionLocation {
   readonly hostname: string
+  /**
+   * Page port (`''` on a default port). A composition that synthesizes a
+   * location without one leaves it absent: only a port-less authority entry
+   * can then match.
+   */
+  readonly port?: string
 }
 
 /** Instance-local inputs for installing a Connection service. */
@@ -287,7 +293,7 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
     || pageLocation === undefined
     || isLoopbackHostname(pageLocation.hostname)
     || (ctx.get('modules')?.manifest.trustedAuthorities ?? []).some(
-      entry => matchesAuthority(pageLocation.hostname, pageLocation.port, entry),
+      entry => matchesAuthority(pageLocation.hostname, pageLocation.port ?? '', entry),
     )
   const handle: ConnectionHandle = {
     isLoopback: servingAuthority,

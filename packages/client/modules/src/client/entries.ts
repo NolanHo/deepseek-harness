@@ -207,7 +207,13 @@ export class ClientEntries {
       // Removed fibers no longer appear in Loader.getTasks().
       while (fiber?.inertia !== undefined) await fiber.inertia
     }
+    // Fork patch (FORK_SURFACE.md): the deferred boot batches surface (`client/modules`
+    // + `client/web`) owns a deferred row's Loader entry — `boot.ts`'s
+    // `activateDeferred` creates it after the application mounts — so reconciliation
+    // must neither fetch its bytes early nor create a second entry under that name.
+    const deferred = new Set(manifest.plugins.filter(row => row.deferred).map(row => row.id))
     for (const row of manifest.modules) {
+      if (deferred.has(row.id)) continue
       if (!this.current(generation)) break
       try {
         const entry = this.managed.get(row.id)

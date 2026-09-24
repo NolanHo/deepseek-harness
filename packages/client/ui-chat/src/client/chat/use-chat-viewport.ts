@@ -56,9 +56,13 @@ export class ChatViewport {
   private readonly reflow: { current: ReflowAnchor | null } = { current: null }
   /** Ledger facade over `observation.top`: a reflow write records itself there,
    * so reader-input attribution keeps the current ownership state. */
-  private readonly reflowLedger = {
-    get current(): number { return this.observation.top },
-    set current(top: number) { this.observation.top = top },
+  private get reflowLedger(): { current: number } {
+    const read = (): number => this.observation.top
+    const write = (top: number): void => { this.observation.top = top }
+    return {
+      get current(): number { return read() },
+      set current(top: number) { write(top) },
+    }
   }
 
   /**

@@ -2,6 +2,8 @@
 
 import { SessionFormatError, SessionFormatUnsupportedMigrationError, isSessionFormatJsonObject, sessionFormatCount } from '@deepseek-ai/dsh-session-format'
 import type { SessionFormatArtifact, SessionFormatJsonObject, SessionFormatJsonValue } from '@deepseek-ai/dsh-session-format'
+// Fork patch (FORK_SURFACE.md): the installed descriptor generation reaches the catalog fact.
+import { isInterpretedDescriptorVersion } from './fork/subagent-descriptor-compat.ts'
 
 /**
  * Collect a child's own descriptor without requiring one before its parent catalog is read.
@@ -47,7 +49,7 @@ export function childCatalogFact(source: SessionFormatJsonObject): SessionFormat
   const id = source['childId'] as string
   const descriptor = source['descriptor']
   const count = source['descriptorCount'] as number
-  const known = isSessionFormatJsonObject(descriptor) && [1, 2, 3].includes(descriptor['version'] as number)
+  const known = isSessionFormatJsonObject(descriptor) && isInterpretedDescriptorVersion(descriptor['version'])
   if (count !== 1 || !known) return undefined
   if (typeof descriptor['provider'] !== 'string') {
     throw new SessionFormatUnsupportedMigrationError(`${childCatalogSubject(source)} has an invalid subagent descriptor provider`)

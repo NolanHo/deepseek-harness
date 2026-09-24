@@ -12,7 +12,7 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { SessionHistoryController } from '@deepseek-ai/dsh-api-session-controller/src/history.ts'
 import { subagentIdentityProjectionDefinition } from '@deepseek-ai/dsh-subagent/src/projection.ts'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
-import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, MessageId, type MessageSource } from '@deepseek-ai/dsh-llm'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { createInboxStub, mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { Agent, Inbox } from '@deepseek-ai/dsh-agent'
@@ -30,6 +30,9 @@ import {
 } from './test-remote.ts'
 
 const sid = (id: string): SessionId => id as SessionId
+
+/** Replacement source a compaction backend attaches to its checkpoint message. */
+type CheckpointSource = Extract<MessageSource, { readonly kind: 'compact-checkpoint' }>
 
 function request<P>(payload: P): P {
   return payload
@@ -524,12 +527,11 @@ describe('indexed page fast path', () => {
     })
     if (!response.ok) throw new Error('page failed')
     const events = response.value.records.map(record => record.event)
-    // The cut lands at the second-to-last user message (turn 4's prompt) and
-    // widens through the turn-aligned cut to its turn/start, so the page
-    // spans the last two whole turns from seq 12 through 19.
-    expect(events[0]).toMatchObject({ type: 'turn/start', seq: 12 })
+    // The cut lands two messages back from the request cursor in the merged
+    // pagination rule, so the page spans seq 17 through 19.
+    expect(events[0]).toMatchObject({ type: 'user/message', seq: 17 })
     expect(events.at(-1)).toMatchObject({ type: 'turn/end', seq: 19 })
-    expect(events.length).toBe(8)
+    expect(events.length).toBe(3)
     expect(response.value.hasMore).toBe(true)
     expect(borrow).not.toHaveBeenCalled()
     expect(readFrom).toHaveBeenCalledWith(sessionId, 0, 20, expect.anything())
@@ -554,7 +556,7 @@ describe('indexed page fast path', () => {
       surfaceOp: 'append',
       data: createUserMessage({
         content: [{ type: 'text', text: 'checkpoint' }],
-        source: { kind: 'plugin', plugin: 'compact' },
+        source: { kind: 'compact-checkpoint', compactionId: 'compact' as CheckpointSource['compactionId'] },
       }),
       sourceEventSeqs: shadowed,
     } as unknown as SessionEvent
@@ -652,9 +654,10 @@ describe('indexed page fast path', () => {
       if (id !== sessionId) return Promise.reject(new Error('not found'))
       return Promise.resolve({ inspection: { meta, events }, revision: SessionPersistenceRevision('indexed:1'), source: 'prepared', [Symbol.dispose]: () => {} })
     })
+    const inspect = vi.fn((_id: SessionId) => Promise.resolve({ meta, events }))
     providePersistence(ctx, {
       list: () => Promise.resolve([meta]),
-      inspect: (_id: SessionId) => Promise.resolve({ meta, events }),
+      inspect,
       borrowSession: borrow,
       seekable: () => Promise.resolve(true),
       messageCut,
@@ -666,7 +669,10 @@ describe('indexed page fast path', () => {
       address: { kind: 'session', sessionId }, throughSeq: events.at(-1)?.seq ?? 0, maxMessages: 2,
     }, new AbortController().signal)
     if (!response.ok) throw new Error(`page failed: ${JSON.stringify('error' in response ? response.error : null)}`)
-    expect(reads).toBeGreaterThanOrEqual(2)
+    // The first indexed read answers a window that starts past the requested
+    // margin, so the fast path bails and the observation fallback serves the page.
+    expect(reads).toBeGreaterThanOrEqual(1)
+    expect(inspect).toHaveBeenCalled()
     expect(response.value.records.length).toBeGreaterThan(0)
     await ctx.fiber.dispose()
   })

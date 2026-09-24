@@ -83,9 +83,13 @@ flowchart TD
     pkg_tool_web["tool-web"]
     pkg_web["web"]
     pkg_web_fetch_http["web-fetch-http"]
+    pkg_web_search_academic["web-search-academic"]
+    pkg_web_search_bocha["web-search-bocha"]
+    pkg_web_search_brave["web-search-brave"]
     pkg_web_search_deepseek["web-search-deepseek"]
     pkg_web_search_exa["web-search-exa"]
     pkg_web_search_perplexity["web-search-perplexity"]
+    pkg_web_search_zhihu["web-search-zhihu"]
   end
   subgraph group_spill["packages/spill"]
     pkg_spill["spill"]
@@ -273,6 +277,7 @@ flowchart TD
   subgraph group_guard["packages/guard"]
     pkg_repeat_tool_reminder["repeat-tool-reminder"]
     pkg_tool_call_timeout_policy["tool-call-timeout-policy"]
+    pkg_turn_continuation["turn-continuation"]
   end
   subgraph group_host["packages/host"]
     pkg_host_directory_picker["host-directory-picker"]
@@ -346,6 +351,7 @@ flowchart TD
     pkg_session_log_deepseek["session-log-deepseek"]
     pkg_session_persistence["session-persistence"]
     pkg_session_persistence_jsonl["session-persistence-jsonl"]
+    pkg_session_persistence_sqlite["session-persistence-sqlite"]
     pkg_session_projection["session-projection"]
     pkg_session_projection_cache["session-projection-cache"]
     pkg_session_stats["session-stats"]
@@ -456,10 +462,21 @@ flowchart TD
   pkg_web_fetch_http --> pkg_http_proxy
   pkg_web_fetch_http --> pkg_timeout
   pkg_web_fetch_http --> pkg_web
+  pkg_web_search_academic --> pkg_invariants
+  pkg_web_search_academic --> pkg_web
+  pkg_web_search_bocha --> pkg_invariants
+  pkg_web_search_bocha --> pkg_launch_environment
+  pkg_web_search_bocha --> pkg_web
+  pkg_web_search_brave --> pkg_invariants
+  pkg_web_search_brave --> pkg_launch_environment
+  pkg_web_search_brave --> pkg_web
   pkg_web_search_exa --> pkg_launch_environment
   pkg_web_search_exa --> pkg_web
   pkg_web_search_perplexity --> pkg_launch_environment
   pkg_web_search_perplexity --> pkg_web
+  pkg_web_search_zhihu --> pkg_invariants
+  pkg_web_search_zhihu --> pkg_launch_environment
+  pkg_web_search_zhihu --> pkg_web
   pkg_api_account_controller --> pkg_deepseek_account
   pkg_api_account_controller --> pkg_typert_protocol
   pkg_api_remotes --> pkg_scope
@@ -529,6 +546,10 @@ flowchart TD
   pkg_sandbox_local --> pkg_session
   pkg_session_persistence_jsonl --> pkg_session
   pkg_session_persistence_jsonl --> pkg_session_persistence
+  pkg_session_persistence_sqlite --> pkg_invariants
+  pkg_session_persistence_sqlite --> pkg_llm
+  pkg_session_persistence_sqlite --> pkg_session
+  pkg_session_persistence_sqlite --> pkg_session_persistence
   pkg_session_projection_cache --> pkg_session
   pkg_session_projection_cache --> pkg_session_projection
   pkg_session_projection_cache --> pkg_storage_domain
@@ -641,6 +662,9 @@ flowchart TD
   pkg_tmux_context --> pkg_session
   pkg_tmux_context --> pkg_session_projection
   pkg_tmux_context --> pkg_shell
+  pkg_turn_continuation --> pkg_agent
+  pkg_turn_continuation --> pkg_llm
+  pkg_turn_continuation --> pkg_session
   pkg_commands --> pkg_agent
   pkg_commands --> pkg_attachment
   pkg_commands --> pkg_brand
@@ -1470,8 +1494,12 @@ flowchart TD
 | [`system-prompt`](../packages/core/system-prompt) | `core` | [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope) |
 | [`skill`](../packages/skill/skill) | `skill` | [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope) |
 | [`web-fetch-http`](../packages/web/web-fetch-http) | `web` | [`http-proxy`](../packages/util/http-proxy), [`timeout`](../packages/util/timeout), [`web`](../packages/web/web) |
+| [`web-search-academic`](../packages/web/web-search-academic) | `web` | [`invariants`](../packages/runtime-diagnostics/invariants), [`web`](../packages/web/web) |
+| [`web-search-bocha`](../packages/web/web-search-bocha) | `web` | [`invariants`](../packages/runtime-diagnostics/invariants), [`launch-environment`](../packages/util/launch-environment), [`web`](../packages/web/web) |
+| [`web-search-brave`](../packages/web/web-search-brave) | `web` | [`invariants`](../packages/runtime-diagnostics/invariants), [`launch-environment`](../packages/util/launch-environment), [`web`](../packages/web/web) |
 | [`web-search-exa`](../packages/web/web-search-exa) | `web` | [`launch-environment`](../packages/util/launch-environment), [`web`](../packages/web/web) |
 | [`web-search-perplexity`](../packages/web/web-search-perplexity) | `web` | [`launch-environment`](../packages/util/launch-environment), [`web`](../packages/web/web) |
+| [`web-search-zhihu`](../packages/web/web-search-zhihu) | `web` | [`invariants`](../packages/runtime-diagnostics/invariants), [`launch-environment`](../packages/util/launch-environment), [`web`](../packages/web/web) |
 | [`api-account-controller`](../packages/api/account-controller) | `api` | [`deepseek-account`](../packages/credentials/deepseek-account), [`typert-protocol`](../packages/typert/protocol) |
 | [`api-remotes`](../packages/api/remotes) | `api` | [`scope`](../packages/core/scope) |
 | [`api-terminal-controller`](../packages/api/terminal-controller) | `api` | [`subprocess`](../packages/subprocess/subprocess) |
@@ -1507,6 +1535,7 @@ flowchart TD
 | [`ptc-runtime`](../packages/ptc-runtime/ptc-runtime) | `ptc-runtime` | [`sandbox`](../packages/sandbox/sandbox) |
 | [`sandbox-local`](../packages/sandbox/sandbox-local) | `sandbox` | [`llm`](../packages/llm/llm), [`sandbox`](../packages/sandbox/sandbox), [`session`](../packages/core/session) |
 | [`session-persistence-jsonl`](../packages/session/session-persistence-jsonl) | `session` | [`session`](../packages/core/session), [`session-persistence`](../packages/session/session-persistence) |
+| [`session-persistence-sqlite`](../packages/session/session-persistence-sqlite) | `session` | [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`session`](../packages/core/session), [`session-persistence`](../packages/session/session-persistence) |
 | [`session-projection-cache`](../packages/session/session-projection-cache) | `session` | [`session`](../packages/core/session), [`session-projection`](../packages/session/session-projection), [`storage-domain`](../packages/storage/storage-domain) |
 | [`session-stats`](../packages/session/session-stats) | `session` | [`llm`](../packages/llm/llm), [`session`](../packages/core/session), [`session-projection`](../packages/session/session-projection) |
 | [`session-turn-outline`](../packages/session/session-turn-outline) | `session` | [`llm`](../packages/llm/llm), [`session`](../packages/core/session), [`session-projection`](../packages/session/session-projection) |
@@ -1534,6 +1563,7 @@ flowchart TD
 | [`file-reference`](../packages/context/file-reference) | `context` | [`agent`](../packages/core/agent) |
 | [`time-context`](../packages/context/time-context) | `context` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`session`](../packages/core/session), [`session-projection`](../packages/session/session-projection) |
 | [`tmux-context`](../packages/context/tmux-context) | `context` | [`agent`](../packages/core/agent), [`session`](../packages/core/session), [`session-projection`](../packages/session/session-projection), [`shell`](../packages/shell/shell) |
+| [`turn-continuation`](../packages/guard/turn-continuation) | `guard` | [`agent`](../packages/core/agent), [`llm`](../packages/llm/llm), [`session`](../packages/core/session) |
 | [`commands`](../packages/interaction/commands) | `interaction` | [`agent`](../packages/core/agent), [`attachment`](../packages/attachment/attachment), [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope), [`session`](../packages/core/session), [`typert-protocol`](../packages/typert/protocol) |
 | [`user-approval`](../packages/interaction/user-approval) | `interaction` | [`agent`](../packages/core/agent), [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope), [`session`](../packages/core/session), [`system-prompt`](../packages/core/system-prompt) |
 | [`user-questions`](../packages/interaction/user-questions) | `interaction` | [`agent`](../packages/core/agent), [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope) |

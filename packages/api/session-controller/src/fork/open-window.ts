@@ -16,7 +16,7 @@ import type SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 // Fork-owned read face of the projection cache (see its src/fork/checkpoint-read.ts).
 import { readCheckpoint } from '@deepseek-ai/dsh-session-projection-cache'
 import type SessionProjectionCache from '@deepseek-ai/dsh-session-projection-cache'
-import { readIndexedSuffix, type SeekablePersistence } from './page-boundary.ts'
+import { readIndexedSuffix, type SeekablePersistence, type WindowPageCut } from './page-boundary.ts'
 
 /** The services one windowed open reads through. */
 export interface OpeningWindowServices {
@@ -50,14 +50,17 @@ export interface OpeningWindow {
  * returns undefined and the caller's observation path answers.
  *
  * @param services - the seekable persistence, checkpoint cache, and registry.
- * @param request - the addressed Session and its page size in messages.
+ * @param request - the addressed Session and its indexed seed size.
+ * @param cut - the caller's page rule, upstream's `paginate` bound to the
+ *   opening request (see {@link WindowPageCut}).
  * @param validateSuffix - caller-owned address validation over each read suffix.
  * @param signal - cancellation shared with the request.
  * @returns the opening snapshot, or undefined when no window can serve it.
  */
 export async function readOpeningWindow(
   services: OpeningWindowServices,
-  request: { readonly sessionId: SessionId; readonly maxMessages: number },
+  request: { readonly sessionId: SessionId; readonly seedMessages: number },
+  cut: WindowPageCut,
   validateSuffix: (meta: SessionHeader, events: readonly SessionEvent[]) => void,
   signal: AbortSignal,
 ): Promise<OpeningWindow | undefined> {
@@ -65,17 +68,18 @@ export async function readOpeningWindow(
     services.persistence,
     {
       id: request.sessionId,
-      maxMessages: request.maxMessages,
+      seedMessages: request.seedMessages,
       beforeSeq: undefined,
       windowFloor: (meta, inheritedEventCount) => {
         const found = readCheckpoint(services.cache, meta, inheritedEventCount)
         // No usable record, or none the current units can seed (floor 0 means
-        // at least one row must refold from the log head): the observation
-        // path owns the request, and a served window never becomes a full read.
+        // at least one row must refold from the log head): the observation path
+        // owns the request rather than a fold this window cannot seed.
         if (found === undefined || found.seq === undefined || found.seq === 0) return undefined
         return found.seq
       },
     },
+    cut,
     validateSuffix,
     signal,
   )
@@ -87,7 +91,7 @@ export async function readOpeningWindow(
   if (resolved === undefined) return undefined
   // A recovered tail folds differently from the stored log: the balanced
   // opening a full observation serves cannot be produced from this window.
-  if (!closedTail(read.events)) return undefined
+  if (!closedTail(read.events, read.fromSeq)) return undefined
   const projections = services.projections.restore(
     resolved.rows,
     read.events,
@@ -97,8 +101,8 @@ export async function readOpeningWindow(
   )
   return {
     header: read.meta,
-    // An accepted window always holds its page's tail message, so the window
-    // end is a real seq: the accept test requires a full page of messages.
+    // The accept test rejects a page-less window, so an accepted window holds
+    // events and the page end is a real seq.
     cursor: SessionSeq(read.throughSeq),
     events: read.page.events,
     hasMore: read.page.hasMore,
@@ -111,17 +115,18 @@ export async function readOpeningWindow(
  * view. `interruptedTurnClosers` emits nothing whenever the log's last turn
  * boundary is a `turn/end`, so a window whose last boundary is one is closed
  * and a window whose last boundary is a `turn/start` is not. A window with no
- * boundary at all is closed only as the whole log, which the read plan
- * guarantees: its truncation check rejects a boundary-free window whose head
- * sits past seq 0.
+ * boundary at all is closed only as the log's own tail: a boundary below its
+ * head would decide the closers, so only a window reaching the log head
+ * (`fromSeq === 0`) proves it covers them.
  * @param events - the accepted read window, in seq order.
+ * @param fromSeq - the window's first seq, 0 at the log head.
  * @returns true when no synthetic recovery closer is owed.
  */
-function closedTail(events: readonly SessionEvent[]): boolean {
+function closedTail(events: readonly SessionEvent[], fromSeq: number): boolean {
   for (let index = events.length - 1; index >= 0; index--) {
     const type = (events[index] as SessionEvent).type
     if (type === 'turn/end') return true
     if (type === 'turn/start') return false
   }
-  return true
+  return fromSeq === 0
 }

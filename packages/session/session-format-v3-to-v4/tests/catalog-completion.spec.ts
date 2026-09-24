@@ -117,7 +117,7 @@ describe('V3 parent catalog completion', () => {
   it('retains unknown children while validating available descriptor fields', () => {
     const artifact = { header: { ...header, origin: 'subagent' as const, parentSession: 'parent' }, inheritedEventCount: 0, events: [] }
     expect(() => historicalChildCatalogSource({ ...artifact, header })).toThrow('direct parent')
-    for (const data of [null, {}, { version: 4, mode: 'one-shot', provider: 'spawn' }]) {
+    for (const data of [null, {}, { version: 5, mode: 'one-shot', provider: 'spawn' }]) {
       expect(migrate([], [historicalChildCatalogSource({ ...artifact, events: [{ type: 'subagent/descriptor', seq: 0, time: 1, data }] })]).events).toMatchObject([{ data: { childId: 'parent', mode: 'unknown' } }])
     }
     for (const value of [null, { ...child, version: 2 }, { ...child, childId: null },

@@ -759,8 +759,9 @@ describe('SessionProjectionCache cold-read seeding', () => {
       expect((await storedRows(root, meta.id))?.['cache-test/marks'])
         .toEqual({ ver: 1, seq: 2, val: { marks: ['fresh'] } })
     }, { timeout: 5_000 })
-    // The written record is what the windowed open seeds from.
-    expect(cache.cachedSnapshot(meta, SessionLogOffset(0))?.values['cache-test/marks'])
+    // The written record is what the windowed open seeds from; the listing face
+    // matches the lifecycle identity a header witnesses, not the inherited cut.
+    expect(cache.cachedSnapshot(meta)?.values['cache-test/marks'])
       .toEqual({ marks: ['fresh'] })
   })
 
@@ -909,7 +910,7 @@ describe('SessionProjectionCache discard', () => {
     await cache.discard(session.id)
     expect(await storedRecord(root, session.id)).toBeUndefined()
     // The read face agrees: no record means no seeded snapshot.
-    expect(cache.cachedSnapshot(session.header, session.inheritedEventCount)).toBeUndefined()
+    expect(cache.cachedSnapshot(session.header)).toBeUndefined()
   })
 
   it('cancels a live session pending write-behind so it cannot re-install discarded rows', async () => {
@@ -945,7 +946,7 @@ describe('SessionProjectionCache water rule', () => {
     expect(cache.hydratePrepared(session, full, full.length).values['cache-test/marks'])
       .toEqual({ marks: ['gone'] })
     await vi.waitFor(() => {
-      expect(cache.cachedSnapshot(meta, SessionLogOffset(0))).toBeDefined()
+      expect(cache.cachedSnapshot(meta)).toBeDefined()
     }, { timeout: 5_000 })
 
     // The same id now serves a shorter log — the in-place history rewrite cut

@@ -147,7 +147,11 @@ export function AppFrame({
   t,
 }: AppFrameProps) {
   const layoutInfo = useStore(state => state.layoutInfo)
-  const currentSession = useSessions(state => state.current)
+  // Fork patch (FORK_SURFACE.md): the mobile drawer closes when the current
+  // Session changes. Selection lives on the retained `mainView` binding, so the
+  // frame derives the id from the list rows instead of a list-snapshot field.
+  const currentSession = useSessions(state => Object.values(state.byId)
+    .find(summary => (summary.retainedBy.mainView ?? 0) > 0)?.id)
   const frameRef = useRef<HTMLDivElement | null>(null)
   const viewport = layoutInfo.viewportWidth
 

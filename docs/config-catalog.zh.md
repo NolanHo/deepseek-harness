@@ -193,10 +193,27 @@ export interface Config {
   readonly websocketHeartbeatIntervalMs?: number
   /** Buffered uplink frame bytes one logical stream may hold before it fails with `gateway/uplink-overflow`. @default 262144 */
   readonly streamInboxBytes?: number
+  /**
+   * Negotiate RFC 7692 per-message compression on the Remote stream
+   * WebSocket with clients that offer it. The journal's `opened` frames carry
+   * whole history windows (a megabyte or more on event-dense sessions), so
+   * compression cuts the cold-open wire volume several-fold; sub-threshold
+   * live frames stay raw. @default false
+   */
+  readonly websocketPerMessageDeflate?: boolean
+  /**
+   * Elapsed milliseconds at or above which the Remote stream mux warns about
+   * a slow carrier: a logical stream whose first item took that long to
+   * produce, or a heartbeat tick that the event loop delayed by that much
+   * past its interval. Healthy traffic logs nothing. Deployment-tunable
+   * because the tolerable delay follows this host's scheduler, garbage
+   * collection, and network path, while the log volume a busy host accepts
+   * does not. @default 3000
+   */
+  readonly diagnosticsSlowMs?: number
 }
 ```
-
-来源：[`packages/api/gateway/src/index.ts:145`](../packages/api/gateway/src/index.ts)
+来源：[`packages/api/gateway/src/index.ts:159`](../packages/api/gateway/src/index.ts)
 
 <a id="deepseek-aidsh-api-job-controller"></a>
 
@@ -443,6 +460,13 @@ export interface ConnectionConfig {
   trustedHosts?: string[]
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
+  /**
+   * Persistent browser-session authentication on top of the Host/Origin
+   * fence. Disable only for deployments whose own perimeter already bounds
+   * the serving authority (loopback bind behind an authenticating reverse
+   * proxy): requests then pass the fence alone. Default: true.
+   */
+  browserAuth?: boolean
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
 }
@@ -464,8 +488,7 @@ export interface ConnectionRecoveryConfig {
   generationReadyTimeoutMs?: number
 }
 ```
-
-来源： [`packages/client/connection/src/index.ts:92`](../packages/client/connection/src/index.ts)
+来源： [`packages/client/connection/src/index.ts:95`](../packages/client/connection/src/index.ts)
 
 <a id="deepseek-aidsh-client-hmr"></a>
 
@@ -482,6 +505,31 @@ export interface Config {
 ```
 
 来源： [`packages/client/hmr/src/index.ts:30`](../packages/client/hmr/src/index.ts)
+
+<a id="deepseek-aidsh-client-modules"></a>
+
+## `@deepseek-ai/dsh-client-modules`
+
+需要： `loader`
+
+```ts config-catalog
+/** Deferred-batch composition config for the web plugin table. */
+export interface Config {
+  /**
+   * Package names whose browser bundles ride `deferred` batches: the shell
+   * fetches and creates those entries only after the application mounts, so
+   * their bytes stay off the first-paint critical path. A name may go stale
+   * (an uninstalled plugin); it is ignored. A deferred package must not be
+   * stage-one (`immediately`) and must not be requested through a surviving
+   * row's `external` — both contradictions fail composition loudly. A
+   * pre-mount plugin whose Cordis service the deferred package provides stays
+   * pending and surfaces in the boot activation audit.
+   */
+  defer: string[]
+}
+```
+
+来源： [`packages/client/modules/src/index.ts:591`](../packages/client/modules/src/index.ts)
 
 <a id="deepseek-aidsh-client-ui-plugin-manager"></a>
 
@@ -2502,6 +2550,68 @@ export type JsonlCompression = 'zstd' | 'none'
 
 来源： [`packages/session/session-persistence-jsonl/src/index.ts:90`](../packages/session/session-persistence-jsonl/src/index.ts)
 
+<a id="deepseek-aidsh-session-persistence-sqlite"></a>
+
+## `@deepseek-ai/dsh-session-persistence-sqlite`
+
+```ts config-catalog
+/** Plugin configuration. */
+export interface Config {
+  /** SQLite database path, or `:memory:` for an in-process database. */
+  path: string
+  /** Durable SQLite journal mode; defaults to `wal`. */
+  journalMode?: JournalMode
+  /** Maximum wait for another SQLite connection's lock; defaults to 5,000 ms. */
+  busyTimeoutMs?: number
+  /**
+   * SQLite page cache per connection, in KiB. Omitting the field, or leaving
+   * its `cordis.yml` value empty (an explicit null), executes no pragma and
+   * keeps SQLite's default suggestion of 2,000 KiB (`-2000`, about 1.95 MiB);
+   * `0` applies `-0`, a zero-page suggestion SQLite floors to its 10-page
+   * minimum rather than its default.
+   */
+  cacheSizeKib?: number
+  /** Fixed live-event coalescing window; not a backend completion deadline. */
+  writeBatchMaxDelayMs?: number
+  /**
+   * Decompress stored session logs on the libuv thread pool instead of the
+   * thread that reads them; defaults to `false`. Fork patch (FORK_SURFACE.md).
+   *
+   * A cold read decompresses every packed data column of the log, and the
+   * synchronous decoder blocks the event loop for as long as that takes. This
+   * switch hands those columns to `zlib.zstdDecompress` — same dictionary, same
+   * result bytes, same stored rows — so the read yields between rows and
+   * concurrent cold reads decompress in parallel up to the pool size
+   * (`UV_THREADPOOL_SIZE`). Compression and the decodes a write transaction
+   * holds stay synchronous, which keeps both states writing identical rows and
+   * lets this switch be bisected or rolled back on its own.
+   */
+  asyncCodec?: boolean
+  /**
+   * Whole decoded logs one connection may retain, in decoded JSON text bytes;
+   * `0` disables the cache and every read decodes afresh. Fork patch
+   * (FORK_SURFACE.md).
+   *
+   * A cold read decompresses, parses, validates, and freezes every stored row.
+   * Resuming a large session, and every other full-log read, repeats that work
+   * on data that has not changed; a retained log answers the repeat with the
+   * objects the first read already produced. Retention is only ever a hit on
+   * the revision read from the session row in the same call that asks for it,
+   * and every write path bumps that revision in the transaction that changes
+   * the rows, so a hit cannot return events the database no longer holds —
+   * named here because the deployment sizes the ceiling, while correctness
+   * rests on that revision check rather than on invalidation.
+   * @default 0
+   */
+  decodedLogCacheBytes?: number
+}
+
+/** Durable journal modes accepted by the backend. */
+export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
+```
+
+来源： [`packages/session/session-persistence-sqlite/src/index.ts:53`](../packages/session/session-persistence-sqlite/src/index.ts)
+
 <a id="deepseek-aidsh-session-projection-cache"></a>
 
 ## `@deepseek-ai/dsh-session-projection-cache`
@@ -2524,7 +2634,7 @@ export interface Config {
 }
 ```
 
-来源： [`packages/session/session-projection-cache/src/index.ts:75`](../packages/session/session-projection-cache/src/index.ts)
+来源： [`packages/session/session-projection-cache/src/index.ts:78`](../packages/session/session-projection-cache/src/index.ts)
 
 <a id="deepseek-aidsh-session-query-sqlite"></a>
 
@@ -2572,7 +2682,7 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 Depends on: [`SessionQueryConfig`](../packages/session-query/session-query/src/index.ts)
 
-来源： [`packages/session-query/session-query-sqlite/src/index.ts:92`](../packages/session-query/session-query-sqlite/src/index.ts)
+来源： [`packages/session-query/session-query-sqlite/src/index.ts:95`](../packages/session-query/session-query-sqlite/src/index.ts)
 
 <a id="deepseek-aidsh-session-reference"></a>
 
@@ -2717,7 +2827,7 @@ export interface Config {
 }
 ```
 
-来源： [`packages/skill/skill/src/index.ts:278`](../packages/skill/skill/src/index.ts)
+来源： [`packages/skill/skill/src/index.ts:279`](../packages/skill/skill/src/index.ts)
 
 <a id="deepseek-aidsh-skill-filesystem"></a>
 
@@ -2945,18 +3055,33 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 ## `@deepseek-ai/dsh-subagent`
 
 ```ts config-catalog
-/** Host configuration for continuable subagent capacity. */
+/** Host configuration for continuable subagent capacity and cold-read bounds. */
 export interface Config {
   /** Maximum live children sharing uninterrupted continuable parent links; defaults to 8. */
   maxActiveSubagents: Volatile<number>
   /** Default delegation depth for tools without an explicit limit; defaults to 1. */
   maxDepth: Volatile<number>
+  /**
+   * Cold Session observations one descendant listing may keep in flight at
+   * once. Each one decodes a whole stored log, so this multiplies the peak Host
+   * work and memory a single listing can demand.
+   * @default 4
+   */
+  readonly coldReadConcurrency: number
+  /**
+   * Cold Session observations one descendant listing may start. Candidates past
+   * the bound report the retryable `unavailable` diagnostic and are read by a
+   * later listing, which caps one listing's total cold-read cost: a cold
+   * projection cache over a few hundred children otherwise pins the Host for
+   * minutes, stalling every other request sharing the event loop.
+   * @default 64
+   */
+  readonly coldReadBudget: number
 }
 ```
-
 Depends on: `Volatile` (`@deepseek-ai/cordis`)
 
-来源： [`packages/subagent/subagent/src/index.ts:192`](../packages/subagent/subagent/src/index.ts)
+来源： [`packages/subagent/subagent/src/index.ts:193`](../packages/subagent/subagent/src/index.ts)
 
 <a id="deepseek-aidsh-subagent-acp"></a>
 
@@ -3681,12 +3806,60 @@ export interface Config {
    * the current Host subagent depth setting (default `1`) at each delegation.
    */
   maxDepth?: number | 'provider-managed'
+  // --- Fork patch (FORK_SURFACE.md) ---
+  /**
+   * Model-alias table for this tool instance (default: omit, keeping upstream's
+   * face). When present it REPLACES the model-facing `provider`/`model`/
+   * `reasoning_effort` parameters with one optional `model` alias parameter, and
+   * the table itself is this instance's whole child-model authorization: the
+   * session-level `subagent-model-selection` policy does not apply to an alias
+   * instance, so `models` and `modelSelectionSettings: true` are mutually
+   * exclusive (mount fails loud on both). Each alias resolves to an exact
+   * `{provider, model, reasoningEffort}` child route that overrides the route
+   * fields of `agentOptions` and is preflighted against the live adapter before
+   * the child starts. At least one entry; `alias`/`provider`/`model` are non-empty
+   * strings, aliases are unique, and `provider`/`model` ids never reach the model
+   * surface.
+   */
+  models?: AliasRouteConfig[]
+  /** Default alias when a call omits `model` (default: the first entry); must be in `models`. */
+  defaultModel?: string
+  /**
+   * Child working directory: an existing absolute directory at load (a relative
+   * or missing path fails mount). In-process providers stamp it over the
+   * parent's workspace in the child session header; out-of-process providers
+   * ignore it.
+   */
+  cwd?: string
+  /**
+   * Per-child skill scope: exactly one of `allow` or `deny`, each an array of
+   * skill names (an empty `allow` restricts every skill away). Restricted-away
+   * names read as nonexistent in the child's catalog. Requires the skill
+   * registry in the child's composition.
+   */
+  skillFilter?: {
+    /** Skill names the child keeps; everything else is restricted away. */
+    allow?: string[]
+    /** Skill names restricted away from the child. */
+    deny?: string[]
+  }
+}
+
+/** One `models` entry: a model-facing alias for one exact child LLM route. */
+export interface AliasRouteConfig {
+  /** Alias accepted by the tool's `model` parameter. */
+  readonly alias: string
+  /** Registered LLM provider route, preflighted against the live adapter before the child starts. */
+  readonly provider: string
+  /** Provider-owned exact model id. */
+  readonly model: string
+  /** Adapter-owned reasoning effort; omitted uses the selected model's own default. */
+  readonly reasoningEffort?: string
 }
 ```
-
 Depends on: [`AgentOptions`](subsystems/core.zh.md)
 
-来源： [`packages/subagent/tool-subagent/src/index.ts:48`](../packages/subagent/tool-subagent/src/index.ts)
+来源： [`packages/subagent/tool-subagent/src/index.ts:55`](../packages/subagent/tool-subagent/src/index.ts)
 
 <a id="deepseek-aidsh-tool-terminal"></a>
 
@@ -3840,6 +4013,38 @@ export type ToolPresentationMode = 'native' | 'ptc' | 'both'
 
 来源： [`packages/core/tools/src/index.ts:663`](../packages/core/tools/src/index.ts)
 
+<a id="deepseek-aidsh-turn-continuation"></a>
+
+## `@deepseek-ai/dsh-turn-continuation`
+
+需要： `agents`
+
+```ts config-catalog
+/**
+ * Plugin config, validated by the same-named schemastery schema plus the
+ * load-time checks in `apply` (misconfiguration fails loud: an unknown or
+ * non-continuable `continueOn` entry, or a `maxConsecutive` that is not a
+ * non-negative whole number, throws at plugin load).
+ */
+export interface Config {
+  /**
+   * Turn-end reason kinds that open another turn (default `['max-tokens']`).
+   * An entry outside {@link CONTINUABLE_REASONS} throws at load rather than
+   * silently continuing nothing.
+   */
+  continueOn?: string[]
+  /**
+   * Turns this plugin may open between two human inputs (default `2`).
+   * `0` disables continuation without unmounting the plugin. The count is
+   * refilled only by human-authored input, so an unattended session cannot
+   * spend more than this budget per human turn.
+   */
+  maxConsecutive?: number
+}
+```
+
+来源： [`packages/guard/turn-continuation/src/index.ts:47`](../packages/guard/turn-continuation/src/index.ts)
+
 <a id="deepseek-aidsh-typert-loader"></a>
 
 ## `@deepseek-ai/dsh-typert-loader`
@@ -3906,7 +4111,7 @@ export interface WebRuntimeConfig {
 }
 ```
 
-来源： [`packages/web/web/src/index.ts:55`](../packages/web/web/src/index.ts)
+来源： [`packages/web/web/src/index.ts:64`](../packages/web/web/src/index.ts)
 
 <a id="deepseek-aidsh-web-app"></a>
 
@@ -3958,6 +4163,70 @@ export interface Config {
 ```
 
 来源： [`packages/web/web-fetch-http/src/index.ts:32`](../packages/web/web-fetch-http/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-academic"></a>
+
+## `@deepseek-ai/dsh-web-search-academic`
+
+需要： `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills constant defaults). */
+export interface Config {
+  /** arXiv Atom API query endpoint. Defaults to the public export.arxiv.org endpoint. */
+  arxivBaseURL?: string
+  /** Semantic Scholar Graph API base; `/paper/search` is appended. */
+  s2BaseURL?: string
+  /** Per-backend result count. Defaults to 5. Must be a positive integer. */
+  count?: number
+  /** Minimum interval between Semantic Scholar requests, in milliseconds. Defaults to 1500. */
+  minS2IntervalMs?: number
+}
+```
+
+来源： [`packages/web/web-search-academic/src/index.ts:39`](../packages/web/web-search-academic/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-bocha"></a>
+
+## `@deepseek-ai/dsh-web-search-bocha`
+
+需要： `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Bocha API key. Falls back to `$BOCHA_API_KEY`. Empty → provider unavailable. */
+  apiKey?: string
+  /** Endpoint base; `/v1/web-search` is appended. Defaults to the public API. */
+  baseURL?: string
+  /** Recency filter sent as Bocha's `freshness`. Defaults to `noLimit`. */
+  freshness?: string
+  /** Default result count sent as `count` when a request carries no `maxResults`. */
+  count?: number
+}
+```
+
+来源： [`packages/web/web-search-bocha/src/index.ts:38`](../packages/web/web-search-bocha/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-brave"></a>
+
+## `@deepseek-ai/dsh-web-search-brave`
+
+需要： `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Brave API key. Falls back to `$BRAVE_API_KEY`. Empty → provider unavailable. */
+  apiKey?: string
+  /** Endpoint base; `/res/v1/web/search` is appended. Defaults to the public API. */
+  baseURL?: string
+  /** Default result count sent as `count` when a request carries no `maxResults`. */
+  count?: number
+}
+```
+
+来源： [`packages/web/web-search-brave/src/index.ts:36`](../packages/web/web-search-brave/src/index.ts)
 
 <a id="deepseek-aidsh-web-search-deepseek"></a>
 
@@ -4036,6 +4305,26 @@ export interface Config {
 ```
 
 来源： [`packages/web/web-search-perplexity/src/index.ts:30`](../packages/web/web-search-perplexity/src/index.ts)
+
+<a id="deepseek-aidsh-web-search-zhihu"></a>
+
+## `@deepseek-ai/dsh-web-search-zhihu`
+
+需要： `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Zhihu access secret. Falls back to `$ZHIHU_ACCESS_SECRET`. Empty → provider unavailable. */
+  apiKey?: string
+  /** Endpoint base; `/api/v1/content/<backend>` is appended. Defaults to the developer API. */
+  baseURL?: string
+  /** Per-backend result count. Defaults to 5. Must be a positive integer. */
+  count?: number
+}
+```
+
+来源： [`packages/web/web-search-zhihu/src/index.ts:37`](../packages/web/web-search-zhihu/src/index.ts)
 
 <a id="deepseek-aidsh-webhook-github"></a>
 
@@ -4122,7 +4411,6 @@ export interface Config {
 - `@deepseek-ai/dsh-browser-use`（[`packages/browser-use/browser-use/src/index.ts`](../packages/browser-use/browser-use/src/index.ts)）
 - `@deepseek-ai/dsh-client-file-upload` — 需要 `agents` · `attachments` · `commands` · `connection`（[`packages/client/file-upload/src/index.ts`](../packages/client/file-upload/src/index.ts)）
 - `@deepseek-ai/dsh-client-locale`（[`packages/client/locale/src/index.ts`](../packages/client/locale/src/index.ts)）
-- `@deepseek-ai/dsh-client-modules` — 需要 `loader`（[`packages/client/modules/src/index.ts`](../packages/client/modules/src/index.ts)）
 - `@deepseek-ai/dsh-client-resources`（[`packages/client/resources/src/index.ts`](../packages/client/resources/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-agent-preset`（[`packages/client/ui-agent-preset/src/index.ts`](../packages/client/ui-agent-preset/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-approval`（[`packages/client/ui-approval/src/index.ts`](../packages/client/ui-approval/src/index.ts)）

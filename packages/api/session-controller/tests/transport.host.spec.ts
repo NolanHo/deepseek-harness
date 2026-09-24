@@ -752,7 +752,7 @@ describe('SessionHistoryController', () => {
     append(session, 'user/message', { content: [], source: { kind: 'user' } }, { surfaceOp: 'append' })
     append(session, 'assistant/message', { turn: 1, step: 2, message: {} }, { surfaceOp: 'append' })
     const summary = append(session, 'fixture/summary', {})
-    const replacement = append(session, 'user/message', { content: [], source: { kind: 'plugin' } }, {
+    const replacement = append(session, 'user/message', { content: [], source: { kind: 'user' } }, {
       surfaceOp: { op: 'replace', startSeq: SessionSeq(1), endSeq: SessionSeq(4) },
       sourceEventSeqs: [SessionSeq(1), firstReply.seq, SessionSeq(3), SessionSeq(4), summary.seq],
     })
@@ -760,16 +760,15 @@ describe('SessionHistoryController', () => {
     const page = await transport.page({
       address: { kind: 'session', sessionId: session.id }, throughSeq: replacement.seq, maxMessages: 2,
     }, signal())
-    // User-aligned boundary: two append-origin user messages back from the
-    // replacement land on the first prompt, and the turn-aligned cut widens
-    // through the opening turn/start, so the page opens the whole journal.
+    // Two messages back from the replacement in the merged pagination rule: the
+    // page keeps the cited source events that belong to its own messages.
     expect(page.records.map(entry => entry.event.seq))
-      .toEqual([0, 1, 2, 3, 4, 5, replacement.seq])
-    expect(page.hasMore).toBe(false)
+      .toEqual([3, 4, 5, replacement.seq])
+    expect(page.hasMore).toBe(true)
     const before = await transport.page({
       address: { kind: 'session', sessionId: session.id }, throughSeq: replacement.seq, beforeSeq: 3, maxMessages: 1,
     }, signal())
-    expect(before.records.map(entry => entry.event.seq)).toEqual([0, 1, 2])
+    expect(before.records.map(entry => entry.event.seq)).toEqual([2])
   })
 
   it('keeps cited source events in the page that owns their appended message', async () => {

@@ -27,9 +27,7 @@
   },
   "dsh": {
     "client": {
-      "inject": [
-        "modules"
-      ],
+      "inject": [],
       "platform": "web",
       "immediately": true
     }

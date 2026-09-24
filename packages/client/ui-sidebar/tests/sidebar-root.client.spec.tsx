@@ -196,7 +196,7 @@ describe('SidebarRoot shell', () => {
   it('shows only the badge bubble while the rail badge is hovered inside the toggle', () => {
     vi.useFakeTimers()
     render(<SidebarRoot
-      collapsed width={56}
+      collapsed width={56} mobile={false}
       useSessions={neverHook} useSessionStatus={useSessionStatus} useSessionRetainInfo={neverHook}
       usePanelInfo={usePanelInfo} selectPanel={() => {}} usePanels={selector => selector([])}
       useResource={useResource} useWorkspaces={neverHook}

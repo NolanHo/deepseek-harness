@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
-import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconPanelLeftOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 // Fork patch (FORK_SURFACE.md): upstream 0.1.5 rewrote columns.ts without the
 // fork's phone breakpoint; the fork module owns its own value now.
 export const MOBILE_VIEWPORT = 768
@@ -101,7 +101,7 @@ export function MobileNavChrome(props: {
           aria-label={props.openLabel}
           onClick={props.onToggle}
         >
-          <IconPanelLeftOutline16 />
+          <IconPanelLeftOutlineRegular />
         </button>
       )}
     </>

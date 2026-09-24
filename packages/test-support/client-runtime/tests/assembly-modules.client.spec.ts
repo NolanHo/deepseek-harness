@@ -25,6 +25,7 @@ const row = (name: string, immediately = false) => ({ name, inject: [], immediat
 function graph(names: readonly string[]): WebBootGraph {
   return {
     rev: 'local',
+    trustedAuthorities: [],
     entries: names.map(id => ({ id, url: `plugins/${id}/client.js`, rev: 'local' })),
     batches: [{ phase: 'application', url: 'plugins/all.js', rev: 'local', entries: [...names] }],
   }

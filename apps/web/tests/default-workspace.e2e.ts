@@ -44,7 +44,7 @@ describe.skipIf(MODE === 'record')('web e2e: default Workspace', () => {
         const prompt = fixtureUserPrompts(await readFile(fixture, 'utf8'))[0]!
         await input.fill(prompt)
         const settled = scaffold.whenTurnSettled()
-        await input.press('Enter')
+        await input.press('Control+Enter')
         const sessionId = await settled
         const workspace = scaffold.ctx.workspaceRegistry.list()[0]!
         expect(workspace.title).toBe('Default workspace')

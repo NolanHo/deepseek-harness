@@ -12,6 +12,13 @@ import { FiberState } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContextFormed } from '@deepseek-ai/dsh-llm'
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'turn-continuation': { kind: 'turn-continuation' } & ContextFormed
+  }
+}
+
 import type { MessageSource } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, TurnEndReason } from '@deepseek-ai/dsh-session'
 
@@ -59,12 +66,13 @@ export const Config: z<Config> = z.object({
 })
 
 /**
- * The `{kind:'plugin'}` source stamped on every continuation this plugin
- * queues — the label is load-bearing twice: a transcript must never present
- * an automatic continuation as human input, and the budget refill reads
- * `source.kind`, so this message must not refill the budget it just spent.
+ * The `{kind:'turn-continuation'}` producer source stamped on every
+ * continuation this plugin queues — the label is load-bearing twice: a
+ * transcript must never present an automatic continuation as human input, and
+ * the budget refill reads `source.kind`, so this message must not refill the
+ * budget it just spent.
  */
-const PLUGIN_SOURCE: MessageSource = { kind: 'plugin', plugin: 'turn-continuation' }
+const CONTINUATION_SOURCE: MessageSource = { kind: 'turn-continuation' }
 
 /** Prompt for a step cut off at the output-token ceiling. */
 const TRUNCATION_PROMPT = 'Your previous reply was cut off because it reached the output-token '
@@ -175,7 +183,7 @@ export function apply(ctx: Context, config: Config): void {
         pending.delete(agent)
         agent.followup(createUserMessage({
           content: [{ type: 'text', text: prompt }],
-          source: PLUGIN_SOURCE,
+          source: CONTINUATION_SOURCE,
         }))
         spent.set(agent, spentTurns + 1)
         return Promise.resolve()
@@ -183,7 +191,7 @@ export function apply(ctx: Context, config: Config): void {
       }).catch((error: unknown) => {
         ctx.logger.warn(
           `turn-continuation: agent "${agent.id}" could not queue a continuation: `
-          + `${error instanceof Error ? error.message : String(error)}`,
+          + (error instanceof Error ? error.message : String(error)),
         )
       })
       /* v8 ignore stop */
@@ -192,7 +200,7 @@ export function apply(ctx: Context, config: Config): void {
       /* v8 ignore next 4 -- unreachable: the claim cannot be busy at the edge that triggered it */
       ctx.logger.warn(
         `turn-continuation: agent "${agent.id}" does not own its idle phase: `
-        + `${error instanceof Error ? error.message : String(error)}`,
+        + (error instanceof Error ? error.message : String(error)),
       )
     }
   }
@@ -206,8 +214,8 @@ export function apply(ctx: Context, config: Config): void {
     })
 
     // Claiming is the point human input actually enters a step. A continuation
-    // this plugin queued carries PLUGIN_SOURCE and must not refill the budget
-    // it just spent.
+    // this plugin queued carries CONTINUATION_SOURCE and must not refill the
+    // budget it just spent.
     ctx.on('agent/inbox/claimed', ({ agent, message }) => {
       if (message.source.kind === 'user') spent.delete(agent)
     })
@@ -218,8 +226,10 @@ export function apply(ctx: Context, config: Config): void {
 
     // Continuation authority is process-local by construction: a resumed
     // session has observed no turn-end here, and this reset drops the budget
-    // and any reason recorded before the session-start edge.
-    ctx.on('agent/session-start', ({ agent }) => {
+    // and any reason recorded before the agent's creation edge. Creation
+    // awaits its serial listeners before releasing queued input, so the reset
+    // lands before the lifecycle can record a turn end.
+    ctx.on('agent/created', ({ agent }) => {
       pending.delete(agent)
       spent.delete(agent)
     })

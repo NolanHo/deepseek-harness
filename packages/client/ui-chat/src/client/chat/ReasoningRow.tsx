@@ -74,6 +74,7 @@ export const ReasoningRow = memo(function ReasoningRow({ text, running, duration
         expandOnRowClick
         onToggle={toggle}
         collapsedContent={collapsedContent}
+        keepContentWhenOpen
       >
         {content}
       </DisclosureRow>

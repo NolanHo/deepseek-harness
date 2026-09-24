@@ -36,13 +36,13 @@ import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { subagentIdentityProjectionDefinition } from '@deepseek-ai/dsh-subagent/src/projection.ts'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import { SessionHistoryController } from '@deepseek-ai/dsh-api-session-controller/src/history.ts'
+import { SessionHistoryController, paginate } from '@deepseek-ai/dsh-api-session-controller/src/history.ts'
 import {
-  paginateSuffix,
   readIndexedSuffix,
   type SeekablePersistence,
+  type WindowPageCut,
 } from '@deepseek-ai/dsh-api-session-controller/src/fork/page-boundary.ts'
-import type { SessionFollowFrame } from '@deepseek-ai/dsh-api-session-controller/types'
+import type { SessionFollowFrame, SessionPageRequest } from '@deepseek-ai/dsh-api-session-controller/types'
 import { createSessionTestController, createSessionTestRemote, testSessionPersistence } from './test-remote.ts'
 
 const ownedContexts = new Set<Context>()
@@ -91,6 +91,37 @@ function appendTurn(session: Session, turn: number): void {
 /** Whole-value page records for one event slice, matching the wire encoding. */
 function pageRecords(events: readonly SessionEvent[]): Extract<SessionFollowFrame, { type: 'event' }>[] {
   return events.map(event => ({ type: 'event', event }) as Extract<SessionFollowFrame, { type: 'event' }>)
+}
+
+/**
+ * The page rule the controller hands the indexed read: upstream's `paginate`
+ * bound to one request. A windowed open must serve what this returns for the
+ * same window, and what it returns for the whole log is the observation page.
+ */
+function windowCut(
+  maxMessages: number,
+  beforeSeq?: number,
+  turnWindow?: SessionPageRequest['turnWindow'],
+): WindowPageCut {
+  const bound = beforeSeq === undefined ? undefined : SessionLogOffset(beforeSeq)
+  return (window, baseSeq, throughSeq) => paginate(
+    window,
+    bound,
+    maxMessages,
+    throughSeq === -1 ? -1 : SessionSeq(throughSeq),
+    turnWindow,
+    baseSeq,
+  )
+}
+
+/** The page upstream's rule yields over a whole dense log. */
+function wholeLogPage(
+  events: readonly SessionEvent[],
+  maxMessages: number,
+  turnWindow?: SessionPageRequest['turnWindow'],
+): { readonly events: SessionEvent[]; readonly hasMore: boolean } {
+  const cursor = events.at(-1)?.seq ?? -1
+  return paginate(events, undefined, maxMessages, cursor === -1 ? -1 : SessionSeq(cursor), turnWindow)
 }
 
 interface Mounted {
@@ -308,7 +339,7 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
   const cursor = events.at(-1)?.seq ?? -1
   // The live registry at the same cut is what a full observation reproduces.
   const projections = ctx.sessionProjections.snapshot(session)
-  const page = paginateSuffix(events, undefined, maxMessages, cursor)
+  const page = wholeLogPage(events, maxMessages)
   const inspect = vi.fn(async (id: SessionId) => {
     if (id !== sessionId) throw new Error(`unknown session "${id}"`)
     return { meta, events }
@@ -391,11 +422,13 @@ async function opening(
   history: SessionHistoryController,
   sessionId: SessionId,
   maxMessages?: number,
+  turnWindow?: SessionPageRequest['turnWindow'],
 ): Promise<Extract<SessionFollowFrame, { type: 'snapshot' }>> {
   const abort = new AbortController()
   const iterator = history.follow({
     address: { kind: 'session', sessionId },
     ...(maxMessages === undefined ? {} : { maxMessages }),
+    ...(turnWindow === undefined ? {} : { turnWindow }),
   }, abort.signal)[Symbol.asyncIterator]()
   const first = await iterator.next()
   if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
@@ -481,7 +514,7 @@ describe('windowed session open', () => {
 
     // The write-back is fire-and-forget: settle it, then the record must serve.
     await vi.waitFor(() => {
-      expect(mount.ctx.sessionProjectionCache.cachedSnapshot(mount.meta, SessionLogOffset(0))).toBeDefined()
+      expect(mount.ctx.sessionProjectionCache.cachedSnapshot(mount.meta)).toBeDefined()
     }, { timeout: 5_000 })
     mount.inspect.mockClear()
     mount.promote.mockClear()
@@ -513,7 +546,10 @@ describe('windowed session open', () => {
     expect(mount.inspect).toHaveBeenCalled()
   })
 
-  it('falls back when the window cannot hold a full page', async () => {
+  it('serves the whole log when the indexed seed reaches the log head', async () => {
+    // Fewer messages than the page cap: the walk reaches the log head, which
+    // proves its cut even though it holds no full page, so the window serves
+    // the whole log the observation path serves.
     const mount = await mountSession({ turns: 2, maxMessages: 8 })
     const snapshot = await opening(mount.history, mount.sessionId, mount.maxMessages)
 
@@ -524,8 +560,8 @@ describe('windowed session open', () => {
       asOfSeq: mount.projections.asOfSeq,
       values: mount.projections.values,
     })
-    expect(mount.readFrom).toHaveBeenCalled()
-    expect(mount.inspect).toHaveBeenCalled()
+    expect(mount.readFrom.mock.calls[0]?.[1]).toBe(0)
+    expect(mount.inspect).not.toHaveBeenCalled()
   })
 
   it('serves the same snapshot as the observation path for one Session', async () => {
@@ -557,20 +593,49 @@ describe('windowed session open', () => {
     expect(windowed.projections).toEqual(reference.projections)
   })
 
-  it('serves a whole-log page with hasMore false through the window', async () => {
-    // Exactly maxMessages prompts: the aligned cut reaches the log head, so the
-    // windowed page is the whole log and no older history exists.
+  it('cuts the windowed page at the max-th message back from the log end', async () => {
+    // Eight turns hold sixteen messages, so the page starts at the eighth
+    // message back — turn 5's prompt — and older history remains. The seed is
+    // the eighth-from-end prompt, which reaches the log head, so one read serves
+    // the page.
     const mount = await mountSession({ turns: 8, maxMessages: 8 })
     const snapshot = await opening(mount.history, mount.sessionId, mount.maxMessages)
 
-    expect(snapshot.hasMore).toBe(false)
-    expect(snapshot.records[0]?.event).toMatchObject({ type: 'turn/start', seq: 0 })
+    expect(snapshot.records).toEqual(mount.records)
+    expect(snapshot.hasMore).toBe(true)
+    expect(snapshot.records[0]?.event).toMatchObject({ type: 'user/message', seq: 17 })
     expect(snapshot.records.at(-1)?.event.seq).toBe(snapshot.cursor)
     expect(snapshot.projections).toEqual({
       asOfSeq: mount.projections.asOfSeq,
       values: mount.projections.values,
     })
     expect(mount.inspect).not.toHaveBeenCalled()
+  })
+
+  it('serves a turn-windowed opening the observation snapshot', async () => {
+    // The Web client's opening request always carries a turn window, so the
+    // windowed read must widen its cut to the same Turn start the observation
+    // path cuts instead of stopping at the turn window's message floor.
+    const mount = await mountSession()
+    const turnWindow = { minMessages: 8, minTurns: 2 }
+    mount.providePersistence(false)
+    const reference = await opening(mount.history, mount.sessionId, 500, turnWindow)
+    expect(mount.inspect).toHaveBeenCalled()
+    mount.providePersistence(true)
+    mount.inspect.mockClear()
+    mount.stat.mockClear()
+    mount.promote.mockClear()
+
+    const windowed = await opening(mount.history, mount.sessionId, 500, turnWindow)
+
+    expect(mount.inspect).not.toHaveBeenCalled()
+    expect(mount.stat).not.toHaveBeenCalled()
+    expect(windowed.records).toEqual(reference.records)
+    expect(windowed.hasMore).toBe(reference.hasMore)
+    expect(windowed.cursor).toBe(reference.cursor)
+    expect(windowed.projections).toEqual(reference.projections)
+    // The cut widened past the message floor to the Turn start both paths cut.
+    expect(windowed.records[0]?.event).toMatchObject({ type: 'turn/start', seq: 224 })
   })
 
   it('seeds a stale checkpoint by folding the log tail behind its rows', async () => {
@@ -989,7 +1054,7 @@ describe('windowed session open', () => {
     // validator compared that tail against the request's cursor instead.
     const mount = await mountSession({ turns: 60, maxMessages: 8 })
     const beforeSeq = mount.records[0]?.event.seq ?? 0
-    const expected = paginateSuffix(mount.events, beforeSeq, mount.maxMessages, mount.cursor)
+    const expected = paginate(mount.events, SessionLogOffset(beforeSeq), mount.maxMessages, SessionSeq(mount.cursor))
 
     const page = await mount.history.page({
       address: { kind: 'session', sessionId: mount.sessionId },
@@ -1038,7 +1103,7 @@ describe('windowed session open', () => {
     expect(observation.projections?.asOfSeq).toBe(balancedEnd)
 
     await vi.waitFor(() => {
-      expect(mount.ctx.sessionProjectionCache.cachedSnapshot(mount.meta, SessionLogOffset(0))?.asOfSeq)
+      expect(mount.ctx.sessionProjectionCache.cachedSnapshot(mount.meta)?.asOfSeq)
         .toBe(durableEnd)
     }, { timeout: 5_000 })
   })
@@ -1157,24 +1222,23 @@ describe('windowed session open', () => {
     expect(mount.inspect).not.toHaveBeenCalled()
   })
 
-  it('proves a boundary-free tail by reading through to the log head', async () => {
-    // A log with no turn events at all: the shallow window cannot tell a closed
-    // tail from one whose boundary sits above its start, so the plan retries
-    // from the log head, where the whole log proves it. The checkpoint was
-    // folded from this same log, so its floor is real rather than the
-    // "nothing to seed" bail.
+  it('keeps the observation path for a tail window with no turn boundary', async () => {
+    // A log with no turn events at all: a window whose head sits past the log
+    // head cannot tell a closed tail from one whose boundary sits below it, so
+    // the observation path answers. A boundary below the window decides the
+    // synthetic recovery closer, which a windowed fold must not guess.
     const mount = await mountSession({ turns: 0, userMessagesOnly: 200 })
     const snapshot = await opening(mount.history, mount.sessionId, mount.maxMessages)
 
     expect(mount.readFrom.mock.calls[0]?.[1]).toBeGreaterThan(0)
-    expect(mount.readFrom.mock.calls.at(-1)?.[1]).toBe(0)
-    expect(snapshot.records[0]?.event.seq).toBe(0)
-    expect(snapshot.records.at(-1)?.event.seq).toBe(snapshot.cursor)
+    expect(snapshot.records).toEqual(mount.records)
+    expect(snapshot.hasMore).toBe(mount.hasMore)
+    expect(snapshot.cursor).toBe(mount.cursor)
     expect(snapshot.projections).toEqual({
       asOfSeq: mount.projections.asOfSeq,
       values: mount.projections.values,
     })
-    expect(mount.inspect).not.toHaveBeenCalled()
+    expect(mount.inspect).toHaveBeenCalled()
   })
 
   it('keeps the subagent fence for a child addressed as an ordinary Session', async () => {
@@ -1264,13 +1328,13 @@ describe('indexed suffix window', () => {
 
     const read = await readIndexedSuffix(persisted, {
       id: sessionId,
-      maxMessages: 4,
+      seedMessages: 4,
       beforeSeq: undefined,
       windowFloor: () => floor,
-    }, () => {}, new AbortController().signal)
+    }, windowCut(4), () => {}, new AbortController().signal)
 
     if (read === undefined) throw new Error('indexed read bailed')
-    const expected = paginateSuffix(events, undefined, 4, cursor)
+    const expected = paginate(events, undefined, 4, SessionSeq(cursor))
     const shallow = promptsCut(events, 4) - 128
     expect(readFrom.mock.calls.map(call => call[1])).toEqual([shallow, floor])
     expect(read.fromSeq).toBe(floor)
@@ -1278,10 +1342,10 @@ describe('indexed suffix window', () => {
     expect(read.page.events).toEqual(expected.events)
     expect(read.page.hasMore).toBe(expected.hasMore)
   })
-  it('retries past a window head that truncates the cut turn, and bails when it cannot', async () => {
-    // A prompt deep inside its own turn: a window whose head lands after the
-    // turn's opening events must not serve the page, or the client renders an
-    // unfolded head turn.
+  it('retries past a window that starts above the turn window cut, and bails when it cannot', async () => {
+    // A prompt deep inside a long turn, paged under a turn window whose cut is
+    // that turn's own start: a window starting inside the turn cannot prove the
+    // cut, so the deep retry serves the page that opens on the turn start.
     const deepTurnLog = (fill: number): SessionEvent[] => [
       { type: 'turn/start', seq: SessionSeq(0), time: 0, data: { turn: 1 } },
       ...Array.from({ length: fill }, (_, index): SessionEvent => ({
@@ -1322,6 +1386,9 @@ describe('indexed suffix window', () => {
         })
       },
     })
+    // One message and one turn: the page cap never fills, so the turn window's
+    // own cut decides, exactly as upstream's rule does for the whole log.
+    const turnWindow = { minMessages: 1, minTurns: 1 }
 
     const sessionId = sid('indexed-truncated-turn')
     // The shallow window starts inside the turn, so the deep retry serves a page
@@ -1330,7 +1397,8 @@ describe('indexed suffix window', () => {
     const short = deepTurnLog(150)
     const served = await readIndexedSuffix(
       seek(short, shortReads, 151),
-      { id: sessionId, maxMessages: 1, beforeSeq: undefined },
+      { id: sessionId, seedMessages: 1, beforeSeq: undefined },
+      windowCut(4, undefined, turnWindow),
       () => {},
       new AbortController().signal,
     )
@@ -1346,7 +1414,8 @@ describe('indexed suffix window', () => {
     const long = deepTurnLog(5000)
     await expect(readIndexedSuffix(
       seek(long, longReads, 5001),
-      { id: sessionId, maxMessages: 1, beforeSeq: undefined },
+      { id: sessionId, seedMessages: 1, beforeSeq: undefined },
+      windowCut(4, undefined, turnWindow),
       () => {},
       new AbortController().signal,
     )).resolves.toBeUndefined()
@@ -1400,7 +1469,8 @@ describe('indexed suffix window', () => {
 
     await expect(readIndexedSuffix(
       persisted,
-      { id: sessionId, maxMessages: 4, beforeSeq: undefined, windowFloor: () => 100 },
+      { id: sessionId, seedMessages: 4, beforeSeq: undefined, windowFloor: () => 100 },
+      windowCut(4),
       () => {},
       new AbortController().signal,
     )).resolves.toBeUndefined()
@@ -1435,9 +1505,9 @@ describe('indexed suffix window', () => {
       readFrom,
     }, {
       id: sessionId,
-      maxMessages: 4,
+      seedMessages: 4,
       beforeSeq: undefined,
-    }, () => {}, new AbortController().signal)).resolves.toBeUndefined()
+    }, windowCut(4), () => {}, new AbortController().signal)).resolves.toBeUndefined()
     expect(messageCut).not.toHaveBeenCalled()
     expect(readFrom).not.toHaveBeenCalled()
   })
@@ -1487,7 +1557,8 @@ describe('indexed suffix window', () => {
 
     await expect(readIndexedSuffix(
       { ...canSeek, messageCut: () => Promise.resolve(5000), readFrom },
-      { id: sessionId, maxMessages: 4, beforeSeq: undefined },
+      { id: sessionId, seedMessages: 4, beforeSeq: undefined },
+      windowCut(4),
       () => {},
       new AbortController().signal,
     )).resolves.toBeUndefined()
@@ -1531,10 +1602,10 @@ describe('indexed suffix window', () => {
 
     await expect(readIndexedSuffix(persisted, {
       id: sessionId,
-      maxMessages: 4,
+      seedMessages: 4,
       beforeSeq: undefined,
       windowFloor: () => 12,
-    }, () => {}, new AbortController().signal)).resolves.toBeUndefined()
+    }, windowCut(4), () => {}, new AbortController().signal)).resolves.toBeUndefined()
     expect(reads).toEqual([promptsCut(events, 4) - 128, 12])
 
     // A window that cannot hold the page retries at the deep margin, then bails
@@ -1564,9 +1635,9 @@ describe('indexed suffix window', () => {
 
     await expect(readIndexedSuffix(deepPersisted, {
       id: sessionId,
-      maxMessages: 4,
+      seedMessages: 4,
       beforeSeq: undefined,
-    }, () => {}, new AbortController().signal)).resolves.toBeUndefined()
+    }, windowCut(4), () => {}, new AbortController().signal)).resolves.toBeUndefined()
     expect(reads.length).toBe(2)
   })
 })

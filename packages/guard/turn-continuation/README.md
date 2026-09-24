@@ -73,7 +73,7 @@ The `agent/status` transition to `idle` is the only place the plugin acts. It re
 
 ### The budget and its refill
 
-A per-Agent count holds the turns this plugin opened since that Agent last consumed human input. `agent/inbox/claimed` clears the count when the claimed message's source kind is `user`; a continuation is stamped `{kind: 'plugin', plugin: 'turn-continuation'}`, so claiming one never refills the budget it just spent. At the cap the plugin logs a warning and waits for human input. `agent/session-start` clears both the count and the recorded reason, so a resumed session and a same-session Agent replacement each start with a full budget. Disposal latches the plugin stopped, and the `ctx.effect()` installer owns every listener it registers.
+A per-Agent count holds the turns this plugin opened since that Agent last consumed human input. `agent/inbox/claimed` clears the count when the claimed message's source kind is `user`; a continuation is stamped `{kind: 'turn-continuation'}`, so claiming one never refills the budget it just spent. At the cap the plugin logs a warning and waits for human input. `agent/created` clears both the count and the recorded reason before the lifecycle can record a turn end — creation awaits its serial listeners before releasing queued input — so a resumed session and a same-session Agent replacement each start with a full budget. Disposal latches the plugin stopped, and the `ctx.effect()` installer owns every listener it registers.
 
 ### Source map
 

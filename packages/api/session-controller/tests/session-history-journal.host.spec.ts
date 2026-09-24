@@ -858,21 +858,16 @@ describe('Session history raw journal', () => {
     const page = pageEvents(response.value)
     // Two append-origin messages fill the page even though a replacement copy of
     // the same event type sits in the window: the copy is model-only.
-    // Fork patch (FORK_SURFACE.md): the cut widens back to the owning turn's
-    // opening events, so the page starts at turn 1's `turn/start` and carries
-    // that turn's own messages instead of starting mid-turn.
     const messages = page.filter(event => event.type === 'user/message' || event.type === 'assistant/message')
-    expect(messages.map(event => event.seq)).toEqual([first.seq, first.seq + 1, third.seq, third.seq + 1, third.seq + 3])
-    // The widened cut reaches the log head (turn 1 opens the log), so nothing
-    // earlier remains to page.
-    expect(response.value.hasMore).toBe(false)
+    expect(messages.map(event => event.seq)).toEqual([third.seq, third.seq + 1, third.seq + 3])
+    expect(page.some(event => event.seq === first.seq)).toBe(false)
+    expect(response.value.hasMore).toBe(true)
     // The range stays contiguous, so the checkpoint's summary record is readable on
     // the same page as the checkpoint itself.
     const summaryIndex = page.findIndex(event => event.seq === summary.seq)
     expect(summaryIndex).toBeGreaterThan(-1)
     expect(page[summaryIndex + 1]?.seq).toBe(summary.seq + 1)
-    // Contiguous from the log head: the widened cut starts the page at seq 0.
-    expect(page.map(event => event.seq)).toEqual(page.map((_event, index) => index))
+    expect(page.map(event => event.seq)).toEqual(page.map((_event, index) => third.seq + index))
   })
 
   it('paginates a message with a large embedded stream without expanding physical records', async () => {
@@ -905,16 +900,9 @@ describe('Session history raw journal', () => {
         maxMessages: 1,
       })
       if (!response.ok) throw new Error('unreachable')
-      // Fork patch (FORK_SURFACE.md): the fork's turn-aligned cut starts the page
-      // at the owning turn's opening events (turn/start, step/start) so a head
-      // turn never reaches the client mid-turn; the physical records stay one
-      // per event and the embedded stream is not expanded.
-      const page = pageEvents(response.value)
-      expect(page.map(event => event.seq)).toEqual([0, 1, message.seq])
-      expect(response.value.records).toHaveLength(page.length)
-      expect(page.at(-1)?.seq).toBe(message.seq)
-      // The widened cut reaches the log head, so nothing earlier remains.
-      expect(response.value.hasMore).toBe(false)
+      expect(pageEvents(response.value).map(event => event.seq)).toEqual([message.seq])
+      expect(response.value.records).toEqual([{ type: 'event', event: message }])
+      expect(response.value.hasMore).toBe(true)
     } finally {
       min.mockRestore()
     }

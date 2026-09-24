@@ -41,7 +41,6 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import z from '@deepseek-ai/schemastery'
 import {
   rejectPrompt, validateControlRequest,
 } from './control.ts'

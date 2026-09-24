@@ -20,7 +20,7 @@ const row = (id: string, rev = 'r0', extra: Partial<WebBootEntry> = {}): WebBoot
   id, rev, url: `/plugins/??${id}/client.js&rev=${rev}`, ...extra,
 })
 const graph = (...entries: WebBootEntry[]): WebBootGraph => ({
-  rev: JSON.stringify(entries), entries,
+  rev: JSON.stringify(entries), entries, trustedAuthorities: [],
   batches: entries.length === 0 ? [] : [{ phase: 'application', url: '/batch', rev: 'batch', entries: entries.map(row => row.id) }],
 })
 const deferred = () => {
@@ -38,11 +38,12 @@ async function bench(initial: WebBootGraph, factories: Record<string, ClientBund
     create: options => createClientModuleSystem(target, { id: 'bootstrap', exports: { inject: ['loader'], apply: provideModules } }, options),
   }
   let arrival: (url: string) => Promise<void> = async () => {}
+  const batchIds = new Map(initial.batches.map(batch => [batch.url, batch.entries.filter(id => id !== 'bootstrap')]))
   const modules = target.create({
     boot: initial, staticModules: {},
     loadBundle: async (url) => {
       fetched.push(url)
-      const ids = url === '/batch' ? initial.entries.map(row => row.id).filter(id => id !== 'bootstrap') : [url.split('??')[1]!.split('/client.js')[0]!]
+      const ids = batchIds.get(url) ?? [url.split('??')[1]!.split('/client.js')[0]!]
       const registrations = ids.map(id => ({ id, factory: factories[id]! }))
       await arrival(url)
       for (const registration of registrations) target.load(registration)
@@ -78,6 +79,33 @@ function visible(id: string, effects: { mounted: number; disposed: number; hits:
       })
     } }
   }
+}
+
+/** Loader entries under one plugin name: entry ids are random, so the name is what must stay unique per page load. */
+const entriesNamed = (ctx: Context, name: string) => [...ctx.loader.entries()].filter(entry => entry.options.name === name)
+
+/** The two-stage roster `AppWebEntry.run` boots: one pre-mount row and one row riding a deferred batch. */
+const twoStageGraph = (): WebBootGraph => ({
+  rev: 'two-stage',
+  entries: [row('eager'), row('late-row')],
+  trustedAuthorities: [],
+  batches: [
+    { phase: 'application', url: '/batch', rev: 'batch', entries: ['eager'] },
+    { phase: 'deferred', url: '/deferred-batch', rev: 'batch', entries: ['late-row'] },
+  ],
+})
+
+/** Boot the two-stage roster the way `AppWebEntry.run` does: the ledger receives the pre-mount rows only. */
+async function twoStageBench(effects: { mounted: number; disposed: number; hits: number }) {
+  const b = await bench(twoStageGraph(), {
+    eager: () => ({ apply() {} }),
+    'late-row': visible('late-row', effects),
+  }, false)
+  await b.modules.entries.start(b.ctx.loader, {
+    ...b.modules.manifest,
+    plugins: b.modules.manifest.plugins.filter(plugin => !plugin.deferred),
+  })
+  return b
 }
 
 describe('client manifest entries', () => {
@@ -194,6 +222,31 @@ describe('client manifest entries', () => {
     expect(() => b.modules.entries.sync({ rev: 'bad', entries: [{ id: 'a' }], batches: [] })).toThrow('string id/url/rev')
     expect([...b.ctx.loader.entries()].map(entry => entry.options.name)).toEqual(['a'])
     expect(() => b.modules.entries.start(b.ctx.loader, b.modules.manifest)).toThrow('already started')
+  })
+
+  it('leaves the deferred row to its post-mount activation when a graph frame arrives first', async () => {
+    const effects = { mounted: 0, disposed: 0, hits: 0 }
+    const b = await twoStageBench(effects)
+    await b.modules.entries.sync(twoStageGraph())
+    expect(b.fetched).toEqual(['/batch'])
+    expect(entriesNamed(b.ctx, 'late-row')).toHaveLength(0)
+    // The post-mount activation `activateDeferred` performs stays the row's single owner.
+    await b.ctx.loader.create({ name: 'late-row' })
+    await b.ctx.loader.await()
+    expect(entriesNamed(b.ctx, 'late-row')).toHaveLength(1)
+    expect(effects).toEqual({ mounted: 1, disposed: 0, hits: 0 })
+  })
+
+  it('does not duplicate the entry a deferred row already owns', async () => {
+    const effects = { mounted: 0, disposed: 0, hits: 0 }
+    const b = await twoStageBench(effects)
+    await b.ctx.loader.create({ name: 'late-row' })
+    await b.ctx.loader.await()
+    expect(entriesNamed(b.ctx, 'late-row')).toHaveLength(1)
+    await b.modules.entries.sync(twoStageGraph())
+    expect(entriesNamed(b.ctx, 'late-row')).toHaveLength(1)
+    expect(entriesNamed(b.ctx, 'late-row')[0]!.fiber?.state).toBe(2)
+    expect(effects).toEqual({ mounted: 1, disposed: 0, hits: 0 })
   })
 })
 

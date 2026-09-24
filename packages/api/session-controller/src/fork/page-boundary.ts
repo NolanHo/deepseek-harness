@@ -1,19 +1,10 @@
-// Fork-owned page-boundary module (see FORK_SURFACE.md): the user-aligned,
-// turn-complete history pagination that upstream's session-controller
-// delegates to. Keeping this in one fork file leaves upstream's history.ts
-// with a minimal injection surface for future syncs.
-//
-// One boundary walk serves BOTH read paths so they can never disagree on a
-// page cut: user messages anchor pages (a whole-log fallback to any message
-// for synthetic logs), each chosen message widens its cut through
-// sourceEventSeqs, and the cut extends back to its owning turn's opening
-// events so no page starts mid-turn.
+// Fork-owned page-boundary module (see FORK_SURFACE.md): the indexed physical
+// read behind the fork's history fast paths — the seekable suffix window, the
+// proof that the window holds the page, and the ladder that widens it. The page
+// rule itself is the caller's (upstream's `paginate`, handed in as a
+// WindowPageCut), so an indexed read and the observation path serve one page.
 
-import { isAppendSurfaceEvent } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
-
-/** Message types a page boundary may count. */
-const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
 
 /**
  * Headroom read before a message-indexed cut: the cut seqs an append-origin
@@ -63,141 +54,49 @@ export interface SeekablePersistence {
   }>
 }
 
-/**
- * Backwards message walk shared by BOTH paging paths, so the indexed fast
- * path and the observation fallback can never disagree on a boundary. User
- * messages anchor pages — every page starts at a turn's opening user message
- * and its provenance group head — with a whole-window fallback to any
- * message for synthetic logs that carry no user messages. Each chosen
- * message widens its cut through `sourceEventSeqs`, so pages never split a
- * replacement or provenance group.
- *
- * @param window - Events in seq order (a dense log or an already-filtered
- * suffix read).
- * @param maxMessages - Page size in user messages (fallback: any message).
- * @param endIndex - Exclusive walk bound: the dense log passes the seq end
- * (index === seq), the suffix read passes its own length).
- * @returns The cut seq (0 when the window holds fewer than one full page),
- * the chosen message count, and whether the turn-aligned cut stopped at the
- * window head before reaching its owning turn (see {@link turnAlignedCut}).
- */
-export function nthMessageCut(
-  window: readonly SessionEvent[],
-  maxMessages: number,
-  endIndex = window.length,
-): { readonly cut: number; readonly messages: number; readonly truncated: boolean } {
-  let userCount = 0
-  let userCut = 0
-  let anyCount = 0
-  let anyCut = 0
-  for (let index = Math.min(endIndex, window.length) - 1; index >= 0; index--) {
-    const event = window[index] as SessionEvent
-    if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
-    const sources = (event as { readonly sourceEventSeqs?: readonly number[] }).sourceEventSeqs
-    let groupStart: number = event.seq
-    if (sources !== undefined) {
-      for (const source of sources) groupStart = Math.min(groupStart, source)
-    }
-    if (event.type === 'user/message') {
-      userCount++
-      // The cut pins only at the max-th user message; a window short of a
-      // full page stays whole (cut 0) like the any-message fallback below.
-      if (userCount === maxMessages) {
-        userCut = groupStart
-        break
-      }
-    }
-    // The fallback candidate pins once at the max-th message from the end;
-    // earlier messages never move it, matching the zero-user window's cut.
-    anyCount++
-    if (anyCount === maxMessages) anyCut = groupStart
-  }
-  const chosen = userCount > 0
-    ? { cut: userCut, messages: userCount }
-    : { cut: anyCut, messages: anyCount }
-  const aligned = turnAlignedCut(window, chosen.cut)
-  return { cut: aligned.cut, messages: chosen.messages, truncated: aligned.truncated }
-}
-
-/**
- * Widen a message cut back to its owning turn's opening events: a page must
- * not start mid-turn, or the head turn reaches the client without its
- * turn/start and renders unfolded until the next page completes it — a
- * visible layout flip on every Load earlier. The walk stops at the previous
- * turn/end (or the window head), so only the turn's own opening events
- * (turn/start, seeds, context injection) join the page.
- *
- * @param window - Events in seq order (a dense log or a suffix read).
- * @param cut - The message cut to widen.
- * @returns The aligned cut and whether the walk ran out of window before that
- * turn's `turn/end`: a truncated cut still lands "inside" the window, so the
- * suffix fast path must reject it (the observation path holds the whole log).
- */
-function turnAlignedCut(
-  window: readonly SessionEvent[],
-  cut: number,
-): { readonly cut: number; readonly truncated: boolean } {
-  if (cut <= 0) return { cut: 0, truncated: false }
-  let index = window.findIndex(event => event.seq >= cut)
-  /* v8 ignore next -- a cut beyond the window's last seq requires the
-     messageCut backend to disagree with the readFrom suffix; the fast path
-     validates the cut inside its window before this can fire. */
-  if (index < 0) return { cut, truncated: false }
-  while (index > 0) {
-    const previous = window[index - 1] as SessionEvent
-    if (previous.type === 'turn/end') return { cut: (window[index] as SessionEvent).seq, truncated: false }
-    index--
-  }
-  const head = (window[0] as SessionEvent).seq
-  // A walk that reaches seq 0 reached the log head, where nothing precedes the
-  // turn, so the page still opens on that turn; any later head is truncated.
-  return { cut: head, truncated: head > 0 }
-}
-
-/**
- * Message-aligned pagination over a seq-indexed SUFFIX (the fast-path read
- * starts at a positive seq, so array indexes are not seqs — the observation
- * pagination's dense-index assumption does not transfer).
- *
- * @param events - Every event of the suffix read, in seq order.
- * @param beforeSeq - The request's exclusive page-before bound, undefined when
- * the page ends at the read's own cursor (the opening page).
- * @param maxMessages - Page size in messages (user messages anchor the cut; a
- * window without any counts all messages).
- * @param throughSeq - Inclusive last seq of the accepted read.
- * @returns The page events from the cut to the window end, whether an earlier
- * page exists, the cut seq (0 when the window holds fewer than one full page),
- * the chosen message count, and whether the turn-aligned cut stopped at the
- * window head before reaching its owning turn (see {@link turnAlignedCut}).
- */
-export function paginateSuffix(
-  events: readonly SessionEvent[],
-  beforeSeq: number | undefined,
-  maxMessages: number,
-  throughSeq: number,
-): {
-  readonly events: SessionEvent[]
+/** One read window's page, cut by the caller's page rule. */
+export interface WindowPage {
+  /** Page events, from the cut to the window end. */
+  readonly events: readonly SessionEvent[]
+  /** Whether an earlier page exists below the cut. */
   readonly hasMore: boolean
+  /**
+   * Absolute seq of the page's first event, or the window head when the walk
+   * found no cut inside the window.
+   */
   readonly cut: number
-  readonly messages: number
-  readonly truncated: boolean
-} {
-  const end = Math.min(throughSeq + 1, beforeSeq ?? throughSeq + 1)
-  const window = events.filter(event => event.seq < end)
-  const chosen = nthMessageCut(window, maxMessages)
-  return {
-    events: window.filter(event => event.seq >= chosen.cut),
-    hasMore: chosen.cut > 0,
-    cut: chosen.cut,
-    messages: chosen.messages,
-    truncated: chosen.truncated,
-  }
+  /** Whether the backwards walk reached the window head without cutting. */
+  readonly exhausted: boolean
 }
+
+/**
+ * The page one window yields under the caller's page rule: upstream's
+ * `paginate` in `history.ts`, bound to the request's page size, page-before
+ * bound, and turn window. Both history read paths apply that one rule, so an
+ * indexed suffix read and a whole-log observation cut the same page.
+ *
+ * @param window - the read window's events, dense and in seq order.
+ * @param baseSeq - absolute seq of the window's first event; 0 for a whole log.
+ * @param throughSeq - inclusive absolute page end.
+ * @returns the page events, the cut seq, and whether the walk ran out of window
+ *   before cutting: a cut below the window head widens a provenance group past
+ *   this read, so the caller widens the window or falls back.
+ */
+export type WindowPageCut = (
+  window: readonly SessionEvent[],
+  baseSeq: number,
+  throughSeq: number,
+) => WindowPage
 
 /** The fast-path ladder's read plan over one indexed seek. */
 export interface IndexedPagePlan {
   readonly id: SessionId
-  readonly maxMessages: number
+  /**
+   * Indexed seed size: the persistence answers the max-th append-origin user
+   * message below the page end, and the read starts a margin above it. A
+   * request carrying a turn window seeds from that window's message floor.
+   */
+  readonly seedMessages: number
   readonly beforeSeq: number | undefined
   /**
    * Inclusive page end, or omitted to end at the read suffix's own last seq
@@ -223,24 +122,27 @@ export interface IndexedRead {
   readonly throughSeq: number
   /** Every event of the accepted suffix read, in seq order. */
   readonly events: readonly SessionEvent[]
-  /** The message-aligned page sliced from {@link events}. */
-  readonly page: { readonly events: SessionEvent[]; readonly hasMore: boolean }
+  /** The page the caller's rule cut from {@link events}. */
+  readonly page: { readonly events: readonly SessionEvent[]; readonly hasMore: boolean }
 }
 
 /**
- * Read one indexed suffix window. The plan's message cut seeds a shallow
- * suffix read bounded by the page's own exclusive end; a projection floor
- * below its start restarts the read there so one window serves both, a window
- * that cannot hold the (compaction-widened) cut retries once at the deep
- * margin, and an unsatisfiable or unprovable window returns undefined so the
- * caller falls back to the observation path.
+ * Read one indexed suffix window. The plan's seed cut starts a suffix read from
+ * a margin above it, bounded by the page's own exclusive end and reaching the
+ * log head when the seed sits within that margin; a projection floor below the
+ * start restarts the read there so one window serves both the page and the
+ * fold, a window that cannot hold the (compaction-widened) cut retries once at
+ * the deep margin, and an unsatisfiable or unprovable window returns undefined
+ * so the caller falls back to the observation path.
  *
  * @param source - The seekable persistence (messageCut + readFrom).
  * @param plan - The page request's resolved addressing.
+ * @param cut - The caller's page rule (see {@link WindowPageCut}); the window
+ *   is served only when the rule's cut is provably the whole log's cut.
  * @param validateSuffix - Caller-owned request validation over each read
- * suffix (identity, address, the exclusive end in force, the stored end the
- * read observed); throws to reject the request. Callers that only validate
- * identity and address keep a two-argument closure.
+ *   suffix (identity, address, the exclusive end in force, the stored end the
+ *   read observed); throws to reject the request. Callers that only validate
+ *   identity and address keep a two-argument closure.
  * @param signal - Cancellation shared with the request.
  * @returns The accepted window and its page, or undefined when the backend
  * cannot answer or the window cannot hold the page.
@@ -248,6 +150,7 @@ export interface IndexedRead {
 export async function readIndexedSuffix(
   source: SeekablePersistence,
   plan: IndexedPagePlan,
+  cut: WindowPageCut,
   validateSuffix: (
     meta: SessionHeader,
     events: readonly SessionEvent[],
@@ -264,9 +167,9 @@ export async function readIndexedSuffix(
   const end = plan.throughSeq !== undefined && plan.throughSeq >= 0
     ? Math.min(plan.throughSeq + 1, plan.beforeSeq ?? plan.throughSeq + 1)
     : plan.beforeSeq
-  const cut = await source.messageCut(plan.id, plan.maxMessages, end, signal)
+  const seed = await source.messageCut(plan.id, plan.seedMessages, end, signal)
   signal.throwIfAborted()
-  if (cut === undefined) return undefined
+  if (seed === undefined) return undefined
   // A mismatched identity is a soft bail (the caller falls back), not a
   // rejected request; each read re-validates, including a restarted one.
   const read = async (fromSeq: number) => {
@@ -277,14 +180,25 @@ export async function readIndexedSuffix(
     signal.throwIfAborted()
     if (suffix.meta.id !== plan.id) return undefined
     validateSuffix(suffix.meta, suffix.events, end, suffix.storedEnd)
+    // The page cut and the projection fold both index this window by
+    // `seq - fromSeq`, so a non-empty answer must hold exactly the stored rows
+    // in [fromSeq, last]: one that starts elsewhere or skips a seq cannot be cut
+    // into a page, and the caller's observation path answers instead.
+    if (suffix.events.length > 0) {
+      const first = suffix.events[0] as SessionEvent
+      const last = suffix.events[suffix.events.length - 1] as SessionEvent
+      if (first.seq !== fromSeq || suffix.events.length !== last.seq - fromSeq + 1) return undefined
+    }
     // A bounded read proves its own end: the backend answers the stored events
     // dense up to it, or the whole log below it. A suffix that stops short of
-    // the bound cannot be cut into a page — the page would silently drop every
-    // event between its tail and the bound — so the observation path answers.
+    // the bound — or answers nothing under it — cannot be cut into a page,
+    // because that page would silently drop every event between its tail and the
+    // bound; the observation path answers instead. An empty answer to an
+    // unbounded read carries no offset and is judged by the page rule.
     if (end !== undefined && (suffix.events.at(-1)?.seq ?? -1) !== end - 1) return undefined
     return suffix
   }
-  let fromSeq = Math.max(0, cut - PAGE_CUT_LEAD_MARGIN)
+  let fromSeq = Math.max(0, seed - PAGE_CUT_LEAD_MARGIN)
   let suffix = await read(fromSeq)
   if (suffix === undefined) return undefined
   const floor = plan.windowFloor?.(suffix.meta, suffix.inheritedEventCount)
@@ -296,14 +210,17 @@ export async function readIndexedSuffix(
   }
   for (let attempt = 0; ; attempt++) {
     const throughSeq = plan.throughSeq ?? suffix.events.at(-1)?.seq ?? -1
-    const page = paginateSuffix(suffix.events, plan.beforeSeq, plan.maxMessages, throughSeq)
-    // The window provably holds the page only when the cut lands inside the
-    // read suffix AND its owning turn's head does: a compaction replacement
-    // widens its group head across the whole shadowed range, and a window
-    // that starts inside the cut message's own turn truncates the head, so
-    // one deep retry covers either before the caller re-reads the whole
-    // observation.
-    if (!page.truncated && page.cut >= fromSeq && page.messages >= plan.maxMessages) {
+    const page = cut(suffix.events, fromSeq, throughSeq)
+    // A cut inside the window IS the whole log's cut: the walk made every
+    // decision the observation path's walk makes from the same page end. A walk
+    // that ran out of window proves its cut only when the window is the log
+    // prefix below that end (`fromSeq === 0`); a cut below the window head
+    // widens a provenance group past the read. Both unproven shapes take the
+    // ladder rather than serving a page the observation path would not.
+    const proven = !page.exhausted && page.cut >= fromSeq
+    // A page-less window is never worth serving: the observation path answers
+    // the same page, and the windowed open reads its cursor off the page tail.
+    if (page.events.length > 0 && (proven || fromSeq === 0)) {
       return {
         meta: suffix.meta,
         inheritedEventCount: suffix.inheritedEventCount,
@@ -313,8 +230,8 @@ export async function readIndexedSuffix(
         page: { events: page.events, hasMore: page.hasMore },
       }
     }
-    if (attempt > 0 || fromSeq === 0) return undefined
-    const deep = Math.max(0, cut - PAGE_CUT_DEEP_MARGIN)
+    if (attempt > 0) return undefined
+    const deep = Math.max(0, seed - PAGE_CUT_DEEP_MARGIN)
     fromSeq = floor === undefined ? deep : Math.min(deep, floor)
     suffix = await read(fromSeq)
     if (suffix === undefined) return undefined
@@ -323,10 +240,11 @@ export async function readIndexedSuffix(
 
 /**
  * Read one page through the indexed fast path; see {@link readIndexedSuffix}
- * for the read plan and the shared cut/margin ladder.
+ * for the read plan, the page rule, and the shared seed/margin ladder.
  *
  * @param source - The seekable persistence (messageCut + readFrom).
  * @param plan - The page request's resolved addressing.
+ * @param cut - The caller's page rule (see {@link WindowPageCut}).
  * @param validateSuffix - Caller-owned request validation over each read
  * suffix (identity, address, the exclusive end in force, the stored end the
  * read observed); throws to reject the request.
@@ -337,6 +255,7 @@ export async function readIndexedSuffix(
 export async function readIndexedPage(
   source: SeekablePersistence,
   plan: IndexedPagePlan,
+  cut: WindowPageCut,
   validateSuffix: (
     meta: SessionHeader,
     events: readonly SessionEvent[],
@@ -344,7 +263,7 @@ export async function readIndexedPage(
     storedEnd?: number,
   ) => void,
   signal: AbortSignal,
-): Promise<{ readonly events: SessionEvent[]; readonly hasMore: boolean } | undefined> {
-  const read = await readIndexedSuffix(source, plan, validateSuffix, signal)
+): Promise<{ readonly events: readonly SessionEvent[]; readonly hasMore: boolean } | undefined> {
+  const read = await readIndexedSuffix(source, plan, cut, validateSuffix, signal)
   return read === undefined ? undefined : read.page
 }

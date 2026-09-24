@@ -567,6 +567,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the graph served as `window.__DSH_BOOT__`.',
       },
       {
+        signature: 'publishTrustedAuthorities(authorities: readonly string[]): void',
+        description: 'Replace the host-published serving authorities. The producer is the client-connection node half, whose `trustedHosts` config is the exact fence list; publication may land after construction, so the injected HTML always renders the settled graph. Same-value publication does nothing; a change recomposes the graph and notifies listeners once.',
+        parameters: [{ name: 'authorities', description: 'non-loopback authorities, canonical `host[:port]`.' }],
+      },
+      {
         signature: 'clientPath(id: string): string | undefined',
         description: 'Absolute path of an entry\'s client bundle.',
         parameters: [{ name: 'id', description: 'entry id (package name).' }],
@@ -1953,8 +1958,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'sessionPersistence',
-    summary: 'Durable append-only session storage addressed through per-session handles.',
-    description: 'Durable append-only session storage addressed through per-session handles.\n\nStorage semantics shared by every backend: events are contiguous from seq 0 and never rewritten; a torn physical tail is never returned to a reader and is truncated by the write path before its first append; reads validate current-format records only and refuse unknown vocabulary fail-closed. `append` persists best-effort; `flush` — per handle or service-wide — is the durability barrier.\n\nVisibility: a created session is observable through `stat`/`list`/`open` in this process from the moment `create` resolves, even while a backend defers physical materialization (a pure optimization); other processes see the session only once it materializes, and a session that never materialized before a crash never existed. `SessionHandle.flush` forces materialization.\n\nFreshness: once an `append` or `flush` resolves, reads started afterwards on this backend instance observe at least that prefix.',
+    summary: 'Durable session storage addressed through per-session handles.',
+    description: 'Durable session storage addressed through per-session handles.\n\nStorage semantics shared by every backend: events are contiguous from seq 0; `append` never rewrites committed events, and the one committed-log rewrite is the optional write-handle SessionHandle.truncate — a backend may omit it, and a consumer that needs the rewrite fails loud on a backend without the capability. A torn physical tail is never returned to a reader and is truncated by the write path before its first append; reads validate current-format records only and refuse unknown vocabulary fail-closed. `append` persists best-effort; `flush` — per handle or service-wide — is the durability barrier.\n\nFork patch (FORK_SURFACE.md): the paragraph above drops upstream\'s absolute never-rewritten claim for this one truncation path (`append` still never rewrites committed events).\n\nVisibility: a created session is observable through `stat`/`list`/`open` in this process from the moment `create` resolves, even while a backend defers physical materialization (a pure optimization); other processes see the session only once it materializes, and a session that never materialized before a crash never existed. `SessionHandle.flush` forces materialization.\n\nFreshness: once an `append` or `flush` resolves, reads started afterwards on this backend instance observe at least that prefix.',
     methods: [
       {
         signature: 'readonly identity: symbol = Symbol(\'sessionPersistence\')',
@@ -2014,9 +2019,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a title-only block at the stored title row\'s watermark, or `undefined` when the record is current, newer, unrelated, missing, or incompatible with the title unit.',
       },
       {
-        signature: 'hydratePrepared( session: Session, events: readonly SessionEvent[], ): ProjectionSnapshot',
-        description: 'Hydrate projection cells for an already-prepared Session without another persistence read. The cache seeds matching rows; the supplied exact log advances every unit to the observation cut. No checkpoint is written because the logical observation may contain recovery events not yet durable.',
-        parameters: [{ name: 'session', description: 'exact unpublished Session retained by persistence.' }, { name: 'events', description: 'exact logical event prefix represented by the observation.' }],
+        signature: 'hydratePrepared( session: Session, events: readonly SessionEvent[], durableEventCount: number, ): ProjectionSnapshot',
+        description: 'Hydrate projection cells for an already-prepared Session without another persistence read. The cache seeds matching rows; the supplied exact log advances every unit to the observation cut. An uncached read installs the checkpoint of the log\'s durable prefix, so no written row ever passes the stored log end: the supplied log may carry synthetic recovery closers the stored log does not hold, and a row beyond that end would reject every later tail restore that seeds from it.',
+        parameters: [{ name: 'session', description: 'exact unpublished Session retained by persistence.' }, { name: 'events', description: 'exact logical event prefix represented by the observation.' }, { name: 'durableEventCount', description: 'count of {@link events} the stored log holds; the remainder are the synthetic recovery closers the observation balanced with.' }],
         returns: 'all projection values at the event cut.',
       },
       {
@@ -2030,6 +2035,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Cold-read one session\'s projections from its complete log. Each unit is seeded from the identity-checked cached rows — the registry skips `apply` for the already-folded prefix (events at or below the row\'s `seq`) — and the refreshed checkpoint is written back (fail-soft, fire-and-forget), so the first cold read creates the cache row and later ones seed from it. The caller supplies the complete log in seq order: this service never consults the persistence layer.',
         parameters: [{ name: 'meta', description: 'the stored session header (identity witness).' }, { name: 'inheritedEventCount', description: 'exact inherited prefix length for projection initialization and identity.' }, { name: 'events', description: 'the session\'s complete log, in seq order.' }],
         returns: 'the projection cut at the log end.',
+      },
+      {
+        signature: 'async discard(id: SessionId): Promise<void>',
+        description: 'Discard one Session\'s stored checkpoint record. The in-place history rewrite (edit-and-resend truncation) is the one operation that moves a Session log backwards, so a stored row\'s watermark can sit past the new log end or describe events the rewrite removed; the identity-checked read cannot tell, and only the caller that rewrote the log knows to invalidate. A live Session under the same id is dropped from the write-behind first, so a queued checkpoint cannot re-install the discarded rows.',
+        parameters: [{ name: 'id', description: 'the Session whose record is discarded.' }],
+        returns: 'resolution after the durable delete.',
       },
     ],
   },
@@ -2516,6 +2527,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Register a borrowed readonly runtime skill into the calling context\'s layer. Project entries outrank runtime entries, which outrank user entries, within one layer. Same-name runtime entries in one layer are first-wins; a duplicate logs a warning and receives a no-op disposer so it cannot remove the winner.',
         parameters: [{ name: 'skill', description: 'the skill definition input; omitted invocation and provider fields receive defaults.' }],
         returns: 'the exact Cordis effect disposer, preserving composite teardown order and invalidating caches.',
+      },
+      {
+        signature: 'restrict(filter: SkillRestriction): () => void',
+        description: 'Restrict the inherited skill catalog for the calling agent scope. The mask contract and implementation live in the fork-owned restriction registrar, SkillRestrictionStore.',
+        parameters: [{ name: 'filter', description: 'inherited-name mask: `allow` (keep only) or `deny` (remove), never both.' }],
+        returns: 'the exact disposer that lifts this restriction.',
+        throws: ['when the calling context is unscoped or the filter is invalid.'],
       },
       {
         signature: 'async list(options: SkillViewOptions = {}): Promise<SkillSummary[]>',
@@ -3311,9 +3329,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the disposer that unregisters the provider.',
       },
       {
-        signature: 'async search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult>',
-        description: 'Run one search through the selected provider. Resolves the provider at call time with the selection rules above; throws WebError when the capability cannot run. The seam enforces `request.maxResults` on the result: if the provider over-returns, `sources[]` is truncated and `truncated` set.',
-        parameters: [{ name: 'request', description: 'the query and optional result limit.' }, { name: 'signal', description: 'optional cancellation signal forwarded to the provider.' }],
+        signature: 'async search(request: WebSearchRequest, options: WebSearchOptions = {}): Promise<WebSearchResult>',
+        description: 'Run one search through the selected provider. Resolves the provider at call time with the selection rules above; an explicit `options.provider` wins over the configured default for this call alone. Throws WebError when the capability cannot run. The seam enforces `request.maxResults` on the result: if the provider over-returns, `sources[]` is truncated and `truncated` set.',
+        parameters: [{ name: 'request', description: 'the query and optional result limit.' }, { name: 'options', description: 'cancellation signal and optional per-request provider override.' }],
         returns: 'the provider\'s results, capped to `request.maxResults`.',
       },
       {
@@ -4675,7 +4693,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ContinuableSubagentDescriptorData',
-    declaration: 'export interface ContinuableSubagentDescriptorData extends SubagentDescriptorBase {\n    readonly mode: \'continuable\';\n    readonly label: string;\n    readonly agentProvider?: string;\n    readonly agentModel?: string;\n    readonly agentReasoningEffort?: ReasoningEffortId;\n    readonly persona?: string;\n    readonly toolFilter?: ToolRestriction;\n}',
+    declaration: 'export interface ContinuableSubagentDescriptorData extends SubagentDescriptorBase {\n    readonly mode: \'continuable\';\n    readonly label: string;\n    readonly agentProvider?: string;\n    readonly agentModel?: string;\n    readonly agentReasoningEffort?: ReasoningEffortId;\n    readonly persona?: string;\n    readonly toolFilter?: ToolRestriction;\n    readonly cwd?: string;\n    readonly skillFilter?: SkillFilter;\n}',
   },
   {
     name: 'CordisDynamicPackageId',
@@ -6247,7 +6265,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionHandle',
-    declaration: 'export interface SessionHandle extends AsyncDisposable {\n    readonly id: SessionId;\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    readonly access: SessionAccess;\n    read(offset?: number, length?: number, options?: SessionHandleReadOptions): Promise<SessionHandleReadResult>;\n    append(events: readonly SessionEvent[], options?: SessionHandleAppendOptions): Promise<void>;\n    flush(options?: SessionHandleFlushOptions): Promise<void>;\n    close(): Promise<void>;\n}',
+    declaration: 'export interface SessionHandle extends AsyncDisposable {\n    readonly id: SessionId;\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    readonly access: SessionAccess;\n    read(offset?: number, length?: number, options?: SessionHandleReadOptions): Promise<SessionHandleReadResult>;\n    append(events: readonly SessionEvent[], options?: SessionHandleAppendOptions): Promise<void>;\n    truncate?(toSeq: SessionLogOffset, options?: SessionHandleTruncateOptions): Promise<void>;\n    flush(options?: SessionHandleFlushOptions): Promise<void>;\n    close(): Promise<void>;\n}',
   },
   {
     name: 'SessionHandleAppendOptions',
@@ -6264,6 +6282,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionHandleReadResult',
     declaration: 'export interface SessionHandleReadResult {\n    readonly eventState: SessionSeedEventState;\n    readonly events: readonly SessionEvent[];\n}',
+  },
+  {
+    name: 'SessionHandleTruncateOptions',
+    declaration: 'export interface SessionHandleTruncateOptions {\n    readonly signal?: AbortSignal;\n    readonly append?: readonly SessionEvent[];\n}',
   },
   {
     name: 'SessionHeader',
@@ -6399,11 +6421,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionPromptRequest',
-    declaration: 'export interface SessionPromptRequest {\n    readonly requestId: SessionRequestId;\n    readonly sessionId: SessionId;\n    readonly mode: \'queue\' | \'steer\';\n    readonly content: readonly PromptContentPart[];\n    readonly clientTimeZone?: string;\n}',
+    declaration: 'export interface SessionPromptRequest {\n    readonly requestId: SessionRequestId;\n    readonly sessionId: SessionId;\n    readonly mode: \'queue\' | \'steer\';\n    readonly content: readonly PromptContentPart[];\n    readonly clientTimeZone?: string;\n    readonly rewriteFrom?: number;\n}',
   },
   {
     name: 'SessionPromptValue',
-    declaration: 'export interface SessionPromptValue {\n    readonly accepted: true;\n}',
+    declaration: 'export interface SessionPromptValue {\n    readonly accepted: true;\n    readonly rewrote?: boolean;\n}',
   },
   {
     name: 'SessionRecord',
@@ -6686,6 +6708,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SkillEntry {\n    readonly path?: string;\n    readonly name: string;\n    readonly description: string;\n    readonly whenToUse?: string;\n    readonly modelInvocable: boolean;\n}',
   },
   {
+    name: 'SkillFilter',
+    declaration: 'export interface SkillFilter {\n    readonly allow?: readonly string[];\n    readonly deny?: readonly string[];\n}',
+  },
+  {
     name: 'SkillInvocationPolicy',
     declaration: 'export interface SkillInvocationPolicy {\n    readonly modelInvocable: boolean;\n    readonly userInvocable: boolean;\n}',
   },
@@ -6720,6 +6746,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SkillResourceBase',
     declaration: 'export type SkillResourceBase = {\n    readonly kind: \'directory\';\n    readonly path: string;\n} | {\n    readonly kind: \'url\';\n    readonly url: string;\n} | {\n    readonly kind: \'opaque\';\n    readonly description: string;\n};',
+  },
+  {
+    name: 'SkillRestriction',
+    declaration: 'export interface SkillRestriction {\n    readonly allow?: readonly string[];\n    readonly deny?: readonly string[];\n}',
   },
   {
     name: 'SkillSource',
@@ -6927,7 +6957,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SubagentStartRequest',
-    declaration: 'export interface SubagentStartRequest {\n    readonly label?: string;\n    readonly prompt: ContentBlock[];\n    readonly parent: Agent;\n    readonly signal: AbortSignal;\n    readonly agentOptions?: AgentOptions;\n    readonly outputSchema?: ObjectJsonSchema;\n    readonly maxDepth?: number;\n    readonly toolFilter?: ToolRestriction;\n    readonly persona?: string;\n}',
+    declaration: 'export interface SubagentStartRequest {\n    readonly label?: string;\n    readonly prompt: ContentBlock[];\n    readonly parent: Agent;\n    readonly signal: AbortSignal;\n    readonly agentOptions?: AgentOptions;\n    readonly outputSchema?: ObjectJsonSchema;\n    readonly maxDepth?: number;\n    readonly toolFilter?: ToolRestriction;\n    readonly persona?: string;\n    readonly cwd?: string;\n    readonly skillFilter?: SkillFilter;\n}',
   },
   {
     name: 'SubagentStopReason',
@@ -7459,7 +7489,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WebBootBatchPhase',
-    declaration: 'export type WebBootBatchPhase = \'bootstrap\' | \'application\';',
+    declaration: 'export type WebBootBatchPhase = \'bootstrap\' | \'application\' | \'deferred\';',
   },
   {
     name: 'WebBootEntry',
@@ -7467,7 +7497,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WebBootGraph',
-    declaration: 'export interface WebBootGraph {\n    rev: string;\n    entries: WebBootEntry[];\n    batches: WebBootBatch[];\n}',
+    declaration: 'export interface WebBootGraph {\n    rev: string;\n    entries: WebBootEntry[];\n    batches: WebBootBatch[];\n    trustedAuthorities: string[];\n}',
   },
   {
     name: 'WebFetchBody',
@@ -7532,6 +7562,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WebRouteKind',
     declaration: 'export type WebRouteKind = \'exact\' | \'prefix\';',
+  },
+  {
+    name: 'WebSearchOptions',
+    declaration: 'export interface WebSearchOptions {\n    readonly signal?: AbortSignal;\n    readonly provider?: string;\n}',
   },
   {
     name: 'WebSearchProvider',

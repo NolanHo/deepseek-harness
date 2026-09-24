@@ -1761,7 +1761,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'main\', () => ctx.slots.register(\n      { name: \'main\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-layout/src/client/index.ts:66',
+    source: 'packages/client/ui-layout/src/client/index.ts:67',
   },
   {
     key: 'main.conversation',
@@ -2148,7 +2148,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'rightbar\', () => ctx.slots.register(\n      { name: \'rightbar\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-layout/src/client/index.ts:80',
+    source: 'packages/client/ui-layout/src/client/index.ts:81',
   },
   {
     key: 'rightbar.session',
@@ -2753,7 +2753,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'shell.leading\', () => ctx.slots.register(\n      { name: \'shell.leading\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-layout/src/client/index.ts:105',
+    source: 'packages/client/ui-layout/src/client/index.ts:106',
   },
   {
     key: 'shell.overlay',
@@ -2803,17 +2803,17 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'shell.overlay\', () => ctx.slots.register(\n      { name: \'shell.overlay\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-layout/src/client/index.ts:91',
+    source: 'packages/client/ui-layout/src/client/index.ts:92',
   },
   {
     key: 'sidebar',
     kind: 'single',
     scope: 'root',
     summary: 'The whole left column.',
-    doc: 'The whole left column. OCCUPIED by ui-sidebar\'s SidebarRoot, which\ndeclares the workspace and settings seats inside it — registering here\nreplaces the navigation column outright rather than adding to it, and\nthe seats it declares disappear with it. To add something to the\nsidebar, register into one of those inner seats instead.\n\nThe occupant receives the frame\'s live column state (collapsed, width)\nand is expected to render the compact control rail while collapsed.',
+    doc: 'The whole left column. OCCUPIED by ui-sidebar\'s SidebarRoot, which\ndeclares the workspace and settings seats inside it — registering here\nreplaces the navigation column outright rather than adding to it, and\nthe seats it declares disappear with it. To add something to the\nsidebar, register into one of those inner seats instead.\n\nThe occupant receives the frame\'s live column state (collapsed, width,\nmobile) and is expected to render the compact control rail while\ncollapsed; mobile marks the phone overlay drawer instead of a track.',
     registerOptions: [],
     ownerProps: [
-      '/** Sidebar owner share: live column state from the frame\'s concession solve. */\nexport interface SidebarOwnerProps {\n  /** True when the sidebar is closed (the column renders the compact control rail). */\n  collapsed: boolean\n  /** Rendered column width in px (SIDEBAR_COLLAPSED when collapsed). */\n  width: number\n}',
+      '/** Sidebar owner share: live column state from the frame\'s concession solve. */\nexport interface SidebarOwnerProps {\n  /** True when the sidebar is closed (the column renders the compact control rail). */\n  collapsed: boolean\n  /** Rendered column width in px (SIDEBAR_COLLAPSED when collapsed). */\n  width: number\n  // Fork patch (FORK_SURFACE.md): the phone overlay drawer is the fork\'s regime\n  // (fork/mobile-shell.tsx); upstream\'s frame only collapses to a rail.\n  /** True when the frame renders this column inside the phone overlay drawer. */\n  mobile: boolean\n}',
     ],
     ownerPropsReferences: [],
     standardProps: [
@@ -2834,7 +2834,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar\', () => ctx.slots.register(\n      { name: \'sidebar\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-layout/src/client/index.ts:61',
+    source: 'packages/client/ui-layout/src/client/index.ts:62',
   },
   {
     key: 'sidebar.brand.mark',
@@ -2865,7 +2865,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.brand.mark\', () => ctx.slots.register(\n      { name: \'sidebar.brand.mark\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:24',
+    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:25',
   },
   {
     key: 'sidebar.brand.name',
@@ -2896,7 +2896,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.brand.name\', () => ctx.slots.register(\n      { name: \'sidebar.brand.name\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:29',
+    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:30',
   },
   {
     key: 'sidebar.chat.conversation',
@@ -2939,8 +2939,8 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     key: 'sidebar.footer.action',
     kind: 'list',
     scope: 'root',
-    summary: 'Optional actions beside Settings at the sidebar foot.',
-    doc: 'Optional actions beside Settings at the sidebar foot. Declared by this\npackage\'s \'sidebar\' entry; each action receives only the column state.',
+    summary: 'Optional actions at the sidebar foot, above the foot settings seat.',
+    doc: 'Optional actions at the sidebar foot, above the foot settings seat.\nDeclared by this package\'s \'sidebar\' entry; each action receives only\nthe column state.',
     registerOptions: [
       {
         name: 'id',
@@ -2983,7 +2983,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.footer.action\', () => ctx.slots.register(\n      { name: \'sidebar.footer.action\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:52',
+    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:55',
   },
   {
     key: 'sidebar.panellist',
@@ -3033,7 +3033,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.panellist\', () => ctx.slots.register(\n      { name: \'sidebar.panellist\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:34',
+    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:35',
   },
   {
     key: 'sidebar.right.pane.tab',
@@ -3548,11 +3548,11 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     key: 'sidebar.settings',
     kind: 'single',
     scope: 'root',
-    summary: 'The settings seat at the sidebar foot.',
-    doc: 'The settings seat at the sidebar foot. Declared by this package\'s\n\'sidebar\' entry; ui-settings registers its trigger row + modal panel.\nThe sidebar passes only its column state — it holds no settings state.',
+    summary: 'The settings seat: the sidebar foot normally, the phone drawer\'s brand row beside the brand (fork drawer regime).',
+    doc: 'The settings seat: the sidebar foot normally, the phone drawer\'s brand\nrow beside the brand (fork drawer regime). Declared by this package\'s\n\'sidebar\' entry; ui-settings registers its trigger row + modal panel.\nThe sidebar passes only its column state — it holds no settings state.',
     registerOptions: [],
     ownerProps: [
-      '/**\n * Owner share of the sidebar settings seat: the column display state the\n * occupant\'s trigger row must render against (wide row vs rail icon).\n */\nexport interface SidebarSettingsOwnerProps {\n  /** Whether the sidebar renders wide content (false = 56px rail). */\n  wide: boolean\n}',
+      '/**\n * Owner share of the sidebar settings seat: the column display state the\n * occupant\'s trigger row must render against (wide row vs compact icon).\n * The phone drawer\'s brand row renders the compact variant regardless of the\n * column\'s own width.\n */\n// Fork patch (FORK_SURFACE.md): the phone drawer is the fork\'s regime; the\n// compact variant above exists for that row.\nexport interface SidebarSettingsOwnerProps {\n  /** Whether the seat renders the wide row (false = compact icon-only). */\n  wide: boolean\n}',
     ],
     ownerPropsReferences: [],
     standardProps: [
@@ -3573,7 +3573,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.settings\', () => ctx.slots.register(\n      { name: \'sidebar.settings\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:47',
+    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:49',
   },
   {
     key: 'sidebar.toggle.badge',
@@ -3602,7 +3602,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.toggle.badge\', () => ctx.slots.register(\n      { name: \'sidebar.toggle.badge\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:18',
+    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:19',
   },
   {
     key: 'sidebar.workspaces',
@@ -3633,7 +3633,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'sidebar.workspaces\', () => ctx.slots.register(\n      { name: \'sidebar.workspaces\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:41',
+    source: 'packages/client/ui-sidebar/src/client/contract/slots.ts:42',
   },
   {
     key: 'sidebar.workspaces.directoryFlow',

@@ -359,6 +359,8 @@ Durable session storage addressed through per-session handles.
 
 Storage semantics shared by every backend: events are contiguous from seq 0; `append` never rewrites committed events, and the one committed-log rewrite is the optional write-handle SessionHandle.truncate — a backend may omit it, and a consumer that needs the rewrite fails loud on a backend without the capability. A torn physical tail is never returned to a reader and is truncated by the write path before its first append; reads validate current-format records only and refuse unknown vocabulary fail-closed. `append` persists best-effort; `flush` — per handle or service-wide — is the durability barrier.
 
+Fork patch (FORK_SURFACE.md): the paragraph above drops upstream's absolute never-rewritten claim for this one truncation path (`append` still never rewrites committed events).
+
 Visibility: a created session is observable through `stat`/`list`/`open` in this process from the moment `create` resolves, even while a backend defers physical materialization (a pure optimization); other processes see the session only once it materializes, and a session that never materialized before a crash never existed. `SessionHandle.flush` forces materialization.
 
 Freshness: once an `append` or `flush` resolves, reads started afterwards on this backend instance observe at least that prefix.

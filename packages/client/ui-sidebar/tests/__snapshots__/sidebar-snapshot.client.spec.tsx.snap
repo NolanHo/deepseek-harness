@@ -133,7 +133,7 @@ exports[`sidebar shell snapshots > renders Windows caption controls in expanded 
                 <span
                   class="localBuildTitle"
                 >
-                  DSH Local Build
+                  DSH
                 </span>
                 <span
                   class="buildVersion"

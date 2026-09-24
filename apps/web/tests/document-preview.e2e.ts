@@ -152,7 +152,7 @@ it.skipIf(MODE === 'record').each(['en-US', 'zh-CN'])('fills the spreadsheet pan
     const settled = scaffold.whenTurnSettled()
     const input = page.locator('[data-composer-input]').first()
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const sessionId = await settled
     const cwd = scaffold.ctx.agents.get(sessionId)?.session.header.cwd
     if (cwd === undefined) throw new Error('settled Session has no workspace cwd')
@@ -400,7 +400,7 @@ it.skipIf(MODE === 'record').each([1, 2])('keeps frozen headings without divider
     await connectFreshWorkspace(page, scaffold.workspaceCwd)
     const settled = scaffold.whenTurnSettled()
     await page.locator('[data-composer-input]').first().fill(PROMPT)
-    await page.locator('[data-composer-input]').first().press('Enter')
+    await page.locator('[data-composer-input]').first().press('Control+Enter')
     const cwd = scaffold.ctx.agents.get(await settled)?.session.header.cwd
     if (cwd === undefined) throw new Error('settled Session has no workspace cwd')
     await writeFile(join(cwd, 'freeze.xlsx'), await excelFreezeFixture())
@@ -1426,7 +1426,7 @@ describe.skipIf(MODE === 'record')('web e2e: Host Office preview', () => {
     const settled = scaffold.whenTurnSettled()
     const input = page.locator('[data-composer-input]').first()
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const sessionId = await settled
     const cwd = scaffold.ctx.agents.get(sessionId)?.session.header.cwd
     if (cwd === undefined) throw new Error('settled Session has no workspace cwd')

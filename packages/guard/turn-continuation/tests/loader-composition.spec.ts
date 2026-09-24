@@ -124,7 +124,7 @@ describe('turn-continuation real Loader composition through cordis.yml', () => {
     expect(adapter.requests).toHaveLength(2)
     expect(turnEndReasons(agent)).toEqual([{ kind: 'max-tokens' }, { kind: 'completed' }])
     expect(continuations(agent)).toHaveLength(1)
-    expect(continuations(agent)[0]?.source).toEqual({ kind: 'plugin', plugin: 'turn-continuation' })
+    expect(continuations(agent)[0]?.source).toEqual({ kind: 'turn-continuation' })
   })
 
   it('honors a maxConsecutive from the cordis.yml, proving the field is not a constant', async () => {

@@ -73,7 +73,7 @@ kind: "package-reference"
 
 ### 预算与补充
 
-每个 agent 一份计数，记录自该 agent 上次消费人类输入以来本插件开启的轮次数。当被认领消息的来源种类为 `user` 时，`agent/inbox/claimed` 会清除该计数；续接消息被标记为 `{kind: 'plugin', plugin: 'turn-continuation'}`，因此认领它绝不会补充刚刚花掉的预算。达到上限时，插件记录一条警告并等待人类输入。`agent/session-start` 会同时清除计数与记录的原因，因此恢复的会话与同会话中替换的 agent 都从满预算开始。dispose（资源释放）会把插件锁定为停止状态，`ctx.effect()` 安装器负责它注册的每个监听器。
+每个 agent 一份计数，记录自该 agent 上次消费人类输入以来本插件开启的轮次数。当被认领消息的来源种类为 `user` 时，`agent/inbox/claimed` 会清除该计数；续接消息被标记为 `{kind: 'turn-continuation'}`，因此认领它绝不会补充刚刚花掉的预算。达到上限时，插件记录一条警告并等待人类输入。`agent/created` 会在该生命周期记录到轮次结束之前，同时清除计数与记录的原因——创建会等待其串行监听器完成后才释放已排队输入——因此恢复的会话与同会话中替换的 agent 都从满预算开始。dispose（资源释放）会把插件锁定为停止状态，`ctx.effect()` 安装器负责它注册的每个监听器。
 
 ### 源码地图
 

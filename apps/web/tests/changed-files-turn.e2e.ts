@@ -131,7 +131,7 @@ describe('web e2e: a git workspace turn ends with its changed files', () => {
     }
     const input = page.locator('[data-composer-input]').first()
     await input.fill(PROMPT)
-    await input.press('Enter')
+    await input.press('Control+Enter')
     const observations = preparations.map(async (preparation) => {
       const { callId, kilobytes } = await Promise.race([
         preparation.ready.promise,
