@@ -43,7 +43,7 @@ A dual path is one behavior changed on both sides — the same file, the same al
 | --- | --- | --- | --- |
 | `packages/web/web-search-{academic,bocha,brave,zhihu}` | A | 20 files | Fork search providers, fully isolated |
 | `.agents/notes`, docs, snapshots, test updates | A | — | Follow their sources; re-apply with the source change |
-| `session.ts` PAGE_MESSAGES 8 (upstream 50) | B | 8 lines | Client page size |
+| `session.ts` PAGE_MESSAGES 8 (upstream 50) | B | 8 lines + the `apps/web/tests/stats-paged-history.e2e.ts` `loadEarlierUntil` helper that pages the whole log at 8-message pages | Client page size |
 | `client/connection` browserAuth flag | B | ~50 lines | Optional auth disable behind a config field |
 | `ui-chat` TurnProcess fold label + duration | retired (dual path) | — | Upstream 0.1.5-rc.2 builds the same disclosure label inline in `TurnProcessNodeView`; the fork's `src/client/chat/fork/turn-process-summary.ts` (counted categories + wall-clock duration + folded prefix) was deleted and the view restored to upstream's, deleting the fork's `message.turnProcess.collapsed` locale key with it. The duration stays visible in the turn footer's usage details. `TurnProcessNodeView.tsx` and `locale.ts` now match upstream exactly. |
 | `ui-chat` Turn Process fold with partial history | retired | — | **Retired** — upstream 0.1.7-rc.1 puts no `historyIncomplete` gate on `processWindowReady` (it reads the window's `turnStarted`/`turnClosed` flags), so a closed Turn folds as soon as its presentation window is loaded; the fork's dropped prop, its gate edit in `ChatNodeSeat.tsx`, and the two partial-history tests are deleted, and `ChatView.tsx` matches upstream again |

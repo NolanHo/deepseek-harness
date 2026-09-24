@@ -43,7 +43,7 @@ fork 与上游的维护契约：每处差异要么是 fork 自有模块（零合
 | --- | --- | --- | --- |
 | `packages/web/web-search-{academic,bocha,brave,zhihu}` | A | 20 文件 | fork 搜索提供方，完全隔离 |
 | `.agents/notes`、文档、快照、测试更新 | A | — | 随源更新；与对应源一起重放 |
-| `session.ts` PAGE_MESSAGES 8（上游 50） | B | 8 行 | 客户端页大小 |
+| `session.ts` PAGE_MESSAGES 8（上游 50） | B | 8 行，外加 `apps/web/tests/stats-paged-history.e2e.ts` 的 `loadEarlierUntil` 辅助函数（按 8 条消息一页翻完整个日志） | 客户端页大小 |
 | `client/connection` browserAuth 开关 | B | ~50 行 | 配置字段后的可选认证关闭 |
 | `ui-chat` TurnProcess 折叠标签 + 时长 | 已退役（双路径） | — | 上游 0.1.5-rc.2 在 `TurnProcessNodeView` 内联构建同一折叠标签；fork 的 `src/client/chat/fork/turn-process-summary.ts`（分类计数 + 墙钟时长 + 折叠前缀）已删除，视图恢复为上游实现，fork 自有的 `message.turnProcess.collapsed` 字典键随之移除。时长仍在轮次页脚的用量详情中可见。`TurnProcessNodeView.tsx` 与 `locale.ts` 现与上游完全一致。 |
 | `ui-chat` 部分历史下的 Turn Process 折叠 | 已退役 | — | **已退役** —— 上游 0.1.7-rc.1 不再给 `processWindowReady` 加 `historyIncomplete` 门（改为读窗口自身的 `turnStarted`/`turnClosed` 标志），因此已关闭的回合在展示窗口载入后即折叠；fork 被删除的 prop、`ChatNodeSeat.tsx` 的门控编辑与两个部分历史用例一并删除，`ChatView.tsx` 与上游一致 |
