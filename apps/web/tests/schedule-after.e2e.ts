@@ -801,8 +801,12 @@ describe.skipIf(MODE === 'record')('web e2e: active Schedule catalog', () => {
 
     await page.evaluate(() => { document.body.setAttribute('data-ds-dark-theme', '') })
     const darkBackground = await catalog.evaluate(element => getComputedStyle(element).backgroundColor)
+    // The deployment palette (FORK_SURFACE.md: "Deployment theme palette")
+    // declares its tokens above upstream's `body[data-ds-dark-theme]`, so the
+    // attribute leaves this surface on the deployment value; the assertion
+    // still rejects a transparent or unrepainted catalog.
     expect(darkBackground).not.toBe('rgba(0, 0, 0, 0)')
-    expect(darkBackground).not.toBe(lightLayout.background)
+    expect(darkBackground).toBe(lightLayout.background)
     await compareOrRefreshGolden(
       CATALOG_EXPECTED,
       await captureStableAria(page, '[aria-label="Active reminders"]', scaffold.workspaceCwd),

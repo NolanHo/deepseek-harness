@@ -19,7 +19,6 @@
 - button "标准模式"
 - textbox "描述你想要构建的内容, / 调用指令, @ 文件或对话"
 - button "添加文件或调用指令"
-- button "访问模式，当前：工作区内修改": 工作区内修改
 - button "计划模式已开启，按下关闭": 计划
 - button "选择模型，当前 DeepSeek-V4-Flash": DeepSeek-V4-Flash
 - button "发送消息" [disabled]

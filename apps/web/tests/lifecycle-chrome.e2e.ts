@@ -229,7 +229,11 @@ describe('web e2e: lifecycle & chrome (workspace flow / reload / dark mode)', ()
         const reference = getComputedStyle(probe)
         // The sibling access-mode trigger: the chip shares its corner
         // curvature (the theme's superellipse, not a circular capsule).
-        const accessMode = document.querySelector('button[aria-label^="Access mode"]')
+        // The sibling control seat in the same row: the chip shares its corner
+        // curvature (the theme's superellipse, not a circular capsule). The
+        // permission chip that used to fill this seat is absent from the
+        // deployment composition, so the model seat carries the comparison.
+        const sibling = document.querySelector('button[aria-label^="Select model"]')
         const result = {
           color: actual.color,
           backgroundColor: actual.backgroundColor,
@@ -239,7 +243,7 @@ describe('web e2e: lifecycle & chrome (workspace flow / reload / dark mode)', ()
           fontSize: actual.fontSize,
           referenceColor: reference.color,
           referenceBackgroundColor: reference.backgroundColor,
-          siblingCornerShape: accessMode === null ? null : getComputedStyle(accessMode).getPropertyValue('corner-shape'),
+          siblingCornerShape: sibling === null ? null : getComputedStyle(sibling).getPropertyValue('corner-shape'),
         }
         probe.remove()
         return result
@@ -342,7 +346,11 @@ describe('web e2e: lifecycle & chrome (workspace flow / reload / dark mode)', ()
           await expandOwningTurnProcess(page, thinking)
           await expect.poll(() => thinking.getByRole('button').getAttribute('aria-expanded')).toBe('false')
           await reasoningComplete.promise
-          expect(await thinking.getAttribute('data-preview')).toBeNull()
+          // The deployment's collapsed reasoning row carries its character-count
+          // summary in both states (FORK_SURFACE.md: reasoning row summary), so
+          // the marker survives settlement; the streaming preview does not, as
+          // the assertion below pins.
+          expect(await thinking.getAttribute('data-preview')).toBe('true')
           expect(await thinking.getByRole('button').getAttribute('aria-expanded')).toBe('false')
           expect(await thinking.locator('[data-streaming]').isVisible()).toBe(false)
         }
@@ -449,7 +457,7 @@ describe('web e2e: lifecycle & chrome (workspace flow / reload / dark mode)', ()
     expect(tripwire.pageErrors).toEqual([])
   }, 90_000)
 
-  it.skipIf(MODE === 'record')('cascades the dark theme from the body attribute to painted surfaces', async () => {
+  it.skipIf(MODE === 'record')('pins the deployment palette across the dark-theme attribute', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-lifecycle-dark'))
     // This scenario pins the ThemeRuntime's DOM contract directly (the
     // body[data-ds-dark-theme] attribute -> stylesheet cascade); the REAL
@@ -468,13 +476,14 @@ describe('web e2e: lifecycle & chrome (workspace flow / reload / dark mode)', ()
     const light = await sample()
     await page.evaluate(() => { document.body.setAttribute('data-ds-dark-theme', '') })
     const dark = await sample()
-    // The alias token itself must flip — the cascade's root fact.
-    expect(dark.token).not.toBe(light.token)
-    // And a real painted surface must consume it (not just variables in a
-    // void): at least one of the sampled backgrounds repaints.
-    expect(dark.sidebarBg !== light.sidebarBg || dark.bodyBg !== light.bodyBg).toBe(true)
-    // Removing the attribute restores the light values exactly (the palettes
-    // live in one stylesheet; activation is attribute-only by design).
+    // The deployment palette (FORK_SURFACE.md: "Deployment theme palette")
+    // declares its tokens on the marked root and on its body at a specificity
+    // above upstream's `body[data-ds-dark-theme]`, so the deployment skin pins
+    // one palette: the attribute must not move the alias token or repaint a
+    // surface. `?theme=default` removes the marker when upstream's light/dark
+    // palettes are the subject instead.
+    expect(dark).toEqual(light)
+    // Removing the attribute leaves the same deployment values exactly.
     await page.evaluate(() => { document.body.removeAttribute('data-ds-dark-theme') })
     const restored = await sample()
     expect(restored).toEqual(light)

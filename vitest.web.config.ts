@@ -43,16 +43,27 @@ export default defineConfig({
     // the same Access-mode chip (`[aria-label^="Access mode"]`) into Read
     // Only: the chip renders only from the host permission service's
     // `permissions` projection (InputBar.tsx), absent on the fork, so the
-    // suite cannot reach its approval-takeover subject either.
-    // Restore path: clear the `disabled: true` flags on
+    // suite cannot reach its approval-takeover subject either. ptc-escalation
+    // (new in dsh-v0.1.7-rc.1) drives the same absent chip into Read Only to
+    // record a sandbox escalation, so the fork composition cannot reach its
+    // subject. Restore path: clear the `disabled: true` flags on
     // sandbox/sandbox-policy/permission and revert the executor rows' `name`s
     // in packages/bundle/base/cordis.patch.yml, then delete this list.
+    //
+    // reasoning-preview (new in dsh-v0.1.7-rc.1) pins upstream's streaming
+    // reasoning preview — the first-line text behind a fade mask. The fork's
+    // ReasoningRow patch replaces that surface with the character-count summary
+    // (FORK_SURFACE.md: reasoning row summary), so the preview it drives does
+    // not exist here. Restore path: drop the fork's ReasoningRow patch and
+    // re-record snapshots/web/reasoning-preview.
     exclude: [
       'apps/web/tests/settings-chrome.e2e.ts',
       'apps/web/tests/permission-policy-context.e2e.ts',
       'apps/web/tests/access-confirmation.e2e.ts',
       'apps/web/tests/seeded-history.e2e.ts',
       'apps/web/tests/approval-composer.e2e.ts',
+      'apps/web/tests/ptc-escalation.e2e.ts',
+      'apps/web/tests/reasoning-preview.e2e.ts',
     ],
     // Local and record runs stay serial. CI runs workspace-mutating HMR and
     // dynamic Cordis lifecycle coverage before parallelizing the remaining files.

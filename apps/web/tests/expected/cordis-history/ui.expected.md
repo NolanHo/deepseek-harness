@@ -9,14 +9,15 @@
   - button "Jump to turn 1"
   - button "Jump to turn 2"
   - button "Jump to turn 3"
+- button "Load earlier"
 - text: "Use only Cordis tools. First call cordis_inspect_self with no arguments. Then call cordis_define with plugin kind \"new\", idPrefix \"snap\", name \"snapshot noop\", purpose \"does nothing, for the snapshot\", code.host exactly \"return { name: \\\"snapshot-noop\\\", apply(ctx) {} }\" and code.client exactly \"return { inject: [\\\"slots\\\"], apply(ctx) { ctx.slots.register({ name: \\\"shell.overlay\\\", id: \\\"snapshot-probe\\\" }, () => React.createElement(\\\"div\\\", { \\\"data-snapshot-probe\\\": \\\"loaded\\\" })) } }\". Read its returned pluginId and packageId, then call cordis_run with those exact IDs and mode \"run\". After the run request returns, reply exactly CORDIS_UI_READY and stop. 9/1 {{clock}}"
 - button "Copy"
 - status: Worked
 - button "Took {{duration}}" [expanded]
 - button "Called tools" [expanded]
-- button "Think I will inspect the current Session's dynamic Cordis Plugins before defining the snapshot Package."
+- button "Think 97 characters"
 - button "Inspect plugins 0 dynamic plugins"
-- button "Think No dynamic Plugins are present, so I will define the requested Host and Client Package."
+- button "Think 87 characters"
 - button "Register Cordis Plugin snapshot noop does nothing, for the snapshot Ready" [expanded]
 - tablist "Plugin source":
   - tab "Client"
@@ -28,11 +29,11 @@
   - code: "return { name: \"snapshot-noop\", apply(ctx) {} }"
 - text: Result Defined snap-1/pkg-1 (snapshot noop); it is not running yet. Use cordis_run to activate this Package. Run controls live in the Cordis panel above Settings
 - button "Inspect"
-- button "Think The Host returned snap-1/pkg-1, so I will request its first activation."
+- button "Think 71 characters"
 - text: Run Cordis Plugin snap-1 · pkg-1 Ready
 - button "Inspect"
 - text: snap-1/pkg-1 is awaiting user approval (run-1).
-- button "Think The activation request has been submitted, so I will return the requested readiness marker."
+- button "Think 91 characters"
 - paragraph: CORDIS_UI_READY
 - button "Copy"
 - button "Good response"
@@ -66,7 +67,6 @@
 - button "Back to bottom"
 - textbox "Message or run a task, / commands, @ files or sessions"
 - button "Add files or run commands"
-- 'button "Access mode, current: Workspace Write"': Workspace Write
 - button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
 - button "Send message" [disabled]
 - button "3 turns 7 steps"

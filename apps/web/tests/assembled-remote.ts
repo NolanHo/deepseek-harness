@@ -102,6 +102,11 @@ export interface AssembledRemoteOptions {
   readonly developerTools?: boolean
   /** Return the fixture's image-dimension admission error from Session prompt. */
   readonly rejectPrompt?: boolean
+  /**
+   * Park every Session prompt until the promise settles, so a case can observe
+   * the client-side submission echo while admission is provably still pending.
+   */
+  readonly holdPrompt?: Promise<void>
 }
 
 export interface AssembledRemote {
@@ -290,8 +295,9 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
       },
     }
   })
-  mock.unary('session/prompt', (request: unknown) => {
+  mock.unary('session/prompt', async (request: unknown) => {
     request = recordValue(request, 'request')
+    if (options.holdPrompt !== undefined) await options.holdPrompt
     if (options.rejectPrompt === true) {
       return {
         ok: false,

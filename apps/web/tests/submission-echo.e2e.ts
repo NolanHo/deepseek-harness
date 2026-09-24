@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Local submission echo over the BUILT client graph (keyless RemoteMock
-// transport): a text-plus-image send paints its echo bubble synchronously on
-// the submit keystroke — before serialization, transport, or the fixture's
+// transport): a text-plus-image send paints its echo bubble on the submit
+// keystroke's own frame — before serialization, transport, or the fixture's
 // durable admission — with the composer already cleared and editable, and the
 // durable user/message replaces the echo without a duplicate. The fixture host
 // echoes the prompt requestId as the durable source's rpcId, so the retirement
@@ -13,7 +13,11 @@ import { installAssembledBootEnv, mountAssembledApp } from './assembled-boot.ts'
 installAssembledBootEnv()
 
 it('paints the submission echo on the send keystroke and swaps it for the durable node', async () => {
-  mountAssembledApp()
+  // Admission stays parked across the echo phase: observing the echo while the
+  // prompt RPC is unanswered proves the echo precedes the durable node instead
+  // of merely racing it.
+  const release = Promise.withResolvers<undefined>()
+  mountAssembledApp({ remote: { holdPrompt: release.promise } })
 
   const tree = await screen.findByRole('tree', { name: 'Sessions' }, { timeout: 10_000 })
   const start = tree.querySelector<HTMLButtonElement>('button[aria-label="New session in fixture"]')
@@ -43,17 +47,21 @@ it('paints the submission echo on the send keystroke and swaps it for the durabl
   await waitFor(() => { expect(composer.textContent).toBe('回显这条消息') })
   fireEvent.keyDown(composer, { key: 'Enter', metaKey: true })
 
-  // Synchronously after the keystroke: the echo bubble is in the flow with
-  // the draft text and the object-URL preview, while the prompt has not even
-  // been serialized yet (it starts after a paint yield). The composer is
+  // The echo bubble reaches the flow with the draft text and the object-URL
+  // preview while the prompt is still parked in transport, and the composer is
   // already cleared, editable, and free of the rail.
-  const echo = document.querySelector<HTMLElement>('[data-submission-echo]')
-  if (echo === null) throw new Error('submission echo missing on the send keystroke')
+  const echo = await waitFor(() => {
+    const node = document.querySelector<HTMLElement>('[data-submission-echo]')
+    if (node === null) throw new Error('submission echo missing after the send keystroke')
+    return node
+  }, { timeout: 5_000 })
   expect(echo.textContent).toContain('回显这条消息')
   expect(echo.querySelector('img')?.getAttribute('src')?.split(':')[0]).toBe('blob')
   expect(composer.textContent).toBe('')
   expect(composer.getAttribute('contenteditable')).toBe('true')
   expect(document.querySelector('[role="group"][aria-label="Pending attachments"]')).toBeNull()
+
+  release.resolve(undefined)
 
   // The fixture's durable user/message (source.rpcId echoes the prompt
   // requestId) replaces the echo: one bubble, no marker left, and the image

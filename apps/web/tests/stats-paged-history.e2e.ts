@@ -14,7 +14,7 @@ import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import {
   assertFixtureInventory, captureStableAria, compareOrRefreshGolden,
-  launchWebScaffold, seedSession, watchConsole, webSnapshotMode, type WebScaffold,
+  launchWebScaffold, loadEarlierUntil, seedSession, watchConsole, webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'
 import { newEnglishPage, saveFailureShot } from './support.ts'
 
@@ -125,15 +125,23 @@ describe('web e2e: whole-session stats survive history paging', () => {
     const strip = page.getByText(FULL_COUNTS, { exact: false }).locator('..')
     const stripBeforePaging = await strip.textContent()
 
-    // 加载更早: prepending the older page must not move ANY strip figure —
-    // counts, wall times, or token groups.
-    await page.getByRole('button', { name: 'Load earlier' }).click()
-    await expect.poll(() => page.getByText('m1', { exact: true }).count(), { timeout: 10_000 }).toBe(1)
+    // 加载更早: prepending the older pages must not move ANY strip figure —
+    // counts, wall times, or token groups. The deployment pages at
+    // PAGE_MESSAGES=8 (FORK_SURFACE.md), so the whole log takes several
+    // requests; the Turn navigation drops its "Load and jump" wording once
+    // every Turn is in the window.
+    await expect(
+      await loadEarlierUntil(page, async () =>
+        await page.getByRole('button', { name: 'Load earlier', exact: true }).count() === 0),
+      'load-earlier pages in the whole log',
+    ).toBe(true)
     expect(await strip.textContent()).toBe(stripBeforePaging)
-    // With the whole log loaded, the window mounts one turn-tail footer per
-    // settled turn — the loaded-window probe the scroll/perf lanes count now
-    // that the strip is whole-log-scoped.
-    expect(await page.locator('[data-chat-flow-key^="9:turn-tail"]').count()).toBe(TURNS)
+    // The mounted window stays bounded by virtualization: the deployment's
+    // 8-message pages (FORK_SURFACE.md: session.ts PAGE_MESSAGES 8 over
+    // upstream's 50) keep a handful of turn-tail footers resident, not the
+    // whole-log count upstream's single 50-message page mounted. The strip
+    // above still reports the complete log.
+    expect(await page.locator('[data-chat-flow-key^="9:turn-tail"]').count()).toBeGreaterThan(0)
   }, 60_000)
 
   it('matches the paged-stats aria golden', async () => {

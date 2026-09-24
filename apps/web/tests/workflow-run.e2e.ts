@@ -9,6 +9,9 @@ import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished } from 'vitest'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+// Type-only: pulls the permission preset service into this program's Context
+// merge, so the optional precondition below is typed rather than `unknown`.
+import type {} from '@deepseek-ai/dsh-permission-presets'
 import {
   assertFixtureInventory, captureStableAria, compareOrRefreshGolden,
   fixtureUserPrompts, launchWebScaffold, watchConsole, webSnapshotMode,
@@ -70,7 +73,13 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     await connectFreshWorkspace(page, scaffold.workspaceCwd)
     const sessions = scaffold.ctx.sessions.list()
     expect(sessions).toHaveLength(1)
-    scaffold.ctx.permissionPresets.set(sessions[0]!, 'danger-full-access')
+    // The upstream composition confines the executor and needs the explicit
+    // Full access preset before a workflow may run a shell command. The
+    // deployment composition (packages/bundle/base/cordis.patch.yml) mounts the
+    // unconfined local executor and no preset table, so there is nothing to
+    // raise — a mounted table still gets the same upgrade.
+    scaffold.ctx.get('permissionPresets')
+      ?.set(sessions[0]!, 'danger-full-access')
   }, 120_000)
 
   afterAll(async () => {
@@ -157,7 +166,11 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     })
     expect(darkNarrow.clientWidth).toBe(356)
     expect(darkNarrow.scrollWidth).toBeLessThanOrEqual(darkNarrow.clientWidth)
-    expect(darkNarrow.color).not.toBe(lightColor)
+    // The deployment palette (FORK_SURFACE.md: "Deployment theme palette") pins
+    // its tokens above upstream's `body[data-ds-dark-theme]`, so the label keeps
+    // the same link color in both modes; the decoration and geometry below are
+    // unaffected.
+    expect(darkNarrow.color).toBe(lightColor)
     expect(darkNarrow.decoration).toContain('underline')
     expect(Number.parseFloat(darkNarrow.focusWidth)).toBeGreaterThanOrEqual(2)
     expect(darkNarrow.statusWidth).toBe(64)

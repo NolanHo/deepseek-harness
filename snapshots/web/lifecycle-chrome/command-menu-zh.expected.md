@@ -6,6 +6,5 @@
   - option "反馈 feedback 发送关于当前会话的反馈"
   - text: 指令
   - option "压缩 compact 压缩以上对话内容"
-  - option "权限 permission 切换权限预设（沙箱模式与审批策略）"
   - option "模型 model 选择本会话使用的模型"
   - option "下载日志 export 将当前会话内容导出为 ZIP"

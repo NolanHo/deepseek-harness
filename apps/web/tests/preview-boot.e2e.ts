@@ -39,7 +39,7 @@ import {
   VFS_EXAMPLE_SESSION_IDS,
   buildVfsExampleFiles,
 } from '../../../packages/experimental/webworker-runtime/tests/vfs-example-fixture.ts'
-import { captureStableAria, compareOrRefreshGolden, webSnapshotMode } from './scaffold.ts'
+import { captureStableAria, compareOrRefreshGolden, loadEarlierUntil, webSnapshotMode } from './scaffold.ts'
 import { expandOwningTurnProcess, newEnglishPage, REPO_ROOT, saveFailureShot } from './support.ts'
 
 const DIST_ROOT = fileURLToPath(new URL('../dist', import.meta.url))
@@ -459,7 +459,10 @@ async function bootPreview(origin: string, browser: Browser): Promise<void> {
     await catalog.getByRole('treeitem', { name: /Continue preview verification/ }).waitFor()
     await catalog.press('Escape')
 
-    await page.getByRole('button', { name: 'Load earlier', exact: true }).click()
+    await expect(
+      await loadEarlierUntil(page, async () => await page.getByText(SHOWCASE_OLDEST, { exact: true }).count() > 0),
+      'load-earlier pages in the oldest preview turn',
+    ).toBe(true)
     await page.getByText(SHOWCASE_OLDEST, { exact: true }).waitFor({ timeout: 15_000 })
     expect(pageErrors.map(error => error.message)).toEqual([])
     expect(consoleErrors.filter(line =>

@@ -7,8 +7,6 @@
     - button "Agent presets"
   - button "Open configuration file"
   - button "Close"
-  - text: Permission Choose the default permission mode for new sessions
-  - button "Workspace Write"
   - text: Language
   - button "English"
   - text: Appearance
@@ -24,6 +22,6 @@
   - button "Detailed"
   - text: Developer tools Show tools and information for debugging and troubleshooting
   - switch "Developer tools" [checked]
-  - text: Send behavior while busy What Enter and the Send button do while the agent is running; Cmd/Ctrl+Enter uses the other behavior
+  - text: Send behavior while busy How Cmd/Ctrl+Enter and the Send button deliver while the agent is running
   - button "Queue"
   - text: "Current version: {{version}}"

@@ -1575,8 +1575,36 @@ export async function expandAllTurnFolds(page: Page): Promise<void> {
   for (let index = 0; index < count; index += 1) {
     const control = controls.nth(index)
     if (!await control.isVisible() || await control.getAttribute('aria-expanded') === 'true') continue
+    // A Turn whose process holds no members renders its header disabled: there
+    // is nothing to expand, so it is not a collapsed fold to open.
+    if (await control.isDisabled()) continue
     await control.click()
   }
+}
+
+/**
+ * Page the whole Session history in through the "Load earlier" control until
+ * `done` answers true or the log is exhausted. The fork pages at
+ * `PAGE_MESSAGES = 8` (`FORK_SURFACE.md`, upstream 50), so a scenario that
+ * needs the oldest content asks for as many pages as its own composition
+ * requires instead of assuming one.
+ * @param page - the web-test page.
+ * @param done - probe answering whether the wanted older content is loaded.
+ * @returns the final probe answer.
+ */
+export async function loadEarlierUntil(page: Page, done: () => Promise<boolean>): Promise<boolean> {
+  const more = page.getByRole('button', { name: 'Load earlier' })
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    if (await done()) return true
+    if (await more.count() === 0) break
+    const button = more.first()
+    // The control disables itself for the whole request, so the next page has
+    // landed once it is enabled again (or the control is gone with the tail of
+    // the log).
+    await button.click()
+    await expect.poll(async () => await button.count() === 0 || await button.isEnabled(), { timeout: 20_000 }).toBe(true)
+  }
+  return await done()
 }
 
 export async function captureStableAria(
