@@ -5,13 +5,27 @@ import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { chromium, type Page, type CDPSession, type Locator } from 'playwright'
 import { expect, it } from 'vitest'
-import { launchWebScaffold, seedSession, watchConsole, webSnapshotMode } from '../../apps/web/tests/scaffold.ts'
+import {
+  countHistoryPages, launchWebScaffold, mountedHeadKey, seedSession, watchConsole, webSnapshotMode,
+} from '../../apps/web/tests/scaffold.ts'
 import { newEnglishPage } from '../../apps/web/tests/support.ts'
 import { ciTimeBudget, PERFORMANCE_BUDGET_HEADROOM } from '../support/calibration.ts'
 import { HISTORY_TURNS, SESSION_ID, FIRST, DONE, DELTAS, PACE_MS, syntheticHistory, syntheticReply } from './synthetic-history.ts'
 
 const SAMPLES = 3
 const TAIL = '[data-chat-flow-key^="9:turn-tail"]'
+/**
+ * Load earlier gestures one run may issue before the benchmark fails loudly.
+ * The 240-Turn fixture needs one page per history page plus the resident reveals
+ * each window step takes before it pages again, which stays far below this cap.
+ */
+const MAX_LOAD_EARLIER_GESTURES = 512
+/**
+ * How long one Load earlier gesture may take to show its effect. A reveal moves
+ * the window head in the click's own commit and a page request is issued on the
+ * click, so a gesture with work left does not stay quiet this long.
+ */
+const GESTURE_EFFECT_MS = 10_000
 const REFERENCE = { open: 200, page: 260, trajectory: 160, first: 1100, streamTask: 1800, input: 500, streamWall: 1000 }
 const EXPECTED_OPEN_CI_MS = 900
 const EXPECTED_PAGE_CI_MS = 700
@@ -50,6 +64,94 @@ function expectEndpointWithinBudget(value: number, budget: number): void {
 
 function expectInputOverlap(value: boolean): void {
   expect(value).toBe(true)
+}
+
+/**
+ * Whether the transcript head is reached: the Load earlier control is gone, so
+ * no Session page is left to request and no resident row remains above the
+ * mounted window head. A mounted row count cannot state either fact, because the
+ * window stops at its row limit however deep the loaded history grows.
+ * @param page - the benchmark page.
+ * @returns whether no Load earlier gesture remains.
+ */
+async function historyHeadReached(page: Page): Promise<boolean> {
+  return await page.getByRole('button', { name: /^(?:Load earlier|Loading…)$/ }).count() === 0
+}
+
+/**
+ * Turn of the oldest mounted transcript row, which is the mounted window's head.
+ * It falls toward Turn 1 as Load earlier reveals resident rows and pages older
+ * ones in, so it reports paging progress where a mounted row count saturates.
+ * @param page - the benchmark page.
+ * @returns the head row's Turn, or null when no mounted row carries one.
+ */
+function oldestMountedTurn(page: Page): Promise<number | null> {
+  return page.evaluate(() => {
+    for (const row of document.querySelectorAll<HTMLElement>('[data-chat-flow-key]')) {
+      const turn = row.dataset.chatTurn
+      if (turn !== undefined) return Number(turn)
+    }
+    return null
+  })
+}
+
+/** Wait for one Turn's turn-tail row to be mounted in the transcript. */
+async function waitForTurnTailRow(page: Page, turn: number): Promise<void> {
+  await page.locator(`${TAIL}[data-chat-turn="${String(turn)}"]`).waitFor({ state: 'attached' })
+}
+
+/** One settled Load earlier gesture. */
+interface LoadEarlierGesture {
+  /** Whether the gesture issued a `/api/session/page` request. */
+  readonly paged: boolean
+  /** Whether the mounted window head moved to an older resident row. */
+  readonly revealed: boolean
+  /** Milliseconds from the click to the settled effect and a paint. */
+  readonly elapsedMs: number
+}
+
+/**
+ * Poll an observed condition until it settles true.
+ * @param settled - condition answered from the live page.
+ * @param timeoutMs - how long the condition may take.
+ * @returns whether the condition settled true within the timeout.
+ */
+async function waitUntil(settled: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = performance.now() + timeoutMs
+  for (;;) {
+    if (await settled()) return true
+    if (performance.now() >= deadline) return false
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+}
+
+/**
+ * Issue one Load earlier gesture and wait for its effect. The mounted window
+ * reveals resident rows before it pages the Session, so a gesture either moves
+ * the window head in the click's own commit or requests a page, which the
+ * control carries under its loading label until the page lands. Only a gesture
+ * that requested a page reports a page latency.
+ * @param page - the benchmark page.
+ * @param requested - Session-history request count reader from `countHistoryPages`.
+ * @returns the gesture's effect, timed from its click.
+ */
+async function loadEarlierGesture(page: Page, requested: () => number): Promise<LoadEarlierGesture> {
+  const more = page.getByRole('button', { name: 'Load earlier', exact: true })
+  const loading = page.getByRole('button', { name: 'Loading…', exact: true })
+  // A page request renames the control to its loading label, so a gesture starts
+  // once the previous page has landed.
+  await expect.poll(async () => await loading.count() === 0, { timeout: 30_000 }).toBe(true)
+  if (await more.count() === 0) return { paged: false, revealed: false, elapsedMs: 0 }
+  const pages = requested()
+  const head = await mountedHeadKey(page)
+  const started = performance.now()
+  await more.first().click()
+  await waitUntil(async () => requested() > pages || await mountedHeadKey(page) !== head
+    || await more.count() === 0, GESTURE_EFFECT_MS)
+  const paged = requested() > pages
+  if (paged) await expect.poll(async () => await loading.count() === 0, { timeout: 30_000 }).toBe(true)
+  await painted(page)
+  return { paged, revealed: await mountedHeadKey(page) !== head, elapsedMs: performance.now() - started }
 }
 
 async function waitForReplyMarker(page: Page, marker: string, timeout = 30000) {
@@ -160,24 +262,55 @@ it('opens, pages, navigates and streams into a 240-turn browser history', async 
             await page.locator('[data-composer-input][contenteditable="true"]').last().waitFor()
           })
           const pages: number[] = []
+          // Turn-tail rows the mounted window holds at open. The fork mounts at
+          // most MOUNTED_ROW_LIMIT (50) resident rows
+          // (`packages/client/ui-chat/src/client/chat/fork/mounted-window.ts`), so
+          // this reports the window's rows, not the loaded Turn count.
           const initialTurns = await page.locator(TAIL).count()
           expect(initialTurns).toBeGreaterThan(0)
           expect(initialTurns).toBeLessThan(HISTORY_TURNS)
-          let count = initialTurns
-          while (count < HISTORY_TURNS) {
-            pages.push(await measure(page, async () => {
-              await page.getByRole('button', { name: 'Load earlier', exact: true }).click()
-              await page.waitForFunction(({ selector, previous }) => document.querySelectorAll(selector).length > previous, { selector: TAIL, previous: count })
-            }))
-            count = await page.locator(TAIL).count()
+          // Page the whole history in. Progress is the mounted window head
+          // reaching the transcript head plus the `/api/session/page` count: a
+          // gesture either reveals resident rows (the head Turn falls toward
+          // Turn 1) or requests a server page. Neither signal saturates the way a
+          // mounted row count does, and the gesture cap fails loudly rather than
+          // hanging when history stops advancing.
+          const requested = countHistoryPages(page)
+          let gestures = 0
+          let reveals = 0
+          while (!await historyHeadReached(page)) {
+            if (gestures >= MAX_LOAD_EARLIER_GESTURES) {
+              throw new Error('Load earlier never reached the transcript head: '
+                + `${MAX_LOAD_EARLIER_GESTURES} gestures and ${pages.length} page requests left the mounted head at Turn `
+                + `${String(await oldestMountedTurn(page))} of ${HISTORY_TURNS}`)
+            }
+            const gesture = await loadEarlierGesture(page, requested)
+            gestures += 1
+            if (gesture.paged) pages.push(gesture.elapsedMs)
+            else if (gesture.revealed) reveals += 1
+            // Neither effect: no page was left to request and no reveal moved the
+            // head, so a control that still renders is inert.
+            else if (!await historyHeadReached(page)) {
+              throw new Error('Load earlier stopped progressing before the transcript head')
+            }
           }
+          // The run reached the end of history. The persistent signal is the
+          // Load earlier control being gone: no Session page is left to request
+          // and no resident row remains above the window head. A mounted Turn-row
+          // count cannot state this, because the window holds at most its limit.
+          expect(await historyHeadReached(page)).toBe(true)
+          expect(pages.length).toBeGreaterThan(0)
           const trajectory = await measure(page, async () => {
             await page.getByRole('tab', { name: 'Trajectory', exact: true }).click()
             await page.getByRole('searchbox', { name: 'Search trajectory', exact: true }).waitFor()
             await page.getByRole('row').last().waitFor()
           })
           await page.getByRole('tab', { name: 'Chat', exact: true }).click()
-          await page.waitForFunction(({ selector, expected }) => document.querySelectorAll(selector).length === expected, { selector: TAIL, expected: HISTORY_TURNS })
+          // The paging target's row is mounted again after the tab round trip:
+          // Turn 1's turn-tail row, which the window holds once its head reached
+          // the transcript head. Completeness is this row's reachability, because
+          // the mounted window holds at most its row limit of Turn rows.
+          await waitForTurnTailRow(page, 1)
           const composer = page.locator('[data-composer-input][contenteditable="true"]').last()
           await composer.fill('Continue the synthetic review and summarize the validation. '.repeat(30))
           const cdp = await page.context().newCDPSession(page)
@@ -205,7 +338,9 @@ it('opens, pages, navigates and streams into a 240-turn browser history', async 
           await (await waitForReplyMarker(page, DONE)).dispose()
           const settlement = await settled
           if (!settlement.ok) throw settlement.error
-          await page.waitForFunction(({ selector, expected }) => document.querySelectorAll(selector).length === expected, { selector: TAIL, expected: HISTORY_TURNS + 1 })
+          // Completion is the new Turn's own turn-tail row being mounted at the
+          // tail, not a count of HISTORY_TURNS + 1 mounted Turn rows.
+          await waitForTurnTailRow(page, HISTORY_TURNS + 1)
           await painted(page)
           const streamWall = performance.now() - started
           const streamTask = await taskMs(cdp) - beforeTask
@@ -214,7 +349,7 @@ it('opens, pages, navigates and streams into a 240-turn browser history', async 
           const heap = metrics.find(metric => metric.name === 'JSHeapUsedSize')
           if (heap === undefined) throw new Error('Chromium heap metric missing')
           samples.push({ open, page: Math.max(...pages), trajectory, first, streamTask, streamWall, input, inputOverlapped, heapMb: heap.value / 1048576, nodes: await page.locator('*').count() })
-          console.log(JSON.stringify({ benchmark: 'long-session-browser/sample', sample, initialTurns, pages, ...samples.at(-1) }))
+          console.log(JSON.stringify({ benchmark: 'long-session-browser/sample', sample, initialTurns, gestures, reveals, pages, ...samples.at(-1) }))
           await watchInputOverlap(composer)
           await composer.click()
           await page.keyboard.type('!')
