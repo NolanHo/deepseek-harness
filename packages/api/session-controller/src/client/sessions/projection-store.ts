@@ -15,6 +15,7 @@
 import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
 import type { SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
+import { notifySubscribers } from '@deepseek-ai/dsh-client-store'
 import { Notifier } from './notifier.ts'
 // Fork patch (FORK_SURFACE.md): a write that republishes the value a row holds
 // invalidates nothing and notifies nobody (fork/coalesced-refresh.ts).
@@ -89,17 +90,18 @@ interface Channel {
  * Session is the truth and a cached value never outranks it. A key the store
  * has never seen reads `undefined` (capability absent). Faces are identity-stable
  * per key (create-on-demand, cached) so the React side binds each exactly
- * once; the store-level channel (`subscribeAny`) serves coarse consumers (the
- * manager's list projection reads the `title` key). An accepted write that
- * republishes the value its row holds advances the watermark alone: `values()`
- * and every face keep the references they had, and no subscriber is notified.
+ * once; the store-level channel (`subscribeAny`) serves the manager's list
+ * rebuild read, which needs the changed key to tell a change its consumers can
+ * read from one they cannot. An accepted write that republishes the value its
+ * row holds advances the watermark alone: `values()` and every face keep the
+ * references they had, and no subscriber is notified.
  */
 export class ProjectionValueStore {
   private readonly rows = new Map<string, Row>()
   private readonly channels = new Map<string, Channel>()
   private valuesCache: Readonly<Partial<SessionProjectionMap>> | undefined
-  /** Coarse any-key channel (no snapshot cache to rebuild: reads hit rows directly). */
-  private readonly anyNotifier = new Notifier(() => {})
+  /** Coarse-channel subscribers, in subscription order. */
+  private readonly anyListeners = new Set<(key: string) => void>()
 
   /**
    * Key-addressed bare observable face (the useProjection resolution path).
@@ -146,13 +148,19 @@ export class ProjectionValueStore {
   }
 
   /**
-   * Subscribe to any-key changes (microtask-batched) — the manager's list
-   * rebuild channel.
-   * @param listener - change callback.
+   * Subscribe to any-key changes, delivering the key whose value changed (the
+   * manager's list rebuild channel). Delivery is per change and inside the
+   * write, not batched: a coarse consumer decides per key whether the change
+   * can reach what it publishes, and its own notifier batches the work that
+   * decision triggers. A listener must therefore not write to this store.
+   * @param listener - change callback, invoked with each changed key.
    * @returns the unsubscribe function.
    */
-  subscribeAny(listener: () => void): () => void {
-    return this.anyNotifier.subscribe(listener)
+  subscribeAny(listener: (key: string) => void): () => void {
+    this.anyListeners.add(listener)
+    return () => {
+      this.anyListeners.delete(listener)
+    }
   }
 
   /**
@@ -243,7 +251,7 @@ export class ProjectionValueStore {
   private changed(key: string): void {
     this.valuesCache = undefined
     this.channels.get(key)?.notifier.markDirty()
-    this.anyNotifier.markDirty()
+    notifySubscribers(this.anyListeners, '[session-controller]', key)
   }
 
   private channel(key: string): Channel {

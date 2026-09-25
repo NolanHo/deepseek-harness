@@ -661,6 +661,75 @@ describe('list lifecycle', () => {
     expect(rebuild.mock.calls.length).toBe(rebuilds + 1)
   })
 
+  it('skips the list rebuild for a projection key no list consumer reads', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    manager.handleSessionAdded(summary(S1))
+    await Promise.resolve()
+    // Subscribe, consume the rebuild already pending, and only then measure: the
+    // notifier leaves `dirty` set while it has no listener.
+    manager.subscribe(() => {})
+    manager.getListSnapshot()
+    await Promise.resolve()
+    const rebuild = vi.spyOn(manager as unknown as { buildListSnapshot: () => unknown }, 'buildListSnapshot')
+    const notified = vi.fn()
+    onTestFinished(manager.subscribe(notified))
+    const published = manager.getListSnapshot()
+
+    // Every frame carries a value the store does not hold yet: these are changes,
+    // not republished frames. The three keys are the ones whose only readers bind
+    // them per session (`useProjection`), never out of a list row
+    // (fork/coalesced-refresh.ts holds the set and its evidence).
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'sessionStats', seq: 1, value: { turns: 3 } })
+    await Promise.resolve()
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'contextPressure', seq: 2, value: { pressureTokens: 10 } })
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'contextBreakdown', seq: 3, value: { conversation: 5 } })
+    await Promise.resolve()
+
+    expect(rebuild).not.toHaveBeenCalled()
+    expect(notified).not.toHaveBeenCalled()
+    expect(manager.getListSnapshot()).toBe(published)
+
+    // A changed value of an exempt key (a second `sessionStats` carrying a
+    // different object) is still exempt: the gate is per key, not per frame.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'sessionStats', seq: 4, value: { turns: 9 } })
+    await Promise.resolve()
+    expect(rebuild).not.toHaveBeenCalled()
+    expect(manager.getListSnapshot()).toBe(published)
+    // The value landed all the same: the session-scoped per-key face is what reads it.
+    expect(manager.projectionValues(S1)).toMatchObject({ sessionStats: { turns: 9 } })
+  })
+
+  it('rebuilds the list for every projection key a list consumer reads', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    manager.handleSessionAdded(summary(S1))
+    await Promise.resolve()
+    manager.subscribe(() => {})
+    manager.getListSnapshot()
+    await Promise.resolve()
+    const rebuild = vi.spyOn(manager as unknown as { buildListSnapshot: () => unknown }, 'buildListSnapshot')
+    const published = manager.getListSnapshot()
+
+    // A subagent catalog row shows the child's tokens and timing
+    // (ui-subagent's catalogs read `byId[child].projectionValues`), so a
+    // frequent `tokenUsage` frame still republishes the list.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'tokenUsage', seq: 1, value: { outputTokens: 2 } })
+    await Promise.resolve()
+    expect(rebuild).toHaveBeenCalledTimes(1)
+    expect(manager.getListSnapshot()).not.toBe(published)
+
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', seq: 2, value: 'Titled' })
+    await Promise.resolve()
+    expect(rebuild).toHaveBeenCalledTimes(2)
+    expect(manager.getListSnapshot().items[0]?.title).toBe('Titled')
+
+    // Catalog membership: the same read service.projectList consumes.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'subagentCatalog', seq: 3, value: [] })
+    await Promise.resolve()
+    expect(rebuild).toHaveBeenCalledTimes(3)
+  })
+
   it('coalesces ambient activity flushes within a one-second window', async ({ mock, remote }) => {
     vi.useFakeTimers()
     try {
@@ -1217,6 +1286,91 @@ describe('scoped children', () => {
 
     expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toMatchObject({
       parentSessionId: S1, origin: 'subagent', running: false, updatedAt: 200,
+    })
+  })
+
+  it('merges one children read in a single pass instead of one pass per child', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    // The largest catalog measured on the deployment: 2,244 direct children.
+    const size = 2_244
+    const children = Array.from({ length: size }, (_, index) => summary(
+      `fk-child-${String(index)}` as SessionId,
+      { parentSessionId: S1, origin: 'subagent' },
+    ))
+    listByScope(remote, [summary(S1)], { [S1]: children })
+    const merge = vi.spyOn(manager as unknown as { mergeChildren: (rows: readonly unknown[]) => void }, 'mergeChildren')
+
+    await manager.loadChildren(S1)
+
+    // One merge for the whole response.
+    expect(merge).toHaveBeenCalledTimes(1)
+    expect(merge.mock.calls[0]?.[0]).toHaveLength(size)
+    // All rows landed, each retained as a child of the parent. New rows lead in
+    // reverse arrival order, which is where the per-child prepend put them.
+    const items = manager.getListSnapshot().items
+    expect(items).toHaveLength(size)
+    expect(items.slice(0, 2).map(item => item.sessionId)).toEqual([
+      `fk-child-${String(size - 1)}`, `fk-child-${String(size - 2)}`,
+    ])
+    expect(items[0]).toMatchObject({ parentSessionId: S1, origin: 'subagent' })
+    // The retention bookkeeping ran for the batch too: a later pull that omits
+    // subagent rows must not read as their removal.
+    listByScope(remote, [summary(S1)], {})
+    await manager.refreshList()
+    expect(manager.getListSnapshot().items.filter(item => item.origin === 'subagent')).toHaveLength(size)
+  })
+
+  it('keeps an unchanged child row by identity and merges a changed one in place', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const running = summary(S2, { parentSessionId: S1, origin: 'subagent', running: true })
+    const unchanged = summary('fk-m3' as SessionId, { parentSessionId: S1, origin: 'subagent' })
+    manager.handleSessionAdded(summary(S1))
+    manager.handleSessionAdded(running)
+    manager.handleSessionAdded(unchanged)
+    await Promise.resolve()
+    const unchangedRow = manager.getListSnapshot().items.find(item => item.sessionId === 'fk-m3' as SessionId)
+
+    listByScope(remote, [], {
+      [S1]: [
+        summary(S2, { parentSessionId: S1, origin: 'subagent', running: false }),
+        unchanged,
+        summary('fk-m4' as SessionId, { parentSessionId: S1, origin: 'subagent' }),
+      ],
+    })
+    await manager.loadChildren(S1)
+
+    const after = manager.getListSnapshot().items
+    // Upsert semantics survive the batch: the changed row's live state moves…
+    expect(after.find(item => item.sessionId === S2)).toMatchObject({ running: false, origin: 'subagent' })
+    // …an untouched row keeps the object the store already published…
+    expect(after.find(item => item.sessionId === 'fk-m3' as SessionId)).toBe(unchangedRow)
+    // …and the batch's new member arrives under the same parent.
+    expect(after.find(item => item.sessionId === 'fk-m4' as SessionId)).toMatchObject({
+      parentSessionId: S1, origin: 'subagent', depth: 1,
+    })
+  })
+
+  it('replays a batched children read over a listed pull already in flight', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const response = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.list>>>()
+    const child = summary(S2, { parentSessionId: S1, origin: 'subagent', running: true })
+    remote.session.list.mockImplementation((payload) => {
+      const { parentSessionId } = payload as { parentSessionId?: SessionId }
+      return parentSessionId === undefined
+        ? response.promise
+        : Promise.resolve(ok({ items: [child] as never[] }))
+    })
+    const refreshing = manager.refreshList()
+    await manager.loadChildren(S1)
+    // The pull's baseline omits subagent rows: the replayed batch must carry them.
+    response.resolve(ok({ items: [summary(S1)] as never[] }))
+    await refreshing
+
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toMatchObject({
+      parentSessionId: S1, origin: 'subagent', running: true,
     })
   })
 

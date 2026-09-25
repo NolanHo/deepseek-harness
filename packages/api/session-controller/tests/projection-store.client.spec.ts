@@ -217,6 +217,22 @@ describe('Session projection value semantics', () => {
     expect(store.get('title')).toBe('Cached later')
   })
 
+  it('delivers every changed key to the coarse channel, in change order', () => {
+    const store = new ProjectionValueStore()
+    const keys: string[] = []
+    const unsubscribe = store.subscribeAny((key) => { keys.push(key) })
+    try {
+      store.apply('test/marks', { marks: ['a'] }, SessionSeq(5))
+      store.applyCached({ title: 'Cached title' })
+      // A dropped application (lower seq) is not a change.
+      store.apply('test/marks', { marks: ['replay'] }, SessionSeq(3))
+      store.seed({ asOfSeq: SessionSeq(9), values: { 'test/marks': { marks: ['b'] } } })
+      expect(keys).toEqual(['test/marks', 'title', 'title', 'test/marks'])
+    } finally {
+      unsubscribe()
+    }
+  })
+
   it('faces are identity-stable per key (the React binding cache premise)', () => {
     const store = new ProjectionValueStore()
     expect(store.faceOf('test/marks')).toBe(store.faceOf('test/marks'))
