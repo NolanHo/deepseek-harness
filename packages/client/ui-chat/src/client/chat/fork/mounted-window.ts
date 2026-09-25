@@ -43,7 +43,8 @@ export interface MountedWindowInput {
   /**
    * Resident indices of the Turn-process control keys, ascending. A completed
    * Turn's rows fold behind its control, so a window that mounts those rows
-   * must mount the control with them.
+   * must mount the control with them; the control also starts the Turn's run of
+   * rows, which is the boundary a reveal or an opening head aligns to.
    */
   readonly controls: readonly number[]
   /** Whether the reader owns the live tail, so no saved row holds the window back. */
@@ -79,14 +80,17 @@ export interface MountedWindowState extends MountedWindowPlan {
    */
   readonly hold: (key: string | null) => boolean
   /**
-   * Reveal one step of older resident rows.
-   * @returns whether the head moved; false at the oldest row the reader can reveal.
+   * Reveal one step of older resident rows, landing on the Turn start that owns
+   * the step while the reader's own row stays inside the window.
+   * @returns whether the head moved; false at the oldest row the reader can
+   *   reveal, and when the landing would unmount the reader's own row.
    */
   readonly reveal: () => boolean
   /**
    * Whether a reveal gesture would still move the window head. The reader's own
-   * row clamps the head, so a reader who owns no row, or a head the reader row
-   * already holds back, makes the gesture a no-op.
+   * row clamps the head, so a reader who owns no row, a head the reader row
+   * already holds back, or a Turn-aligned landing that would drop that row makes
+   * the gesture a no-op.
    */
   readonly revealable: boolean
   /**
@@ -103,8 +107,9 @@ export interface MountedWindowState extends MountedWindowPlan {
    * mounted head, so a wheel or touch gesture alone keeps older resident rows
    * coming instead of stopping at the window edge. Called from the viewport's
    * scroll event: a programmatic write, a jump, a page request, the live tail,
-   * and a reader who owns no row never reveal, and the interval throttle bounds
-   * how fast one fling can grow the window.
+   * a reader who owns no row, and a Turn-aligned landing that cannot keep the
+   * row it steps for never reveal, and the interval throttle bounds how fast one
+   * fling can grow the window.
    * @param scroll - reader scroll geometry and attribution from the viewport.
    * @param historyBusy - whether history work (a retained paging anchor or a page request) owns the layout.
    * @returns whether the head moved; false leaves the window where it was.
@@ -160,6 +165,20 @@ function windowAt(order: readonly string[], head: number): MountWindow {
  */
 function headKeepingRow(head: number, rowIndex: number): number {
   return Math.max(Math.min(head, rowIndex), rowIndex - MOUNTED_ROW_LIMIT + 1, 0)
+}
+
+/**
+ * Frozen window pinned to one resident head row. A reveal step and the derived
+ * opening window pin the Turn-aligned head they chose: `windowAt`'s tail
+ * normalization would clamp a head inside the newest resident rows back to
+ * `tailHead`, which is no Turn boundary, and a step that lands on the tail
+ * window is derived again from the reader's row, taking the step back.
+ * @param order - resident Node keys in transcript order.
+ * @param head - resident head index the window starts on.
+ * @returns the frozen window identity.
+ */
+function frozenAt(order: readonly string[], head: number): MountWindow {
+  return { kind: 'frozen', head: order[head] as string }
 }
 
 /** Node key of a group-member part anchor (`["<key>","<part>"]`), else null. */
@@ -427,6 +446,37 @@ function headControl(controls: readonly number[], head: number): number | undefi
 }
 
 /**
+ * Snap a requested window head to the start of the Turn that owns it. A window
+ * head is a history-loading boundary: mounting from a row inside a Turn mounts
+ * that Turn's later rows without the rows above the head — its control and its
+ * prompt — so the reader sees a Turn fragment whose start is not on screen.
+ * Controls start their Turn's run of rows, so the owning Turn's start is the
+ * last control at or above the requested head.
+ * @param controls - ascending resident indices of the Turn-process controls.
+ * @param head - requested resident head index.
+ * @returns the owning Turn's first resident index, or `head` ahead of the first Turn.
+ */
+function turnAlignedHead(controls: readonly number[], head: number): number {
+  return headControl(controls, head) ?? head
+}
+
+/**
+ * Head a reveal step moves to, or null when no step may move. The step keeps
+ * one resident row mounted, so a Turn start farther above that row than the
+ * window holds cannot mount together with it: the step refuses rather than
+ * expose the Turn from its middle, and the caller's history page serves the
+ * reader instead.
+ * @param controls - ascending resident indices of the Turn-process controls.
+ * @param head - current window head index.
+ * @param row - resident index the step must keep mounted.
+ * @returns the aligned head index, or null when the step must not move.
+ */
+function revealHead(controls: readonly number[], head: number, row: number): number | null {
+  const target = turnAlignedHead(controls, headKeepingRow(head - REVEAL_ROW_STEP, row))
+  return headKeepingRow(target, row) === target && target < head ? target : null
+}
+
+/**
  * Plan the mounted slice of the resident order. The window is
  * `MOUNTED_ROW_LIMIT` resident keys from its head, and an entry is mounted when
  * any key it renders is inside that slice: a `group` entry renders its members
@@ -506,6 +556,7 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
   // otherwise keep the head where it is.
   const [requested, setRequested] = useState<MountWindow | null>(null)
   const orderRef = useRef(order)
+  const controlsRef = useRef(controls)
   const readerRow = useMemo(() => orderIndexOfAnchor(order, anchorKey), [order, anchorKey])
   const readerRowRef = useRef(readerRow)
 
@@ -513,15 +564,27 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
   // window, so the window in effect is derived from that row while the reader
   // owns no window of their own. Deriving it instead of storing it keeps the
   // adoption idempotent, where a render-phase setState would be discarded and
-  // replayed by a repeated render.
+  // replayed by a repeated render. The derived head snaps to the Turn start that
+  // owns its row, so the opening boundary never exposes a Turn from its middle;
+  // a Turn start farther above the reader's row than the window holds keeps that
+  // row instead, because the session must open where the reader left it. An
+  // aligned head is frozen even when its window still reaches the newest rows:
+  // the tail window follows the newest resident rows and can only start at
+  // `tailHead`, which is no Turn boundary.
   const window = useMemo((): MountWindow => {
     if (requested !== null) return requested
     if (followingTail || readerRow < 0) return { kind: 'tail' }
-    return windowAt(order, headKeepingRow(readerRow - REVEAL_ROW_STEP, readerRow))
-  }, [followingTail, order, readerRow, requested])
+    const raw = headKeepingRow(readerRow - REVEAL_ROW_STEP, readerRow)
+    const aligned = turnAlignedHead(controls, raw)
+    // The Turn start wins only while the reader's own row stays inside the window
+    // it mounts; otherwise the reader's row wins and the window keeps the start
+    // the clamp gave it (`revealHead` refuses the same trade-off for a step).
+    return headKeepingRow(aligned, readerRow) === aligned ? frozenAt(order, aligned) : windowAt(order, raw)
+  }, [controls, followingTail, order, readerRow, requested])
   const windowRef = useRef<MountWindow>(window)
   useLayoutEffect(() => {
     orderRef.current = order
+    controlsRef.current = controls
     windowRef.current = window
     readerRowRef.current = readerRow
   })
@@ -548,10 +611,10 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     if (row < 0) return false
     const current = orderRef.current
     const head = headIndexOf(windowRef.current, current)
-    if (head <= 0) return false
-    const next = windowAt(current, headKeepingRow(head - REVEAL_ROW_STEP, row))
-    if (headIndexOf(next, current) >= head) return false
-    setRequested(next)
+    const target = revealHead(controlsRef.current, head, row)
+    if (target === null) return false
+    // The step pins its landing, so the tail normalization cannot take it back.
+    setRequested(frozenAt(current, target))
     return true
   }, [])
 
@@ -570,10 +633,18 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     if (scroll.top > scroll.height || scroll.height <= 0) return false
     // A head at the first resident row has nothing left to reveal, and this is the
     // check that keeps the view from settling a sample for a scroll it cannot step.
-    // No timer paces the steps: a reveal makes the scrollport absorb the rows it
-    // added, which moves the reader more than a viewport from the new head, so the
-    // next step waits for the next viewport of reader travel.
-    return headIndexOf(windowRef.current, orderRef.current) > 0
+    // The step keeps the reader's own row while the window holds it and the head
+    // row otherwise, and it refuses when the Turn-aligned landing cannot keep that
+    // row: those scrolls are served by paging older resident history in. No timer
+    // paces the steps: a reveal makes the scrollport absorb the rows it added,
+    // which moves the reader more than a viewport from the new head, so the next
+    // step waits for the next viewport of reader travel.
+    const current = orderRef.current
+    const head = headIndexOf(windowRef.current, current)
+    const saved = readerRowRef.current
+    const holdsSaved = saved >= head && saved < head + MOUNTED_ROW_LIMIT
+    return (holdsSaved && revealHead(controlsRef.current, head, saved) !== null)
+      || revealHead(controlsRef.current, head, head) !== null
   }, [followingTail])
 
   const revealAtHead = useCallback((scroll: HeadScroll, historyBusy: boolean): boolean => {
@@ -606,13 +677,13 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     [controls, entries, order, window, running],
   )
   // A reveal keeps the reader's own row mounted, so that row clamps how far the
-  // head can step up: with no reader row, or one already at the clamp, the
-  // gesture is a no-op the view must not offer.
+  // head can step up: with no reader row, or one the aligned step cannot keep,
+  // the gesture is a no-op the view must not offer.
   const revealable = useMemo(() => {
     if (readerRow < 0) return false
     const head = headIndexOf(window, order)
-    return headKeepingRow(head - REVEAL_ROW_STEP, readerRow) < head
-  }, [order, readerRow, window])
+    return revealHead(controls, head, readerRow) !== null
+  }, [controls, order, readerRow, window])
   const tailEntry = entries.at(-1)
   return {
     ...plan,
