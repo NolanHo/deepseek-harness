@@ -266,20 +266,20 @@ describe('fork-side bound: reader row clamp and reveal path', () => {
   function hookInput(anchorKey: string | null): Parameters<typeof useMountedWindow>[0] {
     const order = keys(130)
     return {
-      entries: order.map(node), order, controls: [0, 60],
+      entries: order.map(node), order, controls: [0, 20, 50],
       followingTail: anchorKey === null, anchorKey, running: false,
     }
   }
 
   it('holds along the reveal path while the reader row stays mounted', () => {
     const order = keys(130)
-    const folds = contiguousFolds(order, [0, 60])
+    const folds = contiguousFolds(order, [0, 20, 50])
     const { result } = renderHook(
       (props: Parameters<typeof useMountedWindow>[0]) => useMountedWindow(props),
-      { initialProps: hookInput(order[70] as string) },
+      { initialProps: hookInput(order[45] as string) },
     )
-    expect(result.current.keys.has('k70')).toBe(true)
-    expect(result.current.headKey).toBe('k45')
+    expect(result.current.keys.has('k45')).toBe(true)
+    expect(result.current.headKey).toBe('k20')
     let steps = 0
     for (let guard = 0; guard < order.length; guard++) {
       let moved = false
