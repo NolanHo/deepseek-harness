@@ -6,26 +6,26 @@
     - tab "Chat" [selected]
     - tab "Trajectory"
 - navigation "Turn navigation":
-  - button "Load and jump to turn 1"
-  - button "Load and jump to turn 2"
-  - button "Load and jump to turn 3"
-  - button "Load and jump to turn 4"
-  - button "Load and jump to turn 5"
-  - button "Load and jump to turn 6"
-  - button "Load and jump to turn 7"
-  - button "Load and jump to turn 8"
-  - button "Load and jump to turn 9"
-  - button "Load and jump to turn 10"
-  - button "Load and jump to turn 11"
-  - button "Load and jump to turn 12"
-  - button "Load and jump to turn 13"
-  - button "Load and jump to turn 14"
-  - button "Load and jump to turn 15"
-  - button "Load and jump to turn 16"
-  - button "Load and jump to turn 17"
-  - button "Load and jump to turn 18"
-  - button "Load and jump to turn 19"
-  - button "Load and jump to turn 20"
+  - button "Jump to turn 1"
+  - button "Jump to turn 2"
+  - button "Jump to turn 3"
+  - button "Jump to turn 4"
+  - button "Jump to turn 5"
+  - button "Jump to turn 6"
+  - button "Jump to turn 7"
+  - button "Jump to turn 8"
+  - button "Jump to turn 9"
+  - button "Jump to turn 10"
+  - button "Jump to turn 11"
+  - button "Jump to turn 12"
+  - button "Jump to turn 13"
+  - button "Jump to turn 14"
+  - button "Jump to turn 15"
+  - button "Jump to turn 16"
+  - button "Jump to turn 17"
+  - button "Jump to turn 18"
+  - button "Jump to turn 19"
+  - button "Jump to turn 20"
   - button "Jump to turn 21"
   - button "Jump to turn 22"
   - button "Jump to turn 23"
@@ -34,80 +34,118 @@
   - button "Jump to turn 26"
   - button "Jump to turn 27"
   - button "Jump to turn 28"
-- button "Load earlier"
-- text: m21 7/25 {{clock}}
+- text: m1 7/25 {{clock}}
 - button "Copy"
 - status: Worked
 - button "Took {{duration}}" [disabled]
-- paragraph: r21
+- paragraph: r1
 - button "Copy"
 - button "Good response"
 - button "Bad response"
 - button "Branch into a new conversation"
-- text: 7/25 {{clock}} m22 7/25 {{clock}}
+- text: 7/25 {{clock}} m2 7/25 {{clock}}
 - button "Copy"
 - status: Worked
 - button "Took {{duration}}" [disabled]
-- paragraph: r22
+- paragraph: r2
 - button "Copy"
 - button "Good response"
 - button "Bad response"
 - button "Branch into a new conversation"
-- text: 7/25 {{clock}} m23 7/25 {{clock}}
+- text: 7/25 {{clock}} m3 7/25 {{clock}}
 - button "Copy"
 - status: Worked
 - button "Took {{duration}}" [disabled]
-- paragraph: r23
+- paragraph: r3
 - button "Copy"
 - button "Good response"
 - button "Bad response"
 - button "Branch into a new conversation"
-- text: 7/25 {{clock}} m24 7/25 {{clock}}
+- text: 7/25 {{clock}} m4 7/25 {{clock}}
 - button "Copy"
 - status: Worked
 - button "Took {{duration}}" [disabled]
-- paragraph: r24
+- paragraph: r4
 - button "Copy"
 - button "Good response"
 - button "Bad response"
 - button "Branch into a new conversation"
-- text: 7/25 {{clock}} m25 7/25 {{clock}}
+- text: 7/25 {{clock}} m5 7/25 {{clock}}
 - button "Copy"
 - status: Worked
 - button "Took {{duration}}" [disabled]
-- paragraph: r25
+- paragraph: r5
 - button "Copy"
 - button "Good response"
 - button "Bad response"
 - button "Branch into a new conversation"
-- text: 7/25 {{clock}} m26 7/25 {{clock}}
+- text: 7/25 {{clock}} m6 7/25 {{clock}}
 - button "Copy"
 - status: Worked
 - button "Took {{duration}}" [disabled]
-- paragraph: r26
+- paragraph: r6
 - button "Copy"
 - button "Good response"
 - button "Bad response"
 - button "Branch into a new conversation"
-- text: 7/25 {{clock}} m27 7/25 {{clock}}
+- text: 7/25 {{clock}} m7 7/25 {{clock}}
 - button "Copy"
 - status: Worked
 - button "Took {{duration}}" [disabled]
-- paragraph: r27
+- paragraph: r7
 - button "Copy"
 - button "Good response"
 - button "Bad response"
 - button "Branch into a new conversation"
-- text: 7/25 {{clock}} m28 7/25 {{clock}}
+- text: 7/25 {{clock}} m8 7/25 {{clock}}
 - button "Copy"
 - status: Worked
 - button "Took {{duration}}" [disabled]
-- paragraph: r28
+- paragraph: r8
 - button "Copy"
 - button "Good response"
 - button "Bad response"
 - button "Branch into a new conversation"
-- text: 7/25 {{clock}}
+- text: 7/25 {{clock}} m9 7/25 {{clock}}
+- button "Copy"
+- status: Worked
+- button "Took {{duration}}" [disabled]
+- paragraph: r9
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: 7/25 {{clock}} m10 7/25 {{clock}}
+- button "Copy"
+- status: Worked
+- button "Took {{duration}}" [disabled]
+- paragraph: r10
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: 7/25 {{clock}} m11 7/25 {{clock}}
+- button "Copy"
+- status: Worked
+- button "Took {{duration}}" [disabled]
+- paragraph: r11
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: 7/25 {{clock}} m12 7/25 {{clock}}
+- button "Copy"
+- status: Worked
+- button "Took {{duration}}" [disabled]
+- paragraph: r12
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: 7/25 {{clock}} m13 7/25 {{clock}}
+- button "Copy"
+- status: Worked
+- button "Took {{duration}}" [disabled]
 - button "Back to bottom"
 - textbox "Message or run a task, / commands, @ files or sessions"
 - button "Add files or run commands"

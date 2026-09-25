@@ -321,7 +321,9 @@ describe('web e2e: long Chat interaction contract', () => {
     // window stays put and the landing finds no anchor row. Reach the tail
     // through the product's own back-to-bottom affordance first, which releases
     // the window to the newest rows; the tool Turn's mark then lands on it.
-    await page.getByRole('button', { name: 'Back to bottom', exact: true }).click()
+    // The rail jump must land from the reader's pinned-at-the-head state with no
+    // tail release first: a jump that normalizes to the live tail still owns the
+    // window, so the landing scroll is issued instead of silently dropping.
     await jumpToTurn(page, TOOL_TURN)
     await expect.poll(
       () => page.locator(`[data-chat-call-id="${TARGET_CALL_2}"]`).count(),
