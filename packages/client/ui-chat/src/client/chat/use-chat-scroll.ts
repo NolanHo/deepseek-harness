@@ -105,34 +105,47 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
   }, [reading, navigation])
 
   useLayoutEffect(() => {
+    /**
+     * Step the mounted window's head when the reader's own gesture has reached it.
+     * A pending sample blocks the reflow that compensates the rows a reveal adds
+     * above the reading line, so the step settles this scroll first: the sample
+     * arms the hold on the row the reader has reached and the window move is then
+     * absorbed instead of shifting the page down. The settle costs a layout read,
+     * so it runs only for a gesture the fork module confirms will step.
+     * @param head - reader scroll geometry and attribution.
+     */
+    const stepHeadAtReader = (head: { top: number; height: number; movedByReader: boolean }): void => {
+      const latest = content.current.input
+      const historyBusy = viewport.preserving || latest.loadingOlder
+      if (!latest.willRevealAtHead(head, historyBusy)) return
+      reading.onScrollEnd()
+      latest.revealAtHead(head, historyBusy)
+    }
     const disconnectViewport = viewport.connect({
-      // Fork patch (FORK_SURFACE.md): a reader scroll that comes within one
+      // Fork patch (FORK_SURFACE.md): a reader gesture that comes within one
       // viewport of the mounted head reveals the next window step, so a wheel or
       // touch gesture alone keeps older resident rows coming. The latest
       // committed input carries the history state, and a retained paging anchor
       // or an in-flight page request owns the layout while it runs.
       scroll: (scroll) => {
         reading.onScroll(scroll)
-        const latest = content.current.input
-        const head = {
+        stepHeadAtReader({
           top: scroll.metrics.top, height: scroll.metrics.height, movedByReader: scroll.movedByReader,
-        }
-        const historyBusy = viewport.preserving || latest.loadingOlder
-        // A pending sample blocks the reflow that compensates the rows a reveal
-        // adds above the reading line, so a head step settles this scroll first:
-        // the sample arms the hold on the row the reader has reached, and the
-        // window move is then absorbed instead of shifting the page down. The
-        // settle costs a layout read, so it runs only for a scroll that steps.
-        if (latest.willRevealAtHead(head, historyBusy)) {
-          reading.onScrollEnd()
-          latest.revealAtHead(head, historyBusy)
-        }
+        })
       },
       scrollEnd: () => {
         reading.onScrollEnd()
         navigation.readerSettled()
       },
-      interact: () => { navigation.cancel() },
+      interact: () => {
+        navigation.cancel()
+        // A gesture against the mounted head moves nothing, so it produces no
+        // scroll event; the intent itself reads the geometry and steps.
+        const scroll = viewport.readScroll()
+        if (scroll !== null) {
+          stepHeadAtReader({ top: scroll.metrics.top, height: scroll.metrics.height, movedByReader: true })
+        }
+      },
       resize: () => {
         const committed = navigation.contentCommitted()
         // Fork patch (FORK_SURFACE.md): with no paging anchor retained, a fold
