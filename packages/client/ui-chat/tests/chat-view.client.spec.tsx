@@ -4174,6 +4174,25 @@ describe('ChatView mounted window', () => {
     expect(members.some(member => member.getAttribute('hidden') === null)).toBe(true)
   })
 
+  it('mounts the head Turn control for a dirty tool-only Turn', () => {
+    // The reported production shape: a completed Turn whose last step ends on a
+    // Tool call has no finalized answer row, and its process run outruns the
+    // window. Every mounted tool card is hidden behind the Turn control, so the
+    // control must mount with them or the transcript renders nothing.
+    const tools = Array.from({ length: 59 }, (_, index) => toolInTurn(index + 2, `dirty-${index}`))
+    const { snapshot, groups } = groupedTools(tools)
+    const h = makeHarness({ chat: snapshot })
+    h.setGrouped(groups)
+    const view = render(<h.ChatView {...h.props} />)
+    const control = turnProcessControl(view.container)
+    expect(control).not.toBeNull()
+    const members = [...view.container.querySelectorAll<HTMLElement>('[data-chat-flow-kind="tool-call"]')]
+    expect(members.length).toBeGreaterThan(0)
+    expect(members.every(member => member.getAttribute('hidden') !== null)).toBe(true)
+    fireEvent.click(control!)
+    expect(members.some(member => member.getAttribute('hidden') === null)).toBe(true)
+  })
+
   it('reveals resident rows before paging the session', () => {
     installReaderGeometry()
     const rows = Array.from({ length: 160 }, (_, index) => user(101 + index, `row ${index}`))

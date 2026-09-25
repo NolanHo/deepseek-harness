@@ -432,9 +432,11 @@ function headControl(controls: readonly number[], head: number): number | undefi
  * any key it renders is inside that slice: a `group` entry renders its members
  * as rows of its own, so the bound counts keys, not entries. `stub` also holds
  * the newest slice, which keeps a live Turn's rows and the opening echo spliced
- * while the reader is frozen above them. The head Turn's control row mounts
- * beside the window: the Turn fold hides member rows behind it, so a window
- * that carries members without it would render none of them.
+ * while the reader is frozen above them. The Turn fold hides member rows behind
+ * their `turn-process` control, so the control of every Turn whose rows a plan
+ * carries mounts beside them: the head Turn's control for the window, and the
+ * tail slice's own Turn control while the stub is mounted. A window that
+ * carried members without their control would render none of them.
  * @param entries - root rendering entries over the whole loaded window.
  * @param order - resident Node keys in transcript order.
  * @param window - requested window identity.
@@ -456,6 +458,14 @@ export function planMountedWindow(
   const control = headControl(controls, head)
   const controlKey = control === undefined ? undefined : order[control]
   if (controlKey !== undefined) keys.add(controlKey)
+  // The stub is a second region of the plan: its newest slice can carry folded
+  // member rows of a Turn whose control sits above the slice, so mount that
+  // slice's own control too.
+  if (stub) {
+    const tailControl = headControl(controls, tailHead(order))
+    const tailControlKey = tailControl === undefined ? undefined : order[tailControl]
+    if (tailControlKey !== undefined) keys.add(tailControlKey)
+  }
   const mounted = new Set<number>()
   for (const key of keys) for (const at of entriesByKey(entries).get(key) ?? []) mounted.add(at)
   if (window.kind === 'tail') {
