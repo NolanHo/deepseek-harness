@@ -29,7 +29,7 @@ import type { SessionTarget } from '../contract/sessions.ts'
 // Fork patch (FORK_SURFACE.md): ambient activity events coalesce in
 // fork/coalesced-refresh.ts, so continuous streams from other sessions stop
 // driving one full list rebuild per event render.
-import { ACTIVITY_COALESCE_MS, ActivityCoalescer } from './fork/coalesced-refresh.ts'
+import { ACTIVITY_COALESCE_MS, ActivityCoalescer, affectsSessionList } from './fork/coalesced-refresh.ts'
 
 function sessionSeqCursor(value: number): SessionSeqCursor {
   return value === -1 ? -1 : SessionSeq(value)
@@ -352,12 +352,16 @@ export class SessionManager {
     if (store === undefined) {
       store = new ProjectionValueStore()
       const projections = store
-      store.subscribeAny(() => {
+      store.subscribeAny((key) => {
         // Newer history or control metadata corrects a resident Session's stale list hint.
-        if (projections.values().sessionListMetadata?.blank === false) {
+        if (key === 'sessionListMetadata' && projections.values().sessionListMetadata?.blank === false) {
           this.sessions.get(sessionId)?.handleBlank(false)
         }
-        this.notifier.markDirty()
+        // Fork patch (FORK_SURFACE.md): the list plane republishes each row's
+        // whole value map, so a frame carrying a key no list consumer reads must
+        // not rebuild it (the exempt set and its evidence live in
+        // fork/coalesced-refresh.ts).
+        if (affectsSessionList(key)) this.notifier.markDirty()
       })
       this.projectionStores.set(sessionId, store)
     }
@@ -577,7 +581,9 @@ export class SessionManager {
           this.childReads.delete(parentSessionId)
           return
         }
-        for (const child of result.value.items) this.handleSessionAdded(child)
+        // Fork patch (FORK_SURFACE.md): the response merges in one pass instead
+        // of one full-array rewrite per child (see mergeChildren).
+        this.mergeChildren(result.value.items)
         const present = new Set(result.value.items.map(child => child.sessionId))
         for (const sessionId of candidates) {
           if (!present.has(sessionId)) this.forgetRetainedChild(sessionId)
@@ -814,11 +820,11 @@ export class SessionManager {
       this.replaceControlBaseline(frame.value)
       return
     }
-    // Fork patch (FORK_SURFACE.md): a frame that republishes the value its row
-    // already holds leaves the dirty flush with no rebuild to run.
-    if (this.projectionStore(frame.sessionId).apply(frame.key, frame.value, SessionSeq(frame.seq))) {
-      this.notifier.markDirty()
-    }
+    // The store's change channel drives the dirty flush: it reports the changed
+    // key, so a frame that republishes its row's value changes nothing and one
+    // carrying a key no list consumer reads rebuilds nothing
+    // (fork/coalesced-refresh.ts holds the exempt set).
+    this.projectionStore(frame.sessionId).apply(frame.key, frame.value, SessionSeq(frame.seq))
   }
 
   private replaceControlBaseline(baseline: SessionControlBaseline): void {
@@ -832,14 +838,56 @@ export class SessionManager {
   }
 
   /**
-   * Apply one Session-list addition — a `ctx.remote.$on` frame or a row read
-   * for an opened Session's children. Subagent rows are retained: the listed
-   * scope omits them, so a later pull must not read as their removal.
+   * Apply one Session-list addition forwarded through `ctx.remote.$on`.
+   * Subagent rows are retained: the listed scope omits them, so a later pull
+   * must not read as their removal. A children read (a whole response at once)
+   * merges through {@link mergeChildren} instead.
    * @param summary - current Host summary for the added Session.
    */
   handleSessionAdded(summary: SessionSummary): void {
     if (summary.origin === 'subagent') this.retainedChildIds.add(summary.sessionId)
     this.mergeSummary(summary)
+    this.applyAddedSession(summary)
+  }
+
+  /**
+   * Merge one children read in a single pass. A read returns a whole batch of
+   * direct children at once (2,244 rows for the largest catalog measured), and
+   * merging them one at a time through {@link recordMutation} copies the whole
+   * summary array per child — O(rows × children) plus one discarded array per
+   * child, measured at 99 ms of blocking work when opening one Session with that
+   * catalog. The batch keeps every contract of the single-row path: the same
+   * row values and positions (the shared {@link mergeSummaryRow}), the same
+   * mutation entries in the same order, no rebuild when no row moved, and the
+   * same retained-child, engagement, blank, projection-block and parent-
+   * availability effects.
+   * @param children - every row one children read returned, in response order.
+   */
+  private mergeChildren(children: readonly SessionSummary[]): void {
+    if (children.length === 0) return
+    for (const child of children) {
+      if (child.origin === 'subagent') this.retainedChildIds.add(child.sessionId)
+    }
+    if (!this.disposed) {
+      for (const child of children) this.listMutations?.push({ kind: 'upsert', summary: child })
+      const merged = mergeSummaryRows(this.summaries, children)
+      if (merged !== this.summaries) {
+        this.summaries = merged
+        this.notifier.markDirty()
+      }
+    }
+    for (const child of children) this.applyAddedSession(child)
+    // Once for the batch: a per-child pass recomputed the same parent rows from
+    // the same array (and its find is a scan of every summary).
+    this.updateParentAvailability()
+  }
+
+  /**
+   * The effects one added Session's summary has beyond its list row, shared by
+   * the single-frame and the batched children paths.
+   * @param summary - summary of the Session that arrived.
+   */
+  private applyAddedSession(summary: SessionSummary): void {
     if (!this.disposed && summary.running) this.engagedSessions.add(summary.sessionId)
     this.sessions.get(summary.sessionId)?.handleBlank(this.effectiveBlank(summary))
     if (summary.projections !== undefined) this.applyListBlock(summary.sessionId, summary.projections)
@@ -1036,6 +1084,77 @@ export class SessionManager {
 }
 
 /**
+ * Merge one incoming summary over the row it replaces, or return that row when
+ * no field it publishes moves. The single-mutation arm and the batched children
+ * merge both call this, so one value contract governs them.
+ * @param existing - the row the summary merges into.
+ * @param incoming - the Host summary, or the local placeholder, to merge.
+ * @param kind - `upsert` replaces live state, `placeholder` only fills metadata.
+ * @returns the merged row, or `existing` itself when nothing moved.
+ */
+function mergeSummaryRow(
+  existing: SessionSummary,
+  incoming: SessionSummary,
+  kind: 'upsert' | 'placeholder',
+): SessionSummary {
+  const filled: SessionSummary = {
+    ...existing,
+    // Blank only lowers: a stale true (session-added racing the local
+    // first send) never re-hides an already-surfaced session.
+    blank: existing.blank && incoming.blank,
+    ...(kind === 'upsert' ? {
+      agentAvailable: incoming.agentAvailable,
+      running: incoming.running,
+    } : {}),
+    ...(existing.cwd === undefined && incoming.cwd !== undefined ? { cwd: incoming.cwd } : {}),
+    ...(existing.parentSessionId === undefined && incoming.parentSessionId !== undefined
+      ? { parentSessionId: incoming.parentSessionId } : {}),
+    ...(existing.origin === undefined && incoming.origin !== undefined
+      ? { origin: incoming.origin } : {}),
+  }
+  if (filled.cwd === existing.cwd && filled.parentSessionId === existing.parentSessionId
+    && filled.origin === existing.origin && filled.blank === existing.blank
+    && filled.agentAvailable === existing.agentAvailable && filled.running === existing.running
+  ) return existing
+  return filled
+}
+
+/**
+ * Merge one batch of arriving rows in a single pass, with the value, position,
+ * and object-identity semantics of one {@link applyMutation} upsert per row: a
+ * row already present keeps its position and its object unless a field moves,
+ * and a new row lands where the sequential prepend per row would have put it
+ * (each new row ahead of the batch's earlier arrivals).
+ * @param summaries - the current rows.
+ * @param incoming - the batch, in arrival order.
+ * @returns the merged rows, or `summaries` itself when the batch moves nothing.
+ */
+function mergeSummaryRows(
+  summaries: SessionSummary[],
+  incoming: readonly SessionSummary[],
+): SessionSummary[] {
+  const current = new Map<SessionId, SessionSummary>(summaries.map(row => [row.sessionId, row]))
+  const added: SessionSummary[] = []
+  let moved = false
+  for (const summary of incoming) {
+    const before = current.get(summary.sessionId)
+    if (before === undefined) {
+      current.set(summary.sessionId, summary)
+      added.push(summary)
+      moved = true
+      continue
+    }
+    const merged = mergeSummaryRow(before, summary, 'upsert')
+    if (merged === before) continue
+    current.set(summary.sessionId, merged)
+    moved = true
+  }
+  if (!moved) return summaries
+  const rows = summaries.map(row => current.get(row.sessionId) ?? row)
+  return added.length === 0 ? rows : [...added.reverse(), ...rows]
+}
+
+/**
  * Apply one list mutation without deriving display order; returns the input
  * array reference when the mutation flips nothing.
  * Fork patch (FORK_SURFACE.md): the no-op identity contract lets recordMutation
@@ -1047,25 +1166,8 @@ function applyMutation(summaries: SessionSummary[], mutation: SessionListMutatio
     case 'placeholder': {
       const existing = summaries.find(summary => summary.sessionId === mutation.summary.sessionId)
       if (existing === undefined) return [mutation.summary, ...summaries]
-      const filled: SessionSummary = {
-        ...existing,
-        // Blank only lowers: a stale true (session-added racing the local
-        // first send) never re-hides an already-surfaced session.
-        blank: existing.blank && mutation.summary.blank,
-        ...(mutation.kind === 'upsert' ? {
-          agentAvailable: mutation.summary.agentAvailable,
-          running: mutation.summary.running,
-        } : {}),
-        ...(existing.cwd === undefined && mutation.summary.cwd !== undefined ? { cwd: mutation.summary.cwd } : {}),
-        ...(existing.parentSessionId === undefined && mutation.summary.parentSessionId !== undefined
-          ? { parentSessionId: mutation.summary.parentSessionId } : {}),
-        ...(existing.origin === undefined && mutation.summary.origin !== undefined
-          ? { origin: mutation.summary.origin } : {}),
-      }
-      if (filled.cwd === existing.cwd && filled.parentSessionId === existing.parentSessionId
-        && filled.origin === existing.origin && filled.blank === existing.blank
-        && filled.agentAvailable === existing.agentAvailable && filled.running === existing.running
-      ) return summaries
+      const filled = mergeSummaryRow(existing, mutation.summary, mutation.kind)
+      if (filled === existing) return summaries
       return summaries.map(summary => summary.sessionId === mutation.summary.sessionId ? filled : summary)
     }
     case 'remove': {

@@ -2,8 +2,10 @@
 // rebuild chain runs only when something a consumer can read changed. Ambient
 // `api-session/activity` streams buffer per session instead of rebuilding the
 // list on every event render, an accepted projection frame that republishes the
-// value its row already holds is silent, and a rebuild whose rows, order, and
-// state all match keeps the state the store publishes.
+// value its row already holds is silent, an accepted projection change no
+// session-list consumer can read is silent too (see
+// LIST_IRRELEVANT_PROJECTION_KEYS), and a rebuild whose rows, order, and state
+// all match keeps the state the store publishes.
 
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionProjectionSnapshot } from '../manager.ts'
@@ -82,10 +84,57 @@ export class ActivityCoalescer<SessionKey extends string = string> {
 }
 
 /**
+ * Projection keys whose accepted changes cannot reach a session-list consumer,
+ * so a change touching only these must not rebuild the list snapshot.
+ *
+ * The list plane publishes each session's whole value map: `buildListSnapshot`
+ * copies every store's `values()` into its row and `service.projectList` copies
+ * that map into `SessionListState.byId` (and `projectionsBySession` carries the
+ * same store values). A consumer therefore reads a key from the list plane when
+ * it selects it out of a row's `projectionValues` or out of
+ * `projectionsBySession[...].values`, and every such key must rebuild. Each key
+ * below is exempt because its only readers in this repository are session-scoped
+ * `useProjection(key)` bindings, which ride the store's per-key face and are
+ * untouched by this gate:
+ *
+ * - `sessionStats`: `packages/client/ui-chat/src/client/chat/StatsPills.tsx`.
+ * - `contextPressure`, `contextBreakdown`: `packages/client/ui-conversation/src/client/skeleton/ContextMeter.tsx`.
+ *
+ * Keys that ARE read through the list plane stay out of the set even where a
+ * frame carrying them is frequent: `title` and `sessionListMetadata` (the
+ * manager's own row title, blank reconciliation, and activity ordering),
+ * `subagentCatalog`, `subagent`, `subagentTiming`, and `tokenUsage` (subagent
+ * catalog rows read the child's row map), `schedule` (the workspace tree),
+ * `agentPreset` (the preset chip and its settings seat), and `agentTeam` plus
+ * `modelSelection` (the Team action).
+ *
+ * The set is deliberately a deny list: an unlisted key rebuilds, so a consumer
+ * of a key nobody has examined yet keeps working, and a key belongs here only
+ * with the evidence above — a list-plane reader of an exempt key would go stale
+ * with nothing to see. A deployment-side client plugin is outside this
+ * repository and cannot be checked here.
+ */
+const LIST_IRRELEVANT_PROJECTION_KEYS: ReadonlySet<string> = new Set([
+  'sessionStats',
+  'contextPressure',
+  'contextBreakdown',
+])
+
+/**
+ * Whether one accepted projection write can change what a session-list consumer
+ * reads.
+ * @param key - the projection key whose value changed.
+ * @returns true when the change must rebuild the list snapshot.
+ */
+export function affectsSessionList(key: string): boolean {
+  return !LIST_IRRELEVANT_PROJECTION_KEYS.has(key)
+}
+
+/**
  * Activity flush window: one second. List timestamps display at minute
  * granularity, so a stamp within the second costs nothing visible, while a
- * busy side session's activity now drives the full list rebuild chain at
- * most once per second instead of up to five times.
+ * busy side session's activity now drives the full list rebuild chain at most
+ * once per second instead of up to five times.
  */
 export const ACTIVITY_COALESCE_MS = 1_000
 
