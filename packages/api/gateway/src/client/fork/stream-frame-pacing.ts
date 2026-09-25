@@ -8,7 +8,8 @@
  * The deployed client was measured under a 4x CPU throttling rate, where 4 ms of
  * folding work becomes about one 60 Hz frame (16 ms) of wall time; bounding a
  * batch here keeps the work of a single turn at that size so the renderer still
- * gets the next turn.
+ * gets the next turn. The budget is measured from the last yield, so it also
+ * ends the batch on a frame whose own work alone reaches it.
  */
 export const FRAME_PACING_TIME_BUDGET_MS = 4
 
@@ -21,14 +22,12 @@ export const FRAME_PACING_TIME_BUDGET_MS = 4
  */
 export const FRAME_PACING_FRAME_BUDGET = 32
 
-/** Budget one stream has spent in the current event-loop turn. */
+/** Budget one stream has spent since its last return to the event loop. */
 interface TurnBudget {
-  /** Frames recorded since the batch began. */
+  /** Frames recorded since the last yield. */
   frames: number
-  /** Clock reading when the batch began, restarted after an idle gap. */
+  /** Clock reading of the last yield, or of the first recorded frame. */
   startedAt: number
-  /** Clock reading of the previous frame, which identifies an idle gap. */
-  lastFrameAt: number
 }
 
 /**
@@ -39,27 +38,29 @@ interface TurnBudget {
 const turnBudgets = new WeakMap<AbortSignal, TurnBudget>()
 
 /**
- * Record one consumed frame and yield to the event loop once the turn's budget
- * is spent.
+ * Record one consumed frame and yield to the event loop once a batch budget is
+ * spent.
  *
  * Called between fully processed frames — the caller published the previous
- * frame before this call — so nothing here interrupts a frame's own work. A gap
- * of at least the time budget since the previous frame means the event loop
- * already had its turn, and the frame starts a fresh batch instead of inheriting
- * an exhausted one.
+ * frame before this call — so nothing here interrupts a frame's own work. A
+ * batch ends when either `FRAME_PACING_FRAME_BUDGET` frames were recorded or
+ * `performance.now() - startedAt` reaches `FRAME_PACING_TIME_BUDGET_MS`, where
+ * `startedAt` is the time of the last yield, or of the first recorded frame
+ * before any yield. The budget covers the wait for the next frame too, so a
+ * stream that spends the whole budget on one frame returns to the event loop
+ * once per frame; a turn carries at most one frame's own work plus the cheap
+ * frames that fit the remaining budget.
  *
  * @param signal - cancellation lifetime of the stream being consumed; the wait settles as soon as it aborts.
- * @returns after the frame is recorded and, when the budget was spent, after the host ran one macrotask.
+ * @returns after the frame is recorded and, when a batch budget was spent, after the host ran one macrotask.
  */
 export async function afterFrame(signal: AbortSignal): Promise<void> {
   const now = performance.now()
   let budget = turnBudgets.get(signal)
   if (budget === undefined) {
-    budget = { frames: 0, startedAt: now, lastFrameAt: now }
+    budget = { frames: 0, startedAt: now }
     turnBudgets.set(signal, budget)
   }
-  if (now - budget.lastFrameAt >= FRAME_PACING_TIME_BUDGET_MS) budget.startedAt = now
-  budget.lastFrameAt = now
   budget.frames += 1
   if (budget.frames < FRAME_PACING_FRAME_BUDGET
     && now - budget.startedAt < FRAME_PACING_TIME_BUDGET_MS) return
@@ -71,26 +72,14 @@ export async function afterFrame(signal: AbortSignal): Promise<void> {
 /**
  * Wait for one host macrotask, or settle as soon as the stream is cancelled.
  *
- * `MessageChannel` is preferred because a hidden page throttles timers to about
- * one per second, which would drag out a backgrounded Session's stream; the
- * timer is the fallback for hosts that provide no `MessageChannel` (jsdom among
- * them).
+ * `MessageChannel` carries the wait because a hidden page throttles timers to
+ * about one per second, which would drag out a backgrounded Session's stream.
  *
  * @param signal - cancellation lifetime raced against the wait.
  * @returns when the macrotask ran or the signal aborted, whichever happened first.
  */
 function yieldToEventLoop(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve()
-  if (typeof MessageChannel !== 'function') {
-    return new Promise<void>((resolve) => {
-      const settle = (): void => {
-        signal.removeEventListener('abort', settle)
-        resolve()
-      }
-      signal.addEventListener('abort', settle, { once: true })
-      setTimeout(settle, 0)
-    })
-  }
   const channel = new MessageChannel()
   return new Promise<void>((resolve) => {
     const settle = (): void => {
