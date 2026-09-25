@@ -1,3 +1,4 @@
+// Fork patch (FORK_SURFACE.md): regression spec for the fork-owned journal frame pacing.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   FRAME_PACING_FRAME_BUDGET,
