@@ -15,7 +15,12 @@ import type { SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@
  * without re-reading a whole window. A dense Turn puts its start further back
  * than the margin, so an incomplete window retries once at the deep margin
  * before falling back to the observation path, which reads the whole log to
- * cut the same page.
+ * cut the same page. That fallback is the price of Turn alignment: a single
+ * Turn carrying more events than the deep margin can never prove its cut from
+ * either window, so every request for that Session pays the whole-log read
+ * (measured: one 6,000-message Turn in a 6,011-event log served `undefined`
+ * from both attempts and fell back; the page it then served matched the
+ * observation path's page).
  */
 const PAGE_CUT_LEAD_MARGIN = 128
 const PAGE_CUT_DEEP_MARGIN = 4096

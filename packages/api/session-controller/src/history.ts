@@ -677,10 +677,12 @@ function rejectNotFound(address: SessionAddress): never {
  * fast path reads as an unproven window and widens or falls back; the log head
  * is then the boundary, with no older Turn start to align to.
  *
- * Fork patch (FORK_SURFACE.md): the indexed fast path applies this same walk to
- * a dense suffix window (`baseSeq` is that window's first seq), so the indexed
- * read and the observation cut one page; the export serves that seam and the
- * paging specs' differential oracle.
+ * Fork patch (FORK_SURFACE.md): the Turn-aligned widening above is the fork's
+ * own edit to upstream's `paginate` — upstream cuts at its message stop — and
+ * the indexed fast path applies this same walk to a dense suffix window
+ * (`baseSeq` is that window's first seq), so the indexed read and the
+ * observation cut one page; the export serves that seam and the paging specs'
+ * differential oracle.
  *
  * @param events - the log or one dense suffix window of it, in seq order.
  * @param beforeSeq - exclusive page-before bound, undefined when the page ends at `throughSeq`.

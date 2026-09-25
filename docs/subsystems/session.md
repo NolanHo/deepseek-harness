@@ -902,7 +902,7 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote('cancel') cancel(request: SessionCancelRequest): SessionCancelValue
 
 /**
- * Read one cold-safe, message-aligned Session history page.
+ * Read one cold-safe, Turn-aligned Session history page.
  * @param request - durable address, backward cursor, and page budget.
  * @param signal - cancellation for persistence reads.
  * @returns one chronological page.

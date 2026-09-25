@@ -268,7 +268,9 @@ describe('web e2e: seeded history renders through cold resume', () => {
     page = await newEnglishPage(browser)
     tripwire = watchConsole(page)
     if (MODE !== 'record') {
-      // A one-message tail makes this short recording exercise the real Load earlier path.
+      // Rewrite the opening to one message and no turn window: the Turn-aligned
+      // cut widens that message stop back to the Turn that owns it, so this
+      // single-Turn log has no earlier page to serve.
       let pagedOpening = false
       await page.routeWebSocket('**/api/remote.mux', (socket) => {
         const server = socket.connectToServer()
@@ -353,15 +355,12 @@ describe('web e2e: seeded history renders through cold resume', () => {
     // Settled barrier for history: the recorded final assistant text renders.
     await expect.poll(() => page.getByText('DONE', { exact: true }).count(), { timeout: 15_000 }).toBe(1)
     expect(openingWindow).toMatchObject({ maxMessages: 500, turnWindow: { minMessages: 50, minTurns: 2 } })
-    expect(await page.getByText(PROMPT, { exact: true }).count()).toBe(0)
-    const [paging] = await Promise.all([
-      page.waitForRequest('**/api/session/page'),
-      page.getByRole('button', { name: 'Load earlier', exact: true }).click(),
-    ])
-    expect(paging.postDataJSON()).toMatchObject({
-      payload: { args: { request: { maxMessages: 500, turnWindow: { minMessages: 50, minTurns: 2 } } } },
-    })
-    await expect.poll(() => page.getByText(PROMPT, { exact: true }).count(), { timeout: 10_000 }).toBe(1)
+    // The rewritten one-message opening serves the whole log: its cut lands on
+    // the log's only `turn/start`, so the prompt, the compaction command card,
+    // and the recorded tools are all on the first page and no earlier page
+    // exists. Multi-Turn paging is covered by `stats-paged-history.e2e.ts`.
+    expect(await page.getByText(PROMPT, { exact: true }).count()).toBe(1)
+    expect(await page.getByRole('button', { name: 'Load earlier', exact: true }).count()).toBe(0)
     await expect.poll(() => page.getByText('compact', { exact: true }).count(), { timeout: 10_000 }).toBe(1)
     await expect.poll(() => page.getByText(/^Compacted \d+ history items \(~\d+ tokens\)$/).count(), {
       timeout: 10_000,
