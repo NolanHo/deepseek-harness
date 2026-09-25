@@ -1,8 +1,8 @@
 /** Config-schema projection and form edits over Cordis profile patches. */
-import { existsSync } from 'node:fs'
-import { readFile, rename } from 'node:fs/promises'
+import { existsSync, statSync } from 'node:fs'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { parse } from 'yaml'
+import { parse, stringify } from 'yaml'
 import { Context, FiberState, Service, resolveConfig, type Fiber } from '@deepseek-ai/cordis'
 import type z from '@deepseek-ai/schemastery'
 import { interpolate, type Entry } from '@deepseek-ai/cordis-plugin-loader'
@@ -205,6 +205,110 @@ const LEGACY_SECTION_ENTRIES: Record<string, string> = {
   shell: process.platform === 'win32' ? 'pwsh-sandbox' : 'bash-sandbox',
 }
 
+/** Level name a literal `false`/`true` key of the legacy document stands for. */
+const BOOLEAN_LEVEL_KEYS: Record<string, string> = { false: 'off', true: 'on' }
+
+/** A boolean-shaped key dropped because its object already held the level name it maps to. */
+interface LevelKeyCollision {
+  /** The key as the legacy document spells it. */
+  key: string
+  /** The level name the position's schema declares. */
+  level: string
+}
+
+/** A legacy section rewritten for level names, with whether any key moved. */
+interface NormalizedLevels {
+  section: object
+  changed: boolean
+  collisions: LevelKeyCollision[]
+}
+
+/** Schema node describing `value`: a union resolves to the member matching its container shape. */
+function valueSchema(node: z | undefined, value: unknown): z | undefined {
+  if (node?.type !== 'union') return node
+  const members = node.list ?? []
+  if (isPlainObject(value)) return members.find(member => member.type === 'object' || member.type === 'dict')
+  if (Array.isArray(value)) return members.find(member => member.type === 'array')
+  return undefined
+}
+
+/**
+ * Whether the schema at a position names `level` as a key: an object field, or a dict whose key schema
+ * enumerates it. A dict keyed by an unbounded string schema accepts every name and is not a level map.
+ */
+function declaresLevel(node: z | undefined, level: string): boolean {
+  if (node?.type === 'object') return Object.hasOwn(node.dict ?? {}, level)
+  if (node?.type !== 'dict' || node.sKey === undefined) return false
+  const keys = node.sKey
+  return (keys.type === 'const' ? [keys] : keys.list ?? []).some(member => member.type === 'const' && member.value === level)
+}
+
+/**
+ * Rewrite the literal `false`/`true` keys the legacy parser produces — a bare `off`/`on` key stays a string
+ * under the parser's default core schema — to the level names the section's schema declares, walking nested
+ * maps and arrays. A key whose level name the schema does not declare is left alone, so an unrelated
+ * boolean-keyed map keeps its keys; a map holding both a spelling and its level name keeps the declared name
+ * and reports the pair. The stranded production document carried the literal `false` key its
+ * `reasoningEfforts` schema rejected.
+ * @param section - Parsed values of one legacy `settings.yaml` section.
+ * @param schema - Config schema of the entry the section is written to; a position the schema does not
+ * describe normalizes only a map of level spellings.
+ * @returns The rewritten section, whether any key moved, and any spelling/level-name collisions.
+ */
+function normalizeLevelKeys(section: object, schema?: z): NormalizedLevels {
+  let changed = false
+  const collisions: LevelKeyCollision[] = []
+  const rewrite = (value: unknown, node: z | undefined): unknown => {
+    if (Array.isArray(value)) {
+      const item = valueSchema(node, value)?.inner
+      return value.map(entry => rewrite(entry, item))
+    }
+    if (!isPlainObject(value)) return value
+    const declared = valueSchema(node, value)
+    // Without schema information a position is a level map only when it holds level spellings; a nested
+    // structure or any other value there is unrelated data and stays whole.
+    const spellings = Object.values(value).every(entry => entry === null || typeof entry === 'string')
+    if (declared === undefined && !spellings) return value
+    const normalized: Record<string, unknown> = {}
+    for (const [key, child] of Object.entries(value)) {
+      const spelling = BOOLEAN_LEVEL_KEYS[key.toLowerCase()]
+      const level = spelling !== undefined && (declared === undefined || declaresLevel(declared, spelling)) ? spelling : undefined
+      if (level !== undefined && Object.hasOwn(value, level)) {
+        changed = true
+        collisions.push({ key, level })
+        continue
+      }
+      if (level !== undefined) changed = true
+      const childNode = declared?.type === 'dict' || declared?.type === 'array' ? declared.inner : declared?.dict?.[key]
+      Object.defineProperty(normalized, level ?? key, {
+        value: rewrite(child, childNode), enumerable: true, configurable: true, writable: true,
+      })
+    }
+    return normalized
+  }
+  // rewrite() rebuilds each plain object it is given, so the object root narrows back exactly.
+  return { section: rewrite(section, schema) as object, changed, collisions }
+}
+
+/** Replace one file atomically: write a sibling temp file, then rename it into place over the target. */
+async function writeAtomic(path: string, content: string): Promise<void> {
+  const temp = `${path}.tmp`
+  await writeFile(temp, content)
+  await rename(temp, path)
+}
+
+/**
+ * Target a consumed document moves to. An earlier copy is never overwritten, so the first free
+ * `.imported[.N]` name is used; a directory at the target is left to fail the rename and be reported.
+ */
+function importedTarget(path: string): string {
+  const base = `${path}.imported`
+  if (!existsSync(base) || statSync(base).isDirectory()) return base
+  let index = 1
+  while (existsSync(`${base}.${index}`)) index += 1
+  return `${base}.${index}`
+}
+
 /** Resolve the inherited layers alone, or keep their raw values when required fields arrive only through the profile.
  * @param runtime Plugin runtime owning the Config schema.
  * @param inherited Interpolated config beneath the profile override.
@@ -235,26 +339,98 @@ export class SettingsForms extends Service {
     void ctx.root.loader.await().then(() => this.importLegacyDocument()).catch((error: unknown) => { ctx.logger.error(error) })
   }
 
+  /** Sections already imported from the document at the legacy path, per its sidecar. */
+  private async importedSections(marker: string): Promise<Set<string>> {
+    if (!existsSync(marker)) return new Set()
+    try {
+      const names: unknown = JSON.parse(await readFile(marker, 'utf8'))
+      return new Set(Array.isArray(names) ? names.filter((name): name is string => typeof name === 'string') : [])
+    } catch (error) {
+      // An unreadable sidecar must not block the migration; the document imports again instead.
+      this.ownerContext.logger.warn('settings: could not read %s; every section imports again', marker)
+      this.ownerContext.logger.warn(error)
+      return new Set()
+    }
+  }
+
+  /** Remove a sidecar the migration no longer needs; a sidecar that cannot be removed is reported, never fatal. */
+  private async discardMarker(marker: string): Promise<void> {
+    try {
+      await rm(marker, { force: true })
+    } catch (error) {
+      // Only a leftover file is at stake; the migration itself already completed.
+      this.ownerContext.logger.warn('settings: could not remove %s', marker)
+      this.ownerContext.logger.warn(error)
+    }
+  }
+
   /** Move the sections of the removed `settings.yaml` into the active profile once the Loader has settled every entry.
-   * The document is renamed before the first write, so a partial import never repeats; a section the running
-   * composition rejects is logged and remains only in the renamed file. */
+   * Every section is written while the document still exists at its legacy path; the document is renamed only after
+   * every section landed, and a section that stays rejected leaves a retryable document holding exactly that section.
+   * A completed import records its section names in a sidecar before the rename, so a document whose rename keeps
+   * failing is never imported a second time. */
   private async importLegacyDocument(): Promise<void> {
     const profile = this.ownerContext.profileContext
     const path = join(profile.home, 'settings.yaml')
-    if (!existsSync(path)) return
-    const imported = `${path}.imported`
-    await rename(path, imported)
-    const sections = parse(await readFile(imported, 'utf8')) as Record<string, object> | null
+    const marker = `${path}.imported-sections`
+    if (!existsSync(path)) {
+      // A document consumed before its sidecar was removed leaves the sidecar behind; it must not outlive the document.
+      await this.discardMarker(marker)
+      return
+    }
+    const parsed: unknown = parse(await readFile(path, 'utf8'))
+    if (parsed !== null && !isPlainObject(parsed)) {
+      this.ownerContext.logger.warn('settings: %s is not a map of sections; leaving it untouched', path)
+      return
+    }
+    const sections = parsed as Record<string, object> | null
+    const imported = await this.importedSections(marker)
+    const failed: Record<string, object> = {}
     for (const [section, values] of Object.entries(sections ?? {})) {
+      if (imported.has(section)) {
+        this.ownerContext.logger.info('settings: section %s of %s was imported by an earlier boot', section, path)
+        continue
+      }
       const ns = LEGACY_SECTION_ENTRIES[section] ?? section
       try {
         await this.update(ns, values)
-      } catch (error) {
-        this.ownerContext.logger.warn('settings: section %s of %s was not imported into entry %s', section, imported, ns)
-        this.ownerContext.logger.warn(error)
+      } catch (_rejected) {
+        const entry = this.ownerContext.configEditor.entries().find(row => row.options.id === ns)
+        const normalized = normalizeLevelKeys(values, entry === undefined ? undefined : this.schema(entry))
+        if (normalized.changed) this.ownerContext.logger.info('settings: normalized the literal boolean keys of section %s', section)
+        for (const { key, level } of normalized.collisions) {
+          this.ownerContext.logger.warn('settings: section %s holds both the "%s" and "%s" keys; keeping the "%s" value', section, key, level, level)
+        }
+        try {
+          await this.update(ns, normalized.section)
+        } catch (error) {
+          failed[section] = values
+          this.ownerContext.logger.warn('settings: section %s of %s was not imported into entry %s', section, path, ns)
+          this.ownerContext.logger.warn(error)
+        }
       }
     }
-    this.ownerContext.logger.info('settings: imported %s into profile %s', imported, profile.name)
+    if (Object.keys(failed).length) {
+      await writeAtomic(path, stringify(failed))
+      return
+    }
+    try {
+      await writeAtomic(marker, JSON.stringify(Object.keys(sections ?? {})))
+    } catch (error) {
+      // The sidecar only guards a later retry of the rename below; it must not block that rename.
+      this.ownerContext.logger.warn('settings: could not record the imported sections of %s', path)
+      this.ownerContext.logger.warn(error)
+    }
+    const importedPath = importedTarget(path)
+    try {
+      await rename(path, importedPath)
+    } catch (error) {
+      this.ownerContext.logger.warn('settings: could not rename %s to %s; the document stays retryable', path, importedPath)
+      this.ownerContext.logger.warn(error)
+      return
+    }
+    await this.discardMarker(marker)
+    this.ownerContext.logger.info('settings: imported %s into profile %s', importedPath, profile.name)
   }
 
   /** Register the calling plugin instance's page policy without changing its Config.

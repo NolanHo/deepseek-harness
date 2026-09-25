@@ -312,17 +312,23 @@ it('registers optional presentation policy after Settings loads and removes it w
   await vi.waitFor(() => { expect(ctx.settings.describe().find(view => view.ns === 'first')!.autoGenerate).toBe(false) })
 })
 
-it('imports the removed settings.yaml into the profile once and keeps rejected sections in the renamed file', async () => {
-  const { ctx, home, profile, start } = await fixture()
+it('imports the removed settings.yaml into the profile and keeps rejected sections retryable at the legacy path', async () => {
+  const logged: Array<{ type: string; args: readonly unknown[] }> = []
+  const { ctx, home, profile, start } = await fixture({ logs: message => logged.push(message) })
   await ctx.fiber.dispose()
   const legacy = join(home, 'settings.yaml')
+  const legacyDocument = (): unknown => existsSync(legacy) ? parse(readFileSync(legacy, 'utf8')) : undefined
   writeFileSync(legacy, 'default-model:\n  model: legacy\nfirst:\n  ordinary: rejected\nmissing:\n  count: 1\n')
   const restored = await start()
   await vi.waitFor(() => { expect(restored.agentDefaultModel.currentSelection().model).toBe('legacy') })
   expect(parse(readFileSync(profile.patchPath, 'utf8'))).toContainEqual({ id: 'default-model', name: 'cordis:model', config: { provider: 'test', model: 'legacy' } })
   expect(restored.settings.describe({ redactSecrets: true }).find(row => row.ns === 'first')!.value).toEqual({ count: 2, list: [] })
-  expect(existsSync(legacy)).toBe(false)
-  expect(readFileSync(`${legacy}.imported`, 'utf8')).toContain('rejected')
+  // The migrated section left the document; the rejected ones stay at the legacy path for the next boot.
+  await vi.waitFor(() => { expect(legacyDocument()).toEqual({ first: { ordinary: 'rejected' }, missing: { count: 1 } }) })
+  expect(existsSync(`${legacy}.imported`)).toBe(false)
+  await vi.waitFor(() => {
+    expect(logged.filter(message => message.type === 'warn').map(message => message.args.map(String).join(' ')).some(text => text.includes('first'))).toBe(true)
+  })
   // An empty document is renamed without writes; a document that cannot be renamed is reported, not rethrown into boot.
   await restored.fiber.dispose()
   writeFileSync(legacy, '')
@@ -333,10 +339,12 @@ it('imports the removed settings.yaml into the profile once and keeps rejected s
   rmSync(`${legacy}.imported`)
   mkdirSync(join(home, 'settings.yaml.imported', 'occupied'), { recursive: true })
   const blocked = await start()
-  const failures = (): unknown[] => blocked.logger.buffer.filter(message => message.type === 'error').map((message): unknown => message.args[0])
-  // The rename fails with EISDIR on POSIX and EPERM on Windows; the reported error names the rename either way.
-  await vi.waitFor(() => { expect(failures().some(failure => failure instanceof Error && failure.message.includes('rename'))).toBe(true) })
-  expect(blocked.agentDefaultModel.currentSelection().model).toBe('legacy')
+  const reports = (): string[] => logged.filter(message => message.type === 'error' || message.type === 'warn').map(message => message.args.map(String).join(' '))
+  // The rename fails with EISDIR on POSIX and EPERM on Windows; the reported message names the rename either way.
+  await vi.waitFor(() => { expect(reports().some(text => text.includes('rename'))).toBe(true) })
+  // Sections are written before the rename is attempted, and the un-renamed document stays retryable.
+  expect(blocked.agentDefaultModel.currentSelection().model).toBe('blocked')
+  expect(existsSync(legacy)).toBe(true)
 })
 
 it('describes an entry whose required field only the profile supplies, and reports a failed refresh instead of crashing', async () => {
