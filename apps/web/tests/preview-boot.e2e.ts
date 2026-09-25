@@ -334,7 +334,7 @@ async function bootPreview(origin: string, browser: Browser): Promise<void> {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           type: 'client-request', rpcId: 'preview-session-list', method: 'session/list',
-          payload: { args: { _request: {} } },
+          payload: { args: { request: {} } },
         }),
       })
       const sessions = await response.json() as Result<{ items: Array<{ sessionId: string }> }>
@@ -513,7 +513,7 @@ async function bootEmptyPreview(origin: string, browser: Browser): Promise<void>
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           type: 'client-request', rpcId: 'empty-preview-session-list', method: 'session/list',
-          payload: { args: { _request: {} } },
+          payload: { args: { request: {} } },
         }),
       })
       const body = await response.json() as {

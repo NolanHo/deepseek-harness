@@ -795,12 +795,12 @@ resolveAgent(sessionId: SessionId): Promise<ApiSessionAgentResult>
 inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspection>
 
 /**
- * Read all visible Session rows without resuming an Agent.
- * @param _request - reserved empty list request.
+ * Read the requested Session rows without resuming an Agent.
+ * @param request - row scope; an absent scope selects the sidebar's listed rows.
  * @param signal - cancellation for persistence reads.
  * @returns visible Session summaries ordered by activity.
  */
-@Remote('list') async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>
+@Remote('list') async list(request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>
 
 /**
  * Search visible Session content without resuming an Agent.

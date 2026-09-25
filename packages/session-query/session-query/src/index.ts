@@ -26,6 +26,7 @@ import type {
   SessionEventTraceRequest,
   SessionEventWindow,
   SessionLineageTrace,
+  SessionListScope,
   SessionLogSnapshot,
   SessionRecord,
   SessionResultFilter,
@@ -167,12 +168,13 @@ export abstract class SessionQueryEngine extends Service {
   ): Promise<SessionEventSearchPage>
 
   /**
-   * List the complete logical corpus using live-preferred records.
+   * List the live-preferred logical corpus using cloned records.
    * @param signal - optional cancellation for persistence listing.
+   * @param scope - optional row selection; absent keeps the complete corpus.
    * @returns deterministic newest-first cloned session records.
    */
-  listSessions(signal?: AbortSignal): Promise<SessionRecord[]> {
-    return this._corpus.listSessions(signal)
+  listSessions(signal?: AbortSignal, scope?: SessionListScope): Promise<SessionRecord[]> {
+    return this._corpus.listSessions(signal, scope)
   }
 
   /**

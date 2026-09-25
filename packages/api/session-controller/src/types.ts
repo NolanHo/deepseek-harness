@@ -263,6 +263,16 @@ export interface SkillListValue {
 
 /** Session list request. */
 export interface SessionListRequest {
+  /**
+   * Which rows to list: `listed` (the default) keeps every row whose origin is
+   * not `subagent` — roots and fork children alike — while `all` keeps every row.
+   */
+  readonly scope?: 'listed' | 'all'
+  /**
+   * When set, list exactly this Session's children, whatever their origin, and
+   * ignore `scope`.
+   */
+  readonly parentSessionId?: SessionId
   readonly cursor?: string
 }
 

@@ -3,7 +3,8 @@
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent, SessionHeader, SessionId , SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type SessionPersistence from '@deepseek-ai/dsh-session-persistence'
-import type { SessionRecord } from './types.ts'
+import { matchesListSelection, type SessionPersistenceListOptions } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionListScope, SessionRecord } from './types.ts'
 import { SessionQueryError } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
 import { assertSessionHeadersCompatible } from './sources.ts'
@@ -54,14 +55,17 @@ export class SessionCorpus {
   }
 
   /**
-   * List the complete logical corpus with live precedence and cloned headers.
+   * List the logical corpus with live precedence and cloned headers.
    * @param signal - optional cancellation for persistence listing.
+   * @param scope - optional row selection; absent keeps the complete corpus.
    * @returns records in deterministic newest-first order.
    */
-  async listSessions(signal?: AbortSignal): Promise<SessionRecord[]> {
+  async listSessions(signal?: AbortSignal, scope?: SessionListScope): Promise<SessionRecord[]> {
     signal?.throwIfAborted()
     const persistence = this._persistence
-    const persisted = persistence === undefined ? [] : await listPersisted(persistence, signal)
+    const persisted = persistence === undefined
+      ? []
+      : await listPersisted(persistence, signal, scope)
     signal?.throwIfAborted()
     const records = new Map<SessionId, SessionRecord>()
     for (const header of persisted) {
@@ -76,7 +80,9 @@ export class SessionCorpus {
         persisted: durable !== undefined,
       })
     }
-    return [...records.values()].sort(compareSessions)
+    return [...records.values()]
+      .filter(record => matchesListSelection(record.header, scope))
+      .sort(compareSessions)
   }
 
   /**
@@ -257,9 +263,15 @@ function orderedResults<Value>(
 async function listPersisted(
   persistence: SessionPersistence,
   signal?: AbortSignal,
+  selection?: SessionListScope,
 ): Promise<SessionHeader[]> {
   try {
-    const snapshots = await persistence.list(signal === undefined ? undefined : { signal })
+    const options: SessionPersistenceListOptions = {
+      ...(signal === undefined ? {} : { signal }),
+      ...(selection?.scope === undefined ? {} : { scope: selection.scope }),
+      ...(selection?.parentSessionId === undefined ? {} : { parentSessionId: selection.parentSessionId }),
+    }
+    const snapshots = await persistence.list(options)
     return snapshots.map(snapshot => snapshot.header)
   } catch (error: unknown) {
     if (signal?.aborted) signal.throwIfAborted()

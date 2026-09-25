@@ -402,7 +402,7 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY)('GitHub webhook through the real 
       const sessionId = workspace?.sessionIds[0]
       if (sessionId === undefined) throw new Error('workspace/follow did not expose the webhook Session')
 
-      const sessions = await remoteRpc<SessionList>(baseUrl, 'session/list', { _request: {} })
+      const sessions = await remoteRpc<SessionList>(baseUrl, 'session/list', { request: {} })
       expect(sessions.items.find(session => session.sessionId === sessionId)).toMatchObject({
         blank: false,
         cwd: canonicalWorkspacePath,

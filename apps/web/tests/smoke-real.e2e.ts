@@ -759,14 +759,14 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || notReady.length > 0)('web smoke
     await expect.poll(async () => (await remoteRpc<{ items: { sessionId: string }[] }>(
       baseUrl,
       'session/list',
-      { _request: {} },
+      { request: {} },
     )).items.length, {
       timeout: 15_000,
     }).toBe(1)
     const sessions = await remoteRpc<{ items: { sessionId: string }[] }>(
       baseUrl,
       'session/list',
-      { _request: {} },
+      { request: {} },
     )
     const sessionId = sessions.items[0]?.sessionId
     if (sessionId === undefined) throw new Error('created Web session was not listed')

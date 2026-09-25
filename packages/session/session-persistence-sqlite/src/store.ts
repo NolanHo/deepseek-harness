@@ -21,6 +21,7 @@ import {
   SessionPersistenceCorruptionError,
   SessionPersistenceRevision,
   validateStoredEvents,
+  type SessionPersistenceListSelection,
   type SessionStorageMetadata,
 } from '@deepseek-ai/dsh-session-persistence'
 import { type StoredLogicalEvent, MAX_PACKED_ROW_MEMBERS, packChunkRuns } from './codec.ts'
@@ -411,14 +412,17 @@ export class SqliteStore {
   }
 
   /**
-   * List every stored session with its migrated header and source-qualified
-   * revision, without loading event rows.
+   * List the stored sessions in a selection with their migrated headers and
+   * source-qualified revisions, without loading event rows. The selection runs
+   * in SQL, so an excluded row is never decoded and its header is never
+   * restored.
    * @param signal - optional cancellation before or after the metadata query.
-   * @returns one snapshot per stored session.
+   * @param selection - optional stored-row selection; absent lists every row.
+   * @returns one snapshot per stored session in the selection.
    */
-  async list(signal?: AbortSignal): Promise<SqliteStoredSnapshot[]> {
+  async list(signal?: AbortSignal, selection?: SessionPersistenceListSelection): Promise<SqliteStoredSnapshot[]> {
     await this.observe(signal)
-    const rows = this.sessionRows()
+    const rows = this.sessionRows(selection)
     signal?.throwIfAborted()
     return rows.map(row => ({
       header: restoreStoredHeader(storedPhysicalHeaderOf(row), SessionId(row.id)),
@@ -760,7 +764,18 @@ export class SqliteStore {
     }
   }
 
-  private sessionRows(): SessionRow[] {
+  // The selection runs in the scan. Neither session column is indexed, which
+  // keeps the stored schema at its current version; the sessions table is
+  // narrow, and selecting listed rows on a production-shaped 6,015-row database
+  // still skips every subagent decode the unfiltered listing pays for.
+  private sessionRows(selection?: SessionPersistenceListSelection): SessionRow[] {
+    if (selection?.parentSessionId !== undefined) {
+      return this.db.prepare(sql('select-parented-sessions'))
+        .all(selection.parentSessionId).map(decodeSessionRow)
+    }
+    if (selection?.scope === 'listed') {
+      return this.db.prepare(sql('select-listed-sessions')).all().map(decodeSessionRow)
+    }
     return this.db.prepare(sql('select-sessions')).all().map(decodeSessionRow)
   }
 

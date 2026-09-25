@@ -101,10 +101,44 @@ export interface SessionPersistenceStatOptions {
   readonly signal?: AbortSignal
 }
 
+/** Row selection over stored session headers; absent keeps every row. */
+export interface SessionPersistenceListSelection {
+  /**
+   * Origin selection: `listed` keeps every row whose `origin` is not
+   * `subagent` — roots and fork children alike — while `all` keeps every row.
+   * Defaults to `all`.
+   */
+  readonly scope?: 'listed' | 'all'
+  /**
+   * When set, the selection keeps exactly the rows whose `parentSession` is
+   * this id, whatever their origin, and ignores
+   * {@link SessionPersistenceListSelection.scope}.
+   */
+  readonly parentSessionId?: SessionId
+}
+
 /** Options for {@link SessionPersistence.list}. */
-export interface SessionPersistenceListOptions {
+export interface SessionPersistenceListOptions extends SessionPersistenceListSelection {
   /** Optional cancellation for backend listing work. */
   readonly signal?: AbortSignal
+}
+
+/**
+ * Whether one stored header belongs to a listing selection. A backend applies
+ * this to every header its storage cannot select in the read — a
+ * created-but-unmaterialized session, or an artifact whose header the backend
+ * must read anyway — so one listing never mixes selections.
+ * @param header - candidate stored header.
+ * @param selection - row selection; absent keeps every header.
+ * @returns true when the header belongs to the selection.
+ */
+export function matchesListSelection(
+  header: SessionHeader,
+  selection?: SessionPersistenceListSelection,
+): boolean {
+  if (selection?.parentSessionId !== undefined) return header.parentSession === selection.parentSessionId
+  if (selection?.scope === 'listed') return header.origin !== 'subagent'
+  return true
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -203,8 +237,12 @@ export abstract class SessionPersistence extends Service {
 
   /**
    * List every stored session visible to this process, in no promised order.
-   * @param options - optional cancellation.
-   * @returns one snapshot per stored session.
+   *
+   * A backend may push the row selection into its own read so an excluded row
+   * is never decoded; one that cannot select in storage returns every row, and
+   * the caller applies the same selection to the returned headers.
+   * @param options - optional cancellation and row selection.
+   * @returns one snapshot per stored session in the selection.
    */
   abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
 }

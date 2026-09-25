@@ -93,7 +93,7 @@ describe('web e2e: preset roster guidance', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           type: 'client-request', rpcId: 'creator-draft-stage', method: 'session/list',
-          payload: { args: { _request: {} } },
+          payload: { args: { request: {} } },
         }),
       })
       const body = await response.json() as {

@@ -36,6 +36,15 @@ function sessionSeqCursor(value: number): SessionSeqCursor {
 }
 
 /**
+ * Maximum ancestor parent reads one `loadChildren` walk may add above the
+ * opened Session. Subagent depth is a Host-side, deployment-varying
+ * configuration, so this client bound is what keeps an unknown or malformed
+ * parent chain from turning one open into an unbounded read fan-out. Past it
+ * the breadcrumb truncates at the deepest ancestor row read.
+ */
+const ANCESTRY_READ_LIMIT = 8
+
+/**
  * List arrival lifecycle, orthogonal to the pull-activity `state` axis:
  * `pending` (no successful pull yet — an empty items array means "nothing
  * arrived", not "nothing exists") → `ready` (at least one pull landed).
@@ -112,6 +121,15 @@ export class SessionManager {
   /** Active list request's mutation log; its identity also fences completion after reconnect. */
   private listMutations: SessionListMutation[] | null = null
   private readonly addresses = new Map<SessionId, SubagentAddress>()
+  /**
+   * Subagent rows the client knows about — read for an opened Session or
+   * announced by a frame. The listed pull omits subagent rows, so their absence
+   * from a response is not a removal; the rows themselves live in `summaries`,
+   * where later frames and mutations keep updating them.
+   */
+  private readonly retainedChildIds = new Set<SessionId>()
+  /** Child reads by parent; one request per parent per Host generation. */
+  private readonly childReads = new Map<SessionId, Promise<void>>()
   private readonly projectionLoads = new Map<SessionId, ProjectionLoad>()
   private readonly projectionInflight = new Map<SessionId, ProjectionInflight>()
 
@@ -211,6 +229,8 @@ export class SessionManager {
     this.listMutations = null
     this.listInflight = null
     this.engagedSessions.clear()
+    this.retainedChildIds.clear()
+    this.childReads.clear()
     const reads = [...this.projectionInflight.values()]
     for (const { controller } of reads) controller.abort()
     this.projectionInflight.clear()
@@ -305,7 +325,7 @@ export class SessionManager {
 
   /**
    * Identities an engagement may still belong to: the given list rows, resident
-   * Session instances, and retained child addresses.
+   * Session instances, retained child addresses, and retained subagent rows.
    * @param summaries - list rows of the caller's snapshot.
    * @returns the retained identity set.
    */
@@ -313,6 +333,7 @@ export class SessionManager {
     const retained = new Set(summaries.map(summary => summary.sessionId))
     for (const sessionId of this.sessions.keys()) retained.add(sessionId)
     for (const sessionId of this.addresses.keys()) retained.add(sessionId)
+    for (const sessionId of this.retainedChildIds) retained.add(sessionId)
     return retained
   }
 
@@ -355,6 +376,11 @@ export class SessionManager {
     const controller = new AbortController()
     const store = this.projectionStore(sessionId)
     const initialValues = store.values()
+    // Fork patch (FORK_SURFACE.md): a frame that republishes its row's value
+    // advances the watermark without touching values(), so the existence probe
+    // below reads the watermarks too — an equal-valued landing during this read
+    // must not let the missing answer clear the row it just confirmed.
+    const initialSeqs = Object.keys(initialValues).map(key => store.seqOf(key))
     this.projectionLoads.set(sessionId, { state: 'loading', error: null })
     this.notifier.markDirty()
     const operation = (async () => {
@@ -364,7 +390,8 @@ export class SessionManager {
         if (result.ok) {
           if (result.value !== null) {
             store.seed({ ...result.value, asOfSeq: sessionSeqCursor(result.value.asOfSeq) })
-          } else if (store.values() === initialValues) {
+          } else if (store.values() === initialValues
+            && Object.keys(initialValues).every((key, index) => store.seqOf(key) === initialSeqs[index])) {
             // A later frame proves existence independently of an earlier missing read.
             store.clear()
           }
@@ -401,7 +428,7 @@ export class SessionManager {
 
   // ---- List API ----
 
-  /** Full refresh via session.list (single-flight within one Host generation). */
+  /** Full refresh of the listed scope via session.list (single-flight within one Host generation). */
   refreshList(): Promise<void> {
     if (this.listInflight !== null) return this.listInflight
     this.listState = 'loading'
@@ -412,7 +439,7 @@ export class SessionManager {
     this.notifier.markDirty()
     this.listInflight = (async () => {
       try {
-        const result = await this.remote.session.list({})
+        const result = await this.remote.session.list({ scope: 'listed' })
         if (this.listMutations !== mutations) return
         if (result.ok) {
           const baseline: SessionSummary[] = this.listPhase === 'pending'
@@ -426,7 +453,10 @@ export class SessionManager {
           for (const s of baseline) {
             if (s.running && !removedSincePull.has(s.sessionId)) this.engagedSessions.add(s.sessionId)
           }
-          const summaries = mutations.reduce(applyMutation, baseline)
+          const summaries = this.retainScopedChildren(
+            mutations.reduce(applyMutation, baseline),
+            mutations.reduce(applyMutation, established),
+          )
           this.summaries = summaries
           // A full list can remove identities without a removal frame.
           const retained = this.retainedIds(summaries)
@@ -466,6 +496,153 @@ export class SessionManager {
       }
     })()
     return this.listInflight
+  }
+
+  /**
+   * Read the children of one opened Session into the catalog, then walk the
+   * opened Session's ancestry so every subagent ancestor row arrives too. The
+   * listed scope omits subagent rows, so a subagent row exists only in its own
+   * parent's children read; without the walk a breadcrumb truncates at the
+   * first ancestor the client never read. Each parent is read once per Host
+   * generation, and the walk stops after {@link ANCESTRY_READ_LIMIT} ancestors.
+   * @param sessionId - the opened Session whose children are requested.
+   * @returns completion of the current or newly started reads; a failed read
+   *   leaves the rows already catalogued in place.
+   */
+  loadChildren(sessionId: SessionId): Promise<void> {
+    const reads = [this.readChildren(sessionId)]
+    const seen = new Set<SessionId>([sessionId])
+    let cursor = sessionId
+    let ancestors = 0
+    while (this.isSubagentSession(cursor)) {
+      const parentSessionId = this.ancestorParent(cursor)
+      if (parentSessionId === undefined || seen.has(parentSessionId)) break
+      if (ancestors === ANCESTRY_READ_LIMIT) {
+        console.warn(`[session-controller] Session ancestry read stopped at ${String(ANCESTRY_READ_LIMIT)} ancestors for "${sessionId}"`)
+        break
+      }
+      ancestors++
+      seen.add(parentSessionId)
+      reads.push(this.readChildren(parentSessionId))
+      cursor = parentSessionId
+    }
+    return Promise.all(reads).then(() => undefined)
+  }
+
+  /**
+   * Resolve one Session's direct parent from client-held knowledge only: its
+   * loaded row, an installed address, or a parent catalog that lists it. A
+   * Session whose parent is unknown is a chain end, never a fetch.
+   * @param sessionId - Session whose direct parent is resolved.
+   * @returns the parent identity, or undefined when the client cannot name it.
+   */
+  private ancestorParent(sessionId: SessionId): SessionId | undefined {
+    const row = this.summaries.find(summary => summary.sessionId === sessionId)
+    if (row?.parentSessionId !== undefined) return row.parentSessionId
+    return this.subagentAddress(sessionId)?.parentSessionId
+  }
+
+  /**
+   * Whether one identity is a subagent row the ancestry walk may climb. An
+   * ordinary Session's own parent never renders, so the walk ends there.
+   * @param sessionId - Session whose row identity is classified.
+   * @returns true for a known subagent identity.
+   */
+  private isSubagentSession(sessionId: SessionId): boolean {
+    const row = this.summaries.find(summary => summary.sessionId === sessionId)
+    if (row !== undefined) return row.origin === 'subagent'
+    return this.subagentAddress(sessionId) !== undefined
+  }
+
+  /**
+   * Read one parent's direct children. Rows merge as ordinary catalog
+   * additions, and a successful read is also the membership authority for that
+   * parent: retained child rows the Host no longer returns are forgotten, so a
+   * deletion cannot leave a phantom row. A failed read retries on the next open
+   * instead of failing it.
+   * @param parentSessionId - parent whose direct children are requested.
+   * @returns completion of the current or newly started read.
+   */
+  private readChildren(parentSessionId: SessionId): Promise<void> {
+    const existing = this.childReads.get(parentSessionId)
+    if (existing !== undefined) return existing
+    // Children retained when the read starts. A frame can add a child while the
+    // read is in flight; that row is not a candidate for this response's removal.
+    const candidates = this.retainedChildrenOf(parentSessionId)
+    const operation = (async () => {
+      try {
+        const result = await this.remote.session.list({ parentSessionId })
+        if (this.disposed) return
+        if (!result.ok) {
+          this.childReads.delete(parentSessionId)
+          return
+        }
+        for (const child of result.value.items) this.handleSessionAdded(child)
+        const present = new Set(result.value.items.map(child => child.sessionId))
+        for (const sessionId of candidates) {
+          if (!present.has(sessionId)) this.forgetRetainedChild(sessionId)
+        }
+      } catch (error: unknown) {
+        this.childReads.delete(parentSessionId)
+        // A read failure is a degradation, not an open failure: the listed rows
+        // stay authoritative. Anything but a Remote failure is a defect.
+        if (!isRemoteFailure(error)) {
+          console.error(`[session-controller] Session children read for "${parentSessionId}" failed:`, error)
+        }
+      }
+    })()
+    this.childReads.set(parentSessionId, operation)
+    return operation
+  }
+
+  /**
+   * Restore retained subagent rows over a listed pull. Each restored row
+   * carries the values established before the pull plus every replayed frame
+   * mutation, and appends after the merged listing rows; display position is
+   * re-derived later from parent links by `flattenLineage`.
+   * @param summaries - baseline rows plus replayed mutations.
+   * @param live - rows established before the pull plus replayed mutations.
+   * @returns the rows, with every still-retained child restored.
+   */
+  private retainScopedChildren(
+    summaries: SessionSummary[],
+    live: readonly SessionSummary[],
+  ): SessionSummary[] {
+    if (this.retainedChildIds.size === 0) return summaries
+    const present = new Set(summaries.map(summary => summary.sessionId))
+    const retained = live.filter(summary => (
+      this.retainedChildIds.has(summary.sessionId) && !present.has(summary.sessionId)
+    ))
+    return retained.length === 0 ? summaries : [...summaries, ...retained]
+  }
+
+  /**
+   * Retained subagent rows whose direct parent is the given Session.
+   * @param parentSessionId - parent whose retained children are collected.
+   * @returns the retained child identities known to belong to that parent.
+   */
+  private retainedChildrenOf(parentSessionId: SessionId): SessionId[] {
+    const ids: SessionId[] = []
+    for (const summary of this.summaries) {
+      if (summary.parentSessionId === parentSessionId && this.retainedChildIds.has(summary.sessionId)) {
+        ids.push(summary.sessionId)
+      }
+    }
+    return ids
+  }
+
+  /**
+   * Forget one retained child the Host no longer returns: its retention flag,
+   * its list row, and any engagement that only the row held.
+   * @param sessionId - retained child absent from a fresh children read.
+   */
+  private forgetRetainedChild(sessionId: SessionId): void {
+    this.retainedChildIds.delete(sessionId)
+    const next = this.summaries.filter(summary => summary.sessionId !== sessionId)
+    if (next.length === this.summaries.length) return
+    this.summaries = next
+    this.pruneEngagement(sessionId, this.retainedIds(next))
+    this.notifier.markDirty()
   }
 
   /**
@@ -637,8 +814,11 @@ export class SessionManager {
       this.replaceControlBaseline(frame.value)
       return
     }
-    this.projectionStore(frame.sessionId).apply(frame.key, frame.value, SessionSeq(frame.seq))
-    this.notifier.markDirty()
+    // Fork patch (FORK_SURFACE.md): a frame that republishes the value its row
+    // already holds leaves the dirty flush with no rebuild to run.
+    if (this.projectionStore(frame.sessionId).apply(frame.key, frame.value, SessionSeq(frame.seq))) {
+      this.notifier.markDirty()
+    }
   }
 
   private replaceControlBaseline(baseline: SessionControlBaseline): void {
@@ -652,10 +832,13 @@ export class SessionManager {
   }
 
   /**
-   * Apply one Session-list addition forwarded through `ctx.remote.$on`.
+   * Apply one Session-list addition — a `ctx.remote.$on` frame or a row read
+   * for an opened Session's children. Subagent rows are retained: the listed
+   * scope omits them, so a later pull must not read as their removal.
    * @param summary - current Host summary for the added Session.
    */
   handleSessionAdded(summary: SessionSummary): void {
+    if (summary.origin === 'subagent') this.retainedChildIds.add(summary.sessionId)
     this.mergeSummary(summary)
     if (!this.disposed && summary.running) this.engagedSessions.add(summary.sessionId)
     this.sessions.get(summary.sessionId)?.handleBlank(this.effectiveBlank(summary))
@@ -691,7 +874,10 @@ export class SessionManager {
    * @param sessionId - removed Session identity.
    */
   handleSessionRemoved(sessionId: SessionId): void {
+    // A child read for an opened Session is durable history even though the
+    // listed scope omitted it: keep its status row rather than removing it.
     const durableSubagent = this.subagentAddress(sessionId) !== undefined
+      || this.retainedChildIds.has(sessionId)
       || this.summaries.some(summary => summary.sessionId === sessionId && summary.origin === 'subagent')
     this.recordMutation(durableSubagent
       ? { kind: 'status', sessionId, running: false, agentAvailable: false }
@@ -759,10 +945,17 @@ export class SessionManager {
       const address = this.addresses.get(id)
       if (address !== undefined) parents.add(address.parentSessionId)
     }
+    // The status stream replays nothing, so a subagent that finished while the
+    // connection was down keeps its last running bit. A fresh children read is
+    // the repair, and doubles as the membership check that drops rows the Host
+    // no longer returns.
+    const childParents = this.knownChildParents()
     for (const { controller } of this.projectionInflight.values()) controller.abort()
     this.projectionInflight.clear()
     this.projectionLoads.clear()
+    this.childReads.clear()
     for (const parentSessionId of parents) void this.refreshProjections(parentSessionId)
+    for (const parentSessionId of childParents) void this.readChildren(parentSessionId)
     // Fork patch (FORK_SURFACE.md): a carrier reset aborts every logical stream;
     // failed session windows never re-open on their own (the chat stays frozen
     // on the last frame until a full page refresh), so reset re-opens the
@@ -775,6 +968,22 @@ export class SessionManager {
         })
       }
     }
+  }
+
+  /**
+   * Parents whose direct children this client already read or holds a row for.
+   * A reconnect re-reads exactly these, so status repairs stay bounded by the
+   * children the client knows instead of every Session in the new list.
+   * @returns the parent identities to re-read.
+   */
+  private knownChildParents(): Set<SessionId> {
+    const parents = new Set<SessionId>(this.childReads.keys())
+    for (const summary of this.summaries) {
+      if (summary.origin === 'subagent' && summary.parentSessionId !== undefined) {
+        parents.add(summary.parentSessionId)
+      }
+    }
+    return parents
   }
 
   private buildListSnapshot(): SessionListSnapshot {

@@ -121,6 +121,153 @@ describe('list store projection', () => {
   })
 })
 
+describe('list store writes', () => {
+  it('keeps the published state and its rows when a refresh republishes the same rows', async ({ bench }) => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }])
+    const published = b.svc.list.getSnapshot()
+    const row = published.byId[sid('s1')]
+    const set = vi.spyOn(b.svc.list, 'set')
+
+    await feedList(b, [{ id: 's1' }])
+
+    expect(set).not.toHaveBeenCalled()
+    expect(b.svc.list.getSnapshot()).toBe(published)
+    expect(b.svc.list.getSnapshot().byId[sid('s1')]).toBe(row)
+  })
+
+  it('keeps unchanged row objects while a changed row is republished', async ({ bench }) => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }, { id: 's2' }])
+    const published = b.svc.list.getSnapshot()
+
+    // A later status rewrites s2's row and leaves s1's alone.
+    b.svc.handleSessionStatus(sid('s2'), true)
+    await Promise.resolve()
+
+    const next = b.svc.list.getSnapshot()
+    expect(next).not.toBe(published)
+    expect(next.byId[sid('s2')]?.running).toBe(true)
+    expect(next.byId[sid('s2')]).not.toBe(published.byId[sid('s2')])
+    expect(next.byId[sid('s1')]).toBe(published.byId[sid('s1')])
+  })
+
+  it('publishes a same-length list order change', async ({ bench }) => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }, { id: 's2' }])
+    const published = b.svc.list.getSnapshot()
+    expect(published.ids).toEqual([sid('s1'), sid('s2')])
+
+    // One window replaces a row instead of only adding or only removing one.
+    b.svc.handleSessionRemoved(sid('s1'))
+    b.svc.handleSessionAdded({ agentAvailable: true,
+      sessionId: sid('s3'), updatedAt: 2, running: false, blank: false,
+    })
+    await Promise.resolve()
+
+    const next = b.svc.list.getSnapshot()
+    expect(next).not.toBe(published)
+    expect(next.ids).toEqual([sid('s3'), sid('s2')])
+  })
+
+  it('publishes a projection value for a session that has no list row', async ({ bench }) => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }])
+    const set = vi.spyOn(b.svc.list, 'set')
+
+    // The first value opens that session's projection record…
+    b.svc.handleControlFrame({ type: 'projection', sessionId: sid('s9'), key: 'title', value: 'Ghost', seq: 1 })
+    await Promise.resolve()
+    expect(set).toHaveBeenCalled()
+    expect(b.svc.list.getSnapshot().projectionsBySession[sid('s9')]?.values.title).toBe('Ghost')
+
+    // …a later value changes what the record publishes…
+    set.mockClear()
+    b.svc.handleControlFrame({ type: 'projection', sessionId: sid('s9'), key: 'title', value: 'Ghost again', seq: 2 })
+    await Promise.resolve()
+    expect(set).toHaveBeenCalled()
+    expect(b.svc.list.getSnapshot().projectionsBySession[sid('s9')]?.values.title).toBe('Ghost again')
+
+    // …and a record set whose keys moved still publishes, with the same
+    // record count and the same rows.
+    set.mockClear()
+    b.svc.handleSessionRemoved(sid('s9'))
+    b.svc.handleControlFrame({ type: 'projection', sessionId: sid('s10'), key: 'title', value: 'Other', seq: 1 })
+    await Promise.resolve()
+    expect(set).toHaveBeenCalled()
+    expect(b.svc.list.getSnapshot().projectionsBySession[sid('s10')]?.values.title).toBe('Other')
+  })
+
+  it('publishes a projection read state and failure for a session that has no list row', async ({ bench }) => {
+    const b = bench()
+    await feedList(b, [{ id: 's1' }])
+    b.svc.handleControlFrame({ type: 'projection', sessionId: sid('s9'), key: 'title', value: 'Ghost', seq: 1 })
+    await Promise.resolve()
+    const set = vi.spyOn(b.svc.list, 'set')
+
+    b.mock.remote.session.projections.mockResolvedValue(err(new RemoteError('gateway/internal', 'first', {})))
+    await b.svc.refreshProjections(sid('s9'))
+    await Promise.resolve()
+    expect(set).toHaveBeenCalled()
+    expect(b.svc.list.getSnapshot().projectionsBySession[sid('s9')]).toMatchObject({
+      state: 'error', error: { message: 'first' },
+    })
+
+    // A retry that fails differently republishes: the same values and the same
+    // lifecycle state with another failure is still a change.
+    set.mockClear()
+    b.mock.remote.session.projections.mockResolvedValue(err(new RemoteError('gateway/internal', 'second', {})))
+    await b.svc.refreshProjections(sid('s9'))
+    await Promise.resolve()
+    expect(set).toHaveBeenCalled()
+    expect(b.svc.list.getSnapshot().projectionsBySession[sid('s9')]).toMatchObject({
+      state: 'error', error: { message: 'second' },
+    })
+  })
+})
+
+describe('list scope request', () => {
+  it('pulls the listed scope so the store never enumerates subagent children', async ({ bench }) => {
+    const b = bench()
+    b.mock.remote.session.list.mockResolvedValue(ok({ items: [] }))
+
+    await b.svc.refresh()
+
+    expect(b.mock.remote.session.list).toHaveBeenCalled()
+    expect(b.mock.remote.session.list.mock.calls.at(-1)?.[0]).toMatchObject({ scope: 'listed' })
+  }, COLD_BOOT_TIMEOUT_MS)
+})
+
+describe('on-demand children', () => {
+  it("reads an opened Session's children into the store and keeps them across a listed pull", async ({ bench }) => {
+    const b = bench()
+    // The listed pull carries the root alone; the child arrives only through
+    // the read the open triggers.
+    b.mock.remote.session.list.mockImplementation((payload) => {
+      const { parentSessionId } = payload as { parentSessionId?: SessionId }
+      return Promise.resolve(ok({ items: parentSessionId === undefined
+        ? [{ agentAvailable: true, sessionId: sid('root'), updatedAt: 1, running: false, blank: false, cwd: '/work' }]
+        : [{
+          agentAvailable: true, sessionId: sid('child'), updatedAt: 2, running: false, blank: false,
+          parentSessionId: sid('root'), origin: 'subagent' as const, cwd: '/work',
+        }] }))
+    })
+    await b.svc.refresh()
+
+    using reference = b.svc.retain(sid('root'), { source: 'controllerOperation' })
+    await reference.ready
+    await vi.waitFor(() => {
+      expect(b.svc.list.getSnapshot().byId[sid('child')]).toMatchObject({
+        parentId: 'root', origin: 'subagent', cwd: '/work',
+      })
+    })
+
+    await b.svc.refresh()
+    expect(b.svc.list.getSnapshot().byId[sid('child')]?.parentId).toBe('root')
+    expect(b.svc.list.getSnapshot().byId[sid('root')]?.id).toBe('root')
+  }, COLD_BOOT_TIMEOUT_MS)
+})
+
 describe('search', () => {
   it('delegates transient content search without changing the list snapshot', async ({ bench }) => {
     const b = bench()

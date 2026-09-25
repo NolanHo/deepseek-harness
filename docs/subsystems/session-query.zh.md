@@ -404,11 +404,12 @@ abstract searchSessions( request: SessionSearchRequest, exec?: SessionSearchExec
 abstract searchEvents( request: SessionEventSearchRequest, exec?: SessionSearchExecContext, ): Promise<SessionEventSearchPage>
 
 /**
- * List the complete logical corpus using live-preferred records.
+ * List the live-preferred logical corpus using cloned records.
  * @param signal - optional cancellation for persistence listing.
+ * @param scope - optional row selection; absent keeps the complete corpus.
  * @returns deterministic newest-first cloned session records.
  */
-listSessions(signal?: AbortSignal): Promise<SessionRecord[]>
+listSessions(signal?: AbortSignal, scope?: SessionListScope): Promise<SessionRecord[]>
 
 /**
  * Read and replay-validate one complete logical session log without making it live.

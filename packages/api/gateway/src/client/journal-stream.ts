@@ -7,6 +7,9 @@ import type {
   RemoteStreamItem,
   RemoteStreamOptions,
 } from './remote-stream.ts'
+// Fork patch (FORK_SURFACE.md): the consume loop's cooperative yield lives in the
+// fork-owned stream-frame-pacing module; this file keeps the one call below.
+import { afterFrame } from './fork/stream-frame-pacing.ts'
 
 /** Host-side stream protocol violation, marked so consumers surface it as an error state. */
 function protocolViolation(message: string): RemoteError<'gateway/internal'> {
@@ -237,6 +240,10 @@ export abstract class RemoteJournalStream<
   ): Promise<void> {
     try {
       while (true) {
+        // Fork patch (FORK_SURFACE.md): hand the event loop back between bounded
+        // batches, so one WebSocket message task cannot drain a whole burst of
+        // buffered frames before the renderer's next turn.
+        await afterFrame(this.signal)
         const next = await this.takeNext(iterator)
         if (next.done) return
         const item = next.value

@@ -613,6 +613,54 @@ describe('list lifecycle', () => {
     }
   })
 
+  it('skips the list rebuild and the notification when a control frame republishes the value', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    manager.handleSessionAdded(summary(S1))
+    await Promise.resolve()
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Stable', seq: 1 })
+    await Promise.resolve()
+    manager.subscribe(() => {})
+    const rebuild = vi.spyOn(manager as unknown as { buildListSnapshot: () => unknown }, 'buildListSnapshot')
+    const notified = vi.fn()
+    onTestFinished(manager.subscribe(notified))
+    // The same value at a higher watermark changes nothing the list publishes.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Stable', seq: 2 })
+    await Promise.resolve()
+    expect(rebuild).not.toHaveBeenCalled()
+    expect(notified).not.toHaveBeenCalled()
+    expect(manager.getListSnapshot().items[0]?.title).toBe('Stable')
+    // A genuinely changed value still rebuilds and notifies.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Moved', seq: 3 })
+    await Promise.resolve()
+    expect(rebuild).toHaveBeenCalled()
+    expect(notified).toHaveBeenCalled()
+    expect(manager.getListSnapshot().items[0]?.title).toBe('Moved')
+  })
+
+  it('coalesces repeated equal control frames inside one window into at most one rebuild', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    manager.handleSessionAdded(summary(S1))
+    await Promise.resolve()
+    manager.subscribe(() => {})
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Stable', seq: 1 })
+    await Promise.resolve()
+    const rebuild = vi.spyOn(manager as unknown as { buildListSnapshot: () => unknown }, 'buildListSnapshot')
+    // One window's worth of stream: every frame carries a higher watermark over
+    // the same value, each flushed on its own microtask.
+    for (let seq = 2; seq <= 12; seq++) {
+      manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Stable', seq })
+      await Promise.resolve()
+    }
+    expect(rebuild.mock.calls.length).toBeLessThanOrEqual(1)
+    const rebuilds = rebuild.mock.calls.length
+    // A changed value still rebuilds once, not once per frame of the window.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Moved', seq: 13 })
+    await Promise.resolve()
+    expect(rebuild.mock.calls.length).toBe(rebuilds + 1)
+  })
+
   it('coalesces ambient activity flushes within a one-second window', async ({ mock, remote }) => {
     vi.useFakeTimers()
     try {
@@ -975,6 +1023,20 @@ describe('subagent catalogs', () => {
     ])
   })
 
+  it('keeps a pushed value when a frame republishes it during a missing projections read', async ({ mock, remote }) => {
+    const response = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.projections>>>()
+    remote.session.projections.mockImplementation(() => response.promise)
+    const manager = makeManager(mock, remote)
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Pushed', seq: 2 })
+    const read = manager.refreshProjections(S1)
+    // The same value at a higher watermark lands in flight: the published
+    // values keep their identity, so only the advanced watermark records it.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Pushed', seq: 5 })
+    response.resolve(ok(null))
+    await read
+    expect(manager.getListSnapshot().projectionsBySession[S1]?.values.title).toBe('Pushed')
+  })
+
   it('shares cold initial loading and reuses the loaded catalog when reopened', async ({ mock, remote }) => {
     const response = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.projections>>>()
     remote.session.projections.mockImplementation(() => response.promise)
@@ -1060,6 +1122,196 @@ describe('subagent catalogs', () => {
     await manager.refreshProjections(S1)
     expect(manager.getListSnapshot().projectionsBySession[S1]).toEqual({
       values: {}, state: 'ready', error: null,
+    })
+  })
+})
+
+describe('scoped children', () => {
+  /** Answer the listed pull and one parent's child read differently. */
+  function listByScope(
+    remote: ClientTestFixtures['remote'],
+    listed: readonly ReturnType<typeof summary>[],
+    children: Readonly<Record<string, readonly ReturnType<typeof summary>[]>>,
+  ): void {
+    remote.session.list.mockImplementation((payload) => {
+      const { parentSessionId } = payload as { parentSessionId?: SessionId }
+      return Promise.resolve(ok({
+        items: [...(parentSessionId === undefined ? listed : children[parentSessionId] ?? [])] as never[],
+      }))
+    })
+  }
+
+  it('pulls the listed scope and keeps a read child across later pulls and a removal frame', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const child = summary(S2, { parentSessionId: S1, origin: 'subagent', running: true })
+    listByScope(remote, [summary(S1)], { [S1]: [child] })
+    await manager.refreshList()
+    expect(remote.session.list).toHaveBeenCalledExactlyOnceWith({ scope: 'listed' })
+
+    await manager.loadChildren(S1)
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toMatchObject({
+      parentSessionId: S1, origin: 'subagent', running: true,
+    })
+    // The listed pull omits subagent rows: the read row must survive it with
+    // the values later frames applied.
+    manager.handleSessionStatus(S2, false)
+    await manager.refreshList()
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toMatchObject({
+      parentSessionId: S1, origin: 'subagent', running: false,
+    })
+
+    manager.handleSessionRemoved(S2)
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toMatchObject({
+      parentSessionId: S1, origin: 'subagent', running: false,
+    })
+  })
+
+  it('reads an addressed child parent\'s children so the opened row reaches the list', async ({ mock, remote }) => {
+    const address: SubagentAddress = { parentSessionId: S1, childSessionId: S2, mode: 'continuable' }
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    listByScope(remote, [], { [S1]: [summary(S2, { parentSessionId: S1, origin: 'subagent' })] })
+    manager.resolveTarget(address)
+
+    await manager.loadChildren(S2)
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toMatchObject({
+      parentSessionId: S1, origin: 'subagent',
+    })
+    // Both reads are memoized: a second open repeats neither request.
+    await manager.loadChildren(S2)
+    expect(remote.session.list.mock.calls.map(([request]) => request)).toEqual([
+      { parentSessionId: S2 },
+      { parentSessionId: S1 },
+    ])
+  })
+
+  it('keeps a failed child read from failing the catalog and retries it', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    remote.session.list.mockResolvedValue(err(new RemoteError('gateway/internal', 'children unavailable', {})))
+    await expect(manager.loadChildren(S1)).resolves.toBeUndefined()
+    expect(manager.getListSnapshot().items).toEqual([])
+    listByScope(remote, [], { [S1]: [summary(S2, { parentSessionId: S1, origin: 'subagent' })] })
+    await manager.loadChildren(S1)
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toBeDefined()
+  })
+
+  it('keeps a mutation applied while the listed pull is in flight', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const child = summary(S2, { parentSessionId: S1, origin: 'subagent', running: true, updatedAt: 100 })
+    listByScope(remote, [summary(S1)], { [S1]: [child] })
+    await manager.refreshList()
+    await manager.loadChildren(S1)
+
+    const response = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.list>>>()
+    remote.session.list.mockImplementationOnce(() => response.promise)
+    const refreshing = manager.refreshList()
+    // Both land while the response is outstanding: the retained row must keep
+    // them instead of reverting to the pre-pull snapshot.
+    manager.handleSessionStatus(S2, false)
+    manager.handleSessionActivity(S2, 200)
+    response.resolve(ok({ items: [summary(S1)] }))
+    await refreshing
+
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toMatchObject({
+      parentSessionId: S1, origin: 'subagent', running: false, updatedAt: 200,
+    })
+  })
+
+  it('walks the addressed ancestor chain so a depth-3 breadcrumb keeps its rows', async ({ mock, remote }) => {
+    const S3 = 'fk-m3' as SessionId
+    const middle: SubagentAddress = { parentSessionId: S1, childSessionId: S2, mode: 'continuable' }
+    const opened: SubagentAddress = { parentSessionId: S2, childSessionId: S3, mode: 'continuable' }
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    listByScope(remote, [summary(S1)], {
+      [S1]: [summary(S2, { parentSessionId: S1, origin: 'subagent' })],
+      [S2]: [summary(S3, { parentSessionId: S2, origin: 'subagent' })],
+    })
+    await manager.refreshList()
+    manager.resolveTarget(middle)
+    manager.resolveTarget(opened)
+
+    await manager.loadChildren(S3)
+    expect(manager.getListSnapshot().items.map(item => [item.sessionId, item.depth])).toEqual([
+      [S1, 0], [S2, 1], [S3, 2],
+    ])
+    // One read per ancestor: the opened Session, its parent, its grandparent.
+    expect(remote.session.list.mock.calls.map(([request]) => request)).toEqual([
+      { scope: 'listed' },
+      { parentSessionId: S3 },
+      { parentSessionId: S2 },
+      { parentSessionId: S1 },
+    ])
+    // Memoized: re-opening repeats none of the ancestor reads.
+    await manager.loadChildren(S3)
+    expect(remote.session.list.mock.calls).toHaveLength(4)
+  })
+
+  it('bounds the ancestry walk at the read limit and warns past it', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    onTestFinished(() => { warn.mockRestore() })
+    remote.session.list.mockResolvedValue(ok({ items: [] }))
+    let parent = 'fk-m1' as SessionId
+    let child = parent
+    for (let index = 0; index < 11; index++) {
+      child = `fk-m${String(index + 2)}` as SessionId
+      manager.resolveTarget({ parentSessionId: parent, childSessionId: child, mode: 'continuable' })
+      parent = child
+    }
+
+    await manager.loadChildren(child)
+    // The opened Session's own children read plus the eight-ancestor limit.
+    expect(remote.session.list.mock.calls).toHaveLength(9)
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it('forgets a retained child a fresh generation no longer lists', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    listByScope(remote, [summary(S1)], {
+      [S1]: [summary(S2, { parentSessionId: S1, origin: 'subagent' })],
+    })
+    await manager.refreshList()
+    await manager.loadChildren(S1)
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toBeDefined()
+
+    // The child is gone from the Host (deleted out of band). The next
+    // generation's children read is the only witness, so retention must not
+    // survive it.
+    listByScope(remote, [summary(S1)], {})
+    manager.handleConnected()
+    await vi.waitFor(() => {
+      expect(manager.getListSnapshot().items.some(item => item.sessionId === S2)).toBe(false)
+    })
+
+    // A later pull that omits the row cannot re-establish retention either.
+    await manager.refreshList()
+    expect(manager.getListSnapshot().items.some(item => item.sessionId === S2)).toBe(false)
+  })
+
+  it('re-reads known parents on reconnect so a child that finished offline stops running', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    listByScope(remote, [summary(S1)], {
+      [S1]: [summary(S2, { parentSessionId: S1, origin: 'subagent', running: true })],
+    })
+    await manager.refreshList()
+    await manager.loadChildren(S1)
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)?.running).toBe(true)
+
+    // The completion frame was lost with the connection; only the fresh read
+    // carries the corrected running bit.
+    listByScope(remote, [summary(S1)], {
+      [S1]: [summary(S2, { parentSessionId: S1, origin: 'subagent', running: false })],
+    })
+    manager.handleConnected()
+    await vi.waitFor(() => {
+      expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)?.running).toBe(false)
     })
   })
 })
