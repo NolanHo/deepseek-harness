@@ -288,8 +288,16 @@ export class UiSession extends Service {
    * may be absent from the store without having been removed.
    */
   private readonly observedRunning = new Set<SessionId>()
-  /** `byId` keys of the previous snapshot: a stored row that disappears was removed. */
+  /** `byId` keys of the previous snapshot: the rows the store carried. */
   private presentBefore: ReadonlySet<SessionId> = new Set()
+  /**
+   * `ids` keys of the previous snapshot: a removed Session is one that was a
+   * Host-list member and left the store. A catalog-derived child row lives in
+   * `byId` alone and leaves whenever its parent's catalog is unavailable (a
+   * connection reset clears every projection store), so that absence keeps its
+   * status.
+   */
+  private listBefore: ReadonlySet<SessionId> = new Set()
   private statusSnapshot: SessionStatusSnapshot = new Map()
   private readonly statusListeners = new Set<() => void>()
   private mainRetainId: SessionId | undefined
@@ -521,12 +529,17 @@ export class UiSession extends Service {
         // id the client watched run keeps its status until its row disappears
         // from the store, while an id never observed as a session retires.
         if (this.observedRunning.has(id) && !this.presentBefore.has(id)) continue
+        // A row that was stored but never a Host-list member is projection-
+        // derived: its absence reports the catalog's availability, not a
+        // Session removal.
+        if (this.presentBefore.has(id) && !this.listBefore.has(id)) continue
         this.running.delete(id)
         this.completionUnread.delete(id)
         this.observedRunning.delete(id)
       }
     }
     this.presentBefore = present
+    this.listBefore = new Set(list.ids)
     this.publishStatus()
   }
 

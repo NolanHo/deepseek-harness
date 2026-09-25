@@ -1002,6 +1002,27 @@ describe('SubagentHeaderLineage', () => {
     expect(input.refreshProjection).not.toHaveBeenCalled()
   })
 
+  it('loads an absent switcher parent catalog when the interaction opens it', () => {
+    const input = {
+      ...props(undefined, {}, {
+        [CHILD]: {
+          ...summary(CHILD, 1), parentId: PARENT, origin: 'subagent' as const,
+          displayTitle: '正在扫描项目文件',
+        },
+      }, { parentSessionId: PARENT, childSessionId: CHILD, mode: 'continuable' }),
+      lineageSessionId: CHILD,
+      displayTitle: '正在扫描项目文件',
+    }
+    render(<HeaderCatalog {...input} />)
+
+    // A restored subagent address knows its parent id but no parent catalog:
+    // opening the switcher is the interaction that must start the lazy read,
+    // otherwise the tree shows a loading notice that nothing ever resolves.
+    hoverCatalog(screen.getByRole('button', { name: '切换子智能体：正在扫描项目文件' }))
+    expect(screen.getByRole('tree')).toBeTruthy()
+    expect(input.refreshProjection).toHaveBeenCalledWith(PARENT)
+  })
+
   it('keeps a nested title switcher scoped to its direct-parent catalog', () => {
     const input = {
       ...props(catalog(), {

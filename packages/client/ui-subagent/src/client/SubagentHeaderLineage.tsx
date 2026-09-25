@@ -507,6 +507,11 @@ function CatalogDropdown({
       if (trigger === null) return
       setOpen(true)
       setMenuPosition(catalogMenuPosition(trigger))
+      // A switcher can mount knowing its parent id but not its parent catalog:
+      // a restored subagent address never read it. Opening the tree is the
+      // interaction that starts the lazy read; without it the tree shows a
+      // loading notice that nothing ever resolves.
+      if (catalog === undefined || catalog.state !== 'ready') refreshProjection(rootSessionId)
     }
     else {
       pinnedRef.current = false

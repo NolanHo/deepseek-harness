@@ -128,8 +128,21 @@ export class SessionManager {
    * where later frames and mutations keep updating them.
    */
   private readonly retainedChildIds = new Set<SessionId>()
+  /**
+   * Sessions removed since this generation's reads started. A children read
+   * response was computed before its removal frame and must not merge the
+   * stale row back; a later add or a fresh generation supersedes the mark.
+   */
+  private readonly removedChildIds = new Set<SessionId>()
   /** Child reads by parent; one request per parent per Host generation. */
   private readonly childReads = new Map<SessionId, Promise<void>>()
+  /**
+   * Host generation a children read belongs to. `handleConnected` advances it
+   * before clearing `childReads`: a response whose generation was superseded
+   * reflects pre-reset state and must neither merge over nor forget against the
+   * state the fresh reads establish.
+   */
+  private childReadGeneration = 0
   private readonly projectionLoads = new Map<SessionId, ProjectionLoad>()
   private readonly projectionInflight = new Map<SessionId, ProjectionInflight>()
 
@@ -563,7 +576,8 @@ export class SessionManager {
    * additions, and a successful read is also the membership authority for that
    * parent: retained child rows the Host no longer returns are forgotten, so a
    * deletion cannot leave a phantom row. A failed read retries on the next open
-   * instead of failing it.
+   * instead of failing it, and a response from a superseded Host generation is
+   * discarded because the fresh reads own the catalog then.
    * @param parentSessionId - parent whose direct children are requested.
    * @returns completion of the current or newly started read.
    */
@@ -573,10 +587,11 @@ export class SessionManager {
     // Children retained when the read starts. A frame can add a child while the
     // read is in flight; that row is not a candidate for this response's removal.
     const candidates = this.retainedChildrenOf(parentSessionId)
+    const generation = this.childReadGeneration
     const operation = (async () => {
       try {
         const result = await this.remote.session.list({ parentSessionId })
-        if (this.disposed) return
+        if (this.disposed || generation !== this.childReadGeneration) return
         if (!result.ok) {
           this.childReads.delete(parentSessionId)
           return
@@ -589,7 +604,7 @@ export class SessionManager {
           if (!present.has(sessionId)) this.forgetRetainedChild(sessionId)
         }
       } catch (error: unknown) {
-        this.childReads.delete(parentSessionId)
+        if (generation === this.childReadGeneration) this.childReads.delete(parentSessionId)
         // A read failure is a degradation, not an open failure: the listed rows
         // stay authoritative. Anything but a Remote failure is a defect.
         if (!isRemoteFailure(error)) {
@@ -846,6 +861,8 @@ export class SessionManager {
    */
   handleSessionAdded(summary: SessionSummary): void {
     if (summary.origin === 'subagent') this.retainedChildIds.add(summary.sessionId)
+    // An add is newer than an earlier removal of the same identity.
+    this.removedChildIds.delete(summary.sessionId)
     this.mergeSummary(summary)
     this.applyAddedSession(summary)
   }
@@ -860,23 +877,30 @@ export class SessionManager {
    * row values and positions (the shared {@link mergeSummaryRow}), the same
    * mutation entries in the same order, no rebuild when no row moved, and the
    * same retained-child, engagement, blank, projection-block and parent-
-   * availability effects.
+   * availability effects. A row whose removal frame arrived after this
+   * response was computed stays out of the merge: the removal is the newer
+   * fact, and it already holds the row in its post-removal form.
    * @param children - every row one children read returned, in response order.
    */
   private mergeChildren(children: readonly SessionSummary[]): void {
     if (children.length === 0) return
-    for (const child of children) {
+    // A removal observed after this response was computed is newer than the
+    // row it carries, so the response must not raise the removed row's state
+    // back. The removal already holds the row in its post-removal form.
+    const mergeable = children.filter(child => !this.removedChildIds.has(child.sessionId))
+    if (mergeable.length === 0) return
+    for (const child of mergeable) {
       if (child.origin === 'subagent') this.retainedChildIds.add(child.sessionId)
     }
     if (!this.disposed) {
-      for (const child of children) this.listMutations?.push({ kind: 'upsert', summary: child })
-      const merged = mergeSummaryRows(this.summaries, children)
+      for (const child of mergeable) this.listMutations?.push({ kind: 'upsert', summary: child })
+      const merged = mergeSummaryRows(this.summaries, mergeable)
       if (merged !== this.summaries) {
         this.summaries = merged
         this.notifier.markDirty()
       }
     }
-    for (const child of children) this.applyAddedSession(child)
+    for (const child of mergeable) this.applyAddedSession(child)
     // Once for the batch: a per-child pass recomputed the same parent rows from
     // the same array (and its find is a scan of every summary).
     this.updateParentAvailability()
@@ -922,6 +946,9 @@ export class SessionManager {
    * @param sessionId - removed Session identity.
    */
   handleSessionRemoved(sessionId: SessionId): void {
+    // A children read already in flight keeps a row computed before this
+    // removal; remember the removal so that response cannot revive the row.
+    this.removedChildIds.add(sessionId)
     // A child read for an opened Session is durable history even though the
     // listed scope omitted it: keep its status row rather than removing it.
     const durableSubagent = this.subagentAddress(sessionId) !== undefined
@@ -1001,7 +1028,11 @@ export class SessionManager {
     for (const { controller } of this.projectionInflight.values()) controller.abort()
     this.projectionInflight.clear()
     this.projectionLoads.clear()
+    // Advance before clearing: every response from the superseded generation
+    // is discarded on arrival instead of merging over the fresh reads below.
+    this.childReadGeneration++
     this.childReads.clear()
+    this.removedChildIds.clear()
     for (const parentSessionId of parents) void this.refreshProjections(parentSessionId)
     for (const parentSessionId of childParents) void this.readChildren(parentSessionId)
     // Fork patch (FORK_SURFACE.md): a carrier reset aborts every logical stream;

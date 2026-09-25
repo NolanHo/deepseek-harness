@@ -1,6 +1,7 @@
 /** Running-state ownership across the real Controller catalog and UI status source. */
 import { expect, vi } from 'vitest'
 import { ok } from '@deepseek-ai/dsh-remote-mock'
+import { ClientSessions } from '@deepseek-ai/dsh-api-session-controller/src/client/sessions/service.ts'
 import { createClientTest, webApp } from '@deepseek-ai/dsh-client-test-runtime/src/assembly/index.ts'
 import { SESSION_FORMAT_VERSION, type SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionFollowFrame } from '@deepseek-ai/dsh-api-session-controller/types'
@@ -61,4 +62,40 @@ it('preserves unlisted child status through metadata updates and main view ackno
   reference.release()
   await client.flush()
   expect(ui.sessionStatus.getSnapshot().get(childId)?.completionUnread).toBe(false)
+})
+
+it('keeps a catalog-only child status when a generation reset clears projection stores', async ({ mock, start }) => {
+  mock.remote.session.list.mockResolvedValue(ok({ items: [{
+    sessionId: parentId, updatedAt: 1, running: false, blank: false, agentAvailable: true,
+    projections: {
+      kind: 'sequenced',
+      asOfSeq: 5,
+      values: { subagentCatalog: [{ id: childId, createdAt: 1, mode: 'continuable', label: 'Child' }] },
+    },
+  }] }))
+  const client = await start()
+  const sessions = client.ctx.sessions
+  const ui = client.ctx.uiSession
+  await sessions.refresh()
+  await client.flush()
+  // The child row comes from the parent catalog alone: no children read
+  // landed, so the row is not a Host-list member.
+  expect(sessions.list.getSnapshot().ids).not.toContain(childId)
+  expect(sessions.list.getSnapshot().byId[childId]).toBeDefined()
+
+  mock.streams.push('$events', { type: 'emit', event: 'api-session/status', args: [childId, true] })
+  await mock.streams.drained('$events')
+  await client.flush()
+  expect(ui.sessionStatus.getSnapshot().get(childId)).toMatchObject({ running: true })
+
+  // The generation reset clears every projection store; the child row leaves
+  // the store until the re-pull re-ships the catalog. That absence is not a
+  // session removal, so the observed running bit survives it.
+  const controller = sessions as ClientSessions
+  controller.handleConnected()
+  await client.flush()
+  await vi.waitFor(() => {
+    expect(sessions.list.getSnapshot().byId[childId]).toBeDefined()
+  })
+  expect(ui.sessionStatus.getSnapshot().get(childId)).toMatchObject({ running: true })
 })

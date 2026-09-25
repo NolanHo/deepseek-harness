@@ -1468,6 +1468,118 @@ describe('scoped children', () => {
       expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)?.running).toBe(false)
     })
   })
+
+  it('treats a complete children read as membership authority and forgets only the omitted child', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const sibling = 'fk-child-b' as SessionId
+    const childRows = (ids: readonly SessionId[]) => ids.map(id => summary(id, { parentSessionId: S1, origin: 'subagent' }))
+    listByScope(remote, [summary(S1)], { [S1]: childRows([S2, sibling]) })
+    await manager.refreshList()
+    await manager.loadChildren(S1)
+    expect(manager.getListSnapshot().items.map(item => item.sessionId)).toContain(S2)
+    expect(manager.getListSnapshot().items.map(item => item.sessionId)).toContain(sibling)
+
+    // The Host children read returns the complete direct-children set (no page
+    // or window bound on session.list), so an omitted retained child is a
+    // deletion witness rather than a partial observation.
+    listByScope(remote, [summary(S1)], { [S1]: childRows([S2]) })
+    manager.handleConnected()
+    await vi.waitFor(() => {
+      expect(manager.getListSnapshot().items.some(item => item.sessionId === sibling)).toBe(false)
+    })
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toBeDefined()
+  })
+
+  it('drops a pre-reconnect children response instead of merging it over the re-read state', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const stale = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.list>>>()
+    const fresh = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.list>>>()
+    let childReads = 0
+    remote.session.list.mockImplementation((payload) => {
+      const { parentSessionId } = payload as { parentSessionId?: SessionId }
+      if (parentSessionId === undefined) return Promise.resolve(ok({ items: [summary(S1)] as never[] }))
+      childReads++
+      return childReads === 1 ? stale.promise : fresh.promise
+    })
+
+    await manager.refreshList()
+    const first = manager.loadChildren(S1)
+    // The generation reset abandons the request in flight and starts a fresh
+    // read; the abandoned response reports the child as it was before the
+    // disconnect.
+    manager.handleConnected()
+    fresh.resolve(ok({
+      items: [summary(S2, { parentSessionId: S1, origin: 'subagent', running: false })] as never[],
+    }))
+    await vi.waitFor(() => {
+      expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)?.running).toBe(false)
+    })
+    stale.resolve(ok({
+      items: [summary(S2, { parentSessionId: S1, origin: 'subagent', running: true })] as never[],
+    }))
+    await first
+
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toMatchObject({
+      parentSessionId: S1, origin: 'subagent', running: false,
+    })
+  })
+
+  it('does not let an in-flight children read resurrect a removed child running bit', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const response = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.list>>>()
+    remote.session.list.mockImplementation((payload) => {
+      const { parentSessionId } = payload as { parentSessionId?: SessionId }
+      return parentSessionId === undefined
+        ? Promise.resolve(ok({ items: [summary(S1)] as never[] }))
+        : response.promise
+    })
+    const child = summary(S2, { parentSessionId: S1, origin: 'subagent', running: true })
+    manager.handleSessionAdded(child)
+    await manager.refreshList()
+    const reading = manager.loadChildren(S1)
+    // The removal is newer than the response the in-flight read is about to
+    // deliver; the response must not raise the running bit it observed before.
+    manager.handleSessionRemoved(S2)
+    response.resolve(ok({ items: [child] as never[] }))
+    await reading
+    expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toMatchObject({
+      parentSessionId: S1, origin: 'subagent', running: false,
+    })
+  })
+
+  it('keeps a stale failed children read from clearing the fresh read memo', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const stale = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.list>>>()
+    const fresh = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.list>>>()
+    let childReads = 0
+    remote.session.list.mockImplementation((payload) => {
+      const { parentSessionId } = payload as { parentSessionId?: SessionId }
+      if (parentSessionId === undefined) return Promise.resolve(ok({ items: [summary(S1)] as never[] }))
+      childReads++
+      return childReads === 1 ? stale.promise : fresh.promise
+    })
+
+    await manager.refreshList()
+    const first = manager.loadChildren(S1)
+    manager.handleConnected()
+    fresh.resolve(ok({
+      items: [summary(S2, { parentSessionId: S1, origin: 'subagent' })] as never[],
+    }))
+    await vi.waitFor(() => {
+      expect(manager.getListSnapshot().items.find(item => item.sessionId === S2)).toBeDefined()
+    })
+    // The abandoned request fails after the fresh read settled: its failure
+    // must not clear the fresh memo, or the next open pays a third read.
+    stale.reject(new RemoteError('gateway/internal', 'stale read down', {}))
+    await first
+    const calls = remote.session.list.mock.calls.length
+    await manager.loadChildren(S1)
+    expect(remote.session.list.mock.calls).toHaveLength(calls)
+  })
 })
 
 describe('remaining branches', () => {
