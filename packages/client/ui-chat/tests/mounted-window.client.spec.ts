@@ -135,6 +135,21 @@ describe('mounted window plan', () => {
     expect(planned(['head', 'n0', 'tail'])).toEqual([node('head'), group('g'), node('tail')])
   })
 
+  it('does not cache a resolution whose member run had no resident end', () => {
+    // `g1` heads a run that ends on `x`, which the order does not carry yet: the
+    // run renders nothing, and only a key past the window can end it.
+    const entries = [group('g1'), node('x')]
+    const order = keys(60)
+    const planned = (resident: readonly string[], source: readonly RenderEntry[]): readonly RenderEntry[] =>
+      planMountedWindow(source, resident, { kind: 'frozen', head: 'k0' }, false).entries
+    expect(planned(order, entries)).toEqual([])
+    // `x` becomes resident past the unchanged window slice, which ends the run
+    // over the mounted rows: the same pairing a fresh entries identity reports.
+    const grown = [...order, 'x']
+    expect(planned(grown, entries)).toEqual([group('g1')])
+    expect(planned(grown, [group('g1'), node('x')])).toEqual([group('g1')])
+  })
+
   it('visits only the window slice as the resident order grows', () => {
     let visits = 0
     // One root entry per resident row, plus the group whose members keep arriving:
@@ -165,7 +180,9 @@ describe('mounted window anchor keys', () => {
     expect(orderIndexOfAnchor(['k0', 'k1'], '["k1","reasoning"]')).toBe(1)
     expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process","k1","reasoning"]')).toBe(1)
     expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process","k1",null]')).toBe(1)
-    expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process",null,"k1"]')).toBe(1)
+    // The group part sits after the member key: a key in its place names no member.
+    expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process",null,"k1"]')).toBe(-1)
+    expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process","missing","k1"]')).toBe(-1)
     expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process","missing",null]')).toBe(-1)
     expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["broken')).toBe(-1)
     expect(orderIndexOfAnchor(['k0', 'k1'], '["missing","reasoning"]')).toBe(-1)
@@ -202,6 +219,7 @@ describe('mounted window hook', () => {
     // A following reader owns no row inside the window: moving the head would
     // unmount the newest rows the reading policy still reports as followed, so
     // the click pages resident history in instead.
+    expect(result.current.revealable).toBe(false)
     act(() => { expect(result.current.reveal()).toBe(false) })
     expect(result.current.atTail).toBe(true)
     expect(result.current.tailMounted).toBe(true)
@@ -222,6 +240,7 @@ describe('mounted window hook', () => {
     const { result } = bind(input({ order, followingTail: false, anchorKey: 'k70' }))
     expect(result.current.headKey).toBe('k45')
     expect(result.current.canReveal).toBe(true)
+    expect(result.current.revealable).toBe(true)
     act(() => { expect(result.current.reveal()).toBe(true) })
     expect(result.current.headKey).toBe('k21')
     expect(result.current.keys.has('k70')).toBe(true)
@@ -229,6 +248,8 @@ describe('mounted window hook', () => {
     // The clamp stops the head once the reader row would leave the window.
     act(() => { expect(result.current.reveal()).toBe(false) })
     expect(result.current.headKey).toBe('k21')
+    expect(result.current.canReveal).toBe(true)
+    expect(result.current.revealable).toBe(false)
   })
 
   it('adopts the session reader row and holds the reader row across a prepend', () => {
@@ -297,6 +318,7 @@ describe('mounted window hook', () => {
     act(() => { expect(result.current.hold('k30')).toBe(true) })
     expect(result.current.headKey).toBe('k5')
     rerender({ ...props, anchorKey: 'k95' })
+    expect(result.current.revealable).toBe(false)
     act(() => { expect(result.current.reveal()).toBe(false) })
   })
 

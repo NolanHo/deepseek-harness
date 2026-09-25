@@ -249,14 +249,17 @@ export function ChatView({
   const pendingJump = useRef<{ readonly item: TurnRailItem; readonly awaited: boolean } | null>(null)
 
   // The commit that re-mounts the tail replaces a frozen window's floor with the
-  // transcript floor, so the landing is re-issued against the mounted rows.
+  // transcript floor, so the landing is re-issued against the mounted rows. A
+  // window reaches the newest resident row while the reader's own row is still
+  // within one reveal step of it, and that reader owns their position: only a
+  // cleared scroll memory means the reading policy took the tail back.
   const wasAtTail = useRef(mounted.atTail)
   const landAtTail = scroll.returnToBottom
   useLayoutEffect(() => {
     const previous = wasAtTail.current
     wasAtTail.current = mounted.atTail
-    if (mounted.atTail && !previous) landAtTail()
-  }, [landAtTail, mounted.atTail])
+    if (mounted.atTail && !previous && chatScroll.read() === null) landAtTail()
+  }, [chatScroll, landAtTail, mounted.atTail])
 
   // The frozen window mounts the session's saved row itself, so freezing re-arms
   // the reflow hold from that row instead of the capture the restore fell back to.
@@ -344,8 +347,9 @@ export function ChatView({
               </div>
             )}
             {/* Fork patch (FORK_SURFACE.md): resident rows the window dropped are
-                reachable before the next server page. */}
-            {(hasMore || mounted.canReveal) && (
+                reachable before the next server page, and a reveal the reader's own
+                row cannot move leaves the control out. */}
+            {(hasMore || (mounted.canReveal && mounted.revealable)) && (
               <div className={css.older}>
                 <button type="button" disabled={loadingOlder} onClick={loadEarlier}>
                   {loadingOlder ? t('loading') : t('chat.loadOlder')}

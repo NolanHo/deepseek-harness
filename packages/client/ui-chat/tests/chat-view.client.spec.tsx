@@ -4252,4 +4252,54 @@ describe('ChatView mounted window', () => {
     expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).not.toBeNull()
     expect(h.chatScroll.read()).toBeNull()
   })
+
+  it('keeps a reader one step above the tail window where they are', () => {
+    installReaderGeometry()
+    const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows })
+    h.chatScroll.save({ anchorKey: 'fixture:user:135', anchorTop: 0, scrollTop: 0 })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[data-chat-flow]')!.parentElement as HTMLDivElement
+    installScrollMetrics(scroller, 2_400, 400)
+    // jsdom has no layout: one row every 40 px, laid out from the scroll offset.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const key = this.dataset.chatFlowKey
+      if (key === undefined) return { top: 0, bottom: 400 } as DOMRect
+      const top = (Number(key.slice('fixture:user:'.length)) - 101) * 40 - scroller.scrollTop
+      return { top, bottom: top + 40 } as DOMRect
+    })
+    // The saved row sits one step above the row whose window reaches the tail:
+    // the newest resident rows stay unmounted, and the reader still owns a row.
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).toBeNull()
+    expect(h.chatScroll.read()?.anchorKey).toBe('fixture:user:135')
+    // The reader scrolls one row down: their settled sample saves that row, which
+    // mounts the window on the tail slice while the reader keeps their place.
+    readerScroll(scroller, 1_400)
+    expect(h.chatScroll.read()?.anchorKey).toBe('fixture:user:136')
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).not.toBeNull()
+    expect(scroller.scrollTop).toBe(1_400)
+  })
+
+  it('offers no earlier-rows control to a reader who owns the live tail', () => {
+    const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows })
+    const view = render(<h.ChatView {...h.props} />)
+    // Resident rows above the window stay dropped, and the reveal the control
+    // would offer cannot move the head for a reader who owns no row.
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:101"]')).toBeNull()
+    expect(view.queryByText('加载更早')).toBeNull()
+  })
+
+  it('drops the earlier-rows control once the reader row holds the head', () => {
+    installReaderGeometry()
+    const rows = Array.from({ length: 160 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows })
+    h.chatScroll.save({ anchorKey: 'fixture:user:171', anchorTop: 0, scrollTop: 0 })
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.getByText('加载更早')).toBeTruthy()
+    fireEvent.click(view.getByText('加载更早'))
+    // The reader's row clamps the head, and the session has no older page left.
+    expect(h.loadOlder).not.toHaveBeenCalled()
+    expect(view.queryByText('加载更早')).toBeNull()
+  })
 })

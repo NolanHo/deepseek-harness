@@ -62,6 +62,12 @@ export interface MountedWindowState extends MountedWindowPlan {
    * @returns whether the head moved; false at the oldest row the reader can reveal.
    */
   readonly reveal: () => boolean
+  /**
+   * Whether a reveal gesture would still move the window head. The reader's own
+   * row clamps the head, so a reader who owns no row, or a head the reader row
+   * already holds back, makes the gesture a no-op.
+   */
+  readonly revealable: boolean
   /** Release the frozen window back to the live tail. */
   readonly release: () => void
 }
@@ -129,24 +135,19 @@ function memberNodeKey(anchorKey: string): string | null {
 
 /**
  * Resident index a `group:`-prefixed anchor names. `process-groups.ts` builds the
- * group key as `["process", <first member key>, <group part>]`, so the block's
- * first resident member is the row the anchor sits on; a group key whose members
- * all left the order names none.
+ * group key as `["process", <first member key>, <group part | null>]`, so the
+ * member key follows the literal tag and the block's first resident member is the
+ * row the anchor sits on; a member key that left the order names none. The group
+ * part after it is a part name (`reasoning`, `response`), never a Node key.
  * @param order - resident Node keys in transcript order.
  * @param anchorKey - a rendered `group:<groupKey>` anchor.
- * @returns its index in `order`, or -1 when no embedded key is resident.
+ * @returns its index in `order`, or -1 when the embedded member key is not resident.
  */
 function groupAnchorIndex(order: readonly string[], anchorKey: string): number {
   try {
     const parts = JSON.parse(anchorKey.slice('group:'.length)) as readonly unknown[]
-    // The literal tag precedes every key, so the first resident element is a member.
-    for (let at = 1; at < parts.length; at++) {
-      const part = parts[at]
-      if (typeof part !== 'string') continue
-      const index = order.indexOf(part)
-      if (index >= 0) return index
-    }
-    return -1
+    const member = parts[1]
+    return typeof member === 'string' ? order.indexOf(member) : -1
   } catch {
     // A grouped anchor that does not parse names no resident row.
     return -1
@@ -197,6 +198,16 @@ function entriesByKey(entries: readonly RenderEntry[]): ReadonlyMap<string, read
   return index
 }
 
+/** One owner walk: the mounted entries and how far the pairing reached. */
+interface OwnerWalk {
+  /** Mounted entry indices in transcript order. */
+  readonly mounted: readonly number[]
+  /** Whether every member run ended on a resident root key. */
+  readonly closed: boolean
+  /** Whether the walk paired the whole resident order. */
+  readonly covered: boolean
+}
+
 /**
  * Pair every entry with the resident order and collect the mounted ones. One
  * owner walk: every order key belongs to the entry that renders it, and a group
@@ -204,16 +215,22 @@ function entriesByKey(entries: readonly RenderEntry[]): ReadonlyMap<string, read
  * which is why an entries-only cap cannot bound the DOM. The walk visits the
  * whole resident history, so callers use it only where a window cannot bound
  * the range it needs.
+ *
+ * The walk also reports whether it closed every run and paired every resident
+ * row. A run whose following root key is not resident ends where it starts, so a
+ * key that becomes resident later moves that run without moving the window; a
+ * walk that stopped short of the order left rows the pairing never reached.
  * @param entries - root rendering entries over the whole loaded window.
  * @param order - resident Node keys in transcript order.
  * @param keys - order keys the mounted entries may render.
- * @returns mounted entry indices in transcript order.
+ * @returns the mounted entry indices and the reach of the pairing.
  */
 function walkMounted(
   entries: readonly RenderEntry[], order: readonly string[], keys: ReadonlySet<string>,
-): number[] {
+): OwnerWalk {
   const mounted: number[] = []
   let cursor = 0
+  let closed = true
   for (let index = 0; index < entries.length;) {
     const entry = entries[index] as RenderEntry
     if (entry.kind === 'node') {
@@ -231,6 +248,7 @@ function walkMounted(
     while (next < entries.length && (entries[next] as RenderEntry).kind === 'group') next++
     const following = entries[next]
     const found = following === undefined ? -1 : order.indexOf(following.key, cursor)
+    if (following !== undefined && found < 0) closed = false
     const end = following === undefined ? order.length : found < 0 ? cursor : found + 1
     for (let at = cursor; at < end; at++) {
       if (!keys.has(order[at] as string)) continue
@@ -240,7 +258,7 @@ function walkMounted(
     cursor = end
     index = next
   }
-  return mounted
+  return { mounted, closed, covered: cursor === order.length }
 }
 
 /**
@@ -312,6 +330,13 @@ function sameSlice(slice: readonly string[], order: readonly string[], head: num
  * Resolve a frozen window's mounted entries, reusing the last resolution while
  * the resident keys it was paired against keep their identities: a resident
  * append leaves that slice untouched, so the pairing walk runs once per window.
+ *
+ * A resolution is reusable from that slice alone only when the walk closed every
+ * member run and paired the whole resident order. A run left open ends where a
+ * key that is not resident yet would sit, so that key's later arrival moves the
+ * run without moving the slice, and rows the walk never paired leave the same
+ * doubt. Anything else is recomputed, and a resolution an earlier order stored
+ * for this head key is dropped.
  * @param entries - root rendering entries over the whole loaded window.
  * @param order - resident Node keys in transcript order.
  * @param headKey - resident key the frozen window starts on.
@@ -333,9 +358,11 @@ function frozenMounted(
   if (cached !== undefined && cached.slice.length === count && sameSlice(cached.slice, order, head)) {
     return cached.mounted
   }
-  const mounted = walkMounted(entries, order, keys)
-  resolutions.set(headKey, { slice: order.slice(head, head + MOUNTED_ROW_LIMIT), mounted })
-  return mounted
+  const walk = walkMounted(entries, order, keys)
+  if (walk.closed && walk.covered) {
+    resolutions.set(headKey, { slice: order.slice(head, head + MOUNTED_ROW_LIMIT), mounted: walk.mounted })
+  } else resolutions.delete(headKey)
+  return walk.mounted
 }
 
 /**
@@ -365,13 +392,13 @@ export function planMountedWindow(
   for (const key of keys) for (const at of entriesByKey(entries).get(key) ?? []) mounted.add(at)
   if (window.kind === 'tail') {
     const blocks = tailBlocks(entries, order, head)
-    if (blocks === null) for (const at of walkMounted(entries, order, keys)) mounted.add(at)
+    if (blocks === null) for (const at of walkMounted(entries, order, keys).mounted) mounted.add(at)
     else for (const at of blocks) mounted.add(at)
   } else {
     for (const at of frozenMounted(entries, order, window.head, head, new Set(windowKeys))) mounted.add(at)
     if (stub) {
       const blocks = tailBlocks(entries, order, tailHead(order))
-      if (blocks === null) for (const at of walkMounted(entries, order, keys)) mounted.add(at)
+      if (blocks === null) for (const at of walkMounted(entries, order, keys).mounted) mounted.add(at)
       else for (const at of blocks) mounted.add(at)
     }
   }
@@ -452,10 +479,19 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     () => planMountedWindow(entries, order, window, running && window.kind === 'frozen'),
     [entries, order, window, running],
   )
+  // A reveal keeps the reader's own row mounted, so that row clamps how far the
+  // head can step up: with no reader row, or one already at the clamp, the
+  // gesture is a no-op the view must not offer.
+  const revealable = useMemo(() => {
+    if (readerRow < 0) return false
+    const head = headIndexOf(window, order)
+    return headKeepingRow(head - REVEAL_ROW_STEP, readerRow) < head
+  }, [order, readerRow, window])
   const tailEntry = entries.at(-1)
   return {
     ...plan,
     tailMounted: tailEntry === undefined || plan.entries.at(-1) === tailEntry,
+    revealable,
     hold,
     reveal,
     release,
