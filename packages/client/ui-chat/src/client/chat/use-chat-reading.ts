@@ -28,6 +28,9 @@ export class ChatReading {
   private sampleTimer: number | null = null
   private probeFrame: number | null = null
   private sampled: ((sample: ReadingSample) => void) | null = null
+  // Fork patch (FORK_SURFACE.md): whether the mounted window resolved the saved
+  // reader row to a resident order key.
+  private anchorResolved = true
 
   constructor(
     private readonly viewport: ChatViewport,
@@ -53,6 +56,15 @@ export class ChatReading {
    * @param store - scroll memory for the current Session.
    */
   setStore(store: PositionStore): void { this.store = store }
+
+  /**
+   * Adopt whether the saved reader row has a resident order key.
+   *
+   * Fork patch (FORK_SURFACE.md): the mounted window resolves the saved anchor
+   * itself, so an anchor it cannot place has no row to restore onto.
+   * @param resolved - whether the mounted window resolved the saved anchor row.
+   */
+  setAnchorResolved(resolved: boolean): void { this.anchorResolved = resolved }
 
   /**
    * Connect history policy to settled reading observations.
@@ -93,6 +105,15 @@ export class ChatReading {
     const landing = this.viewport.restore(saved)
     if (landing === null) return
     this.cancelPending()
+    // Fork patch (FORK_SURFACE.md): the raw-position fallback lands on the mounted
+    // floor rather than the reader's row, so an anchor with no resident row has
+    // nothing to restore onto: keep the saved position and leave the tail
+    // unowned instead of committing the fallback as a tail landing.
+    if (landing.position === null && !this.anchorResolved) {
+      this.commit(landing, false, this.state.activeTurn)
+      this.refreshActiveTurn()
+      return
+    }
     const following = this.follow.nearBottom(landing.metrics)
     this.commit(landing, following, following ? this.viewport.latestTurn : this.state.activeTurn, following)
     if (this.state.followingTail) this.viewport.armReflow(null)
@@ -115,6 +136,9 @@ export class ChatReading {
     this.cancelPending()
     const following = this.follow.nearBottom(landing.metrics)
     this.commit(landing, following, landing.turn ?? (following ? this.viewport.latestTurn : this.state.activeTurn))
+    // Fork patch (FORK_SURFACE.md): the jump's own write suppresses the next
+    // reader sample, so re-arm the reflow hold from the row it landed on.
+    this.viewport.armReflow(following ? null : landing.position)
   }
 
   /**

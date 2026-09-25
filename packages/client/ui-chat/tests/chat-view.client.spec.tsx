@@ -4144,16 +4144,45 @@ describe('ChatView mounted window', () => {
   })
 
   it('reveals resident rows before paging the session', () => {
-    const h = makeHarness({ nodes: Array.from({ length: 60 }, (_, index) => user(index + 1, `row ${index}`)) }, { hasMore: true })
+    installReaderGeometry()
+    const rows = Array.from({ length: 160 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows }, { hasMore: true })
+    h.chatScroll.save({ anchorKey: 'fixture:user:171', anchorTop: 0, scrollTop: 0 })
     const view = render(<h.ChatView {...h.props} />)
-    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:1"]')).toBeNull()
-    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:60"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:101"]')).toBeNull()
     fireEvent.click(view.getByText('加载更早'))
-    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:1"]')).not.toBeNull()
-    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:60"]')).toBeNull()
+    // The reveal steps the head up while the reader's saved row stays mounted.
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:122"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:121"]')).toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:171"]')).not.toBeNull()
     expect(h.loadOlder).not.toHaveBeenCalled()
     fireEvent.click(view.getByText('加载更早'))
     expect(h.loadOlder).toHaveBeenCalledTimes(1)
+  })
+
+  it('pages instead of unmounting the newest rows a following reader sees', () => {
+    const h = makeHarness({ nodes: Array.from({ length: 60 }, (_, index) => user(index + 1, `row ${index}`)) }, { hasMore: true })
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:60"]')).not.toBeNull()
+    fireEvent.click(view.getByText('加载更早'))
+    // A following reader owns no row inside the window, so a reveal would leave
+    // the newest rows unmounted while the chrome still reports following-tail.
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:60"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:1"]')).toBeNull()
+    expect(h.loadOlder).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a saved anchor no mounted row carries instead of landing on the tail', () => {
+    installReaderGeometry()
+    const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows })
+    h.chatScroll.save({ anchorKey: 'call:tool-1', anchorTop: 0, scrollTop: 0 })
+    const view = render(<h.ChatView {...h.props} />)
+    // The saved row has no resident index, so the reader keeps their place and
+    // the view offers the tail instead of silently taking it.
+    expect(h.chatScroll.read()).toEqual({ anchorKey: 'call:tool-1', anchorTop: 0, scrollTop: 0 })
+    fireEvent.click(view.getByRole('button', { name: '回到底部' }))
+    expect(h.chatScroll.read()).toBeNull()
   })
 
   it('mounts an unmounted turn before a rail jump lands on it', async () => {

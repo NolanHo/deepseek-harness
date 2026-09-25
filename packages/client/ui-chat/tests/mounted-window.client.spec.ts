@@ -90,6 +90,27 @@ describe('mounted window plan', () => {
     expect(plan.entries).toEqual([node('a'), node('a')])
   })
 
+  it('mounts a trailing group whose member run holds the window', () => {
+    const plan = planMountedWindow([node('a'), group('g')], ['a', 'b', 'c'], { kind: 'frozen', head: 'a' }, false)
+    expect(plan.entries).toEqual([node('a'), group('g')])
+  })
+
+  it('drops a group whose following root entry left the order', () => {
+    // The run ends on the following entry's key, which no resident row carries.
+    const plan = planMountedWindow([group('g'), node('gone')], ['a', 'b'], { kind: 'frozen', head: 'a' }, false)
+    expect(plan.entries).toEqual([])
+  })
+
+  it('re-pairs from the head when the tail walk cannot close a member run', () => {
+    const entries = [node('a'), group('g'), node('gone')]
+    // The trailing group's follower is not resident, so the run rendered nothing
+    // and the window mounts only the root entry it can place.
+    expect(planMountedWindow(entries, ['a', 'b'], { kind: 'tail' }, false).entries).toEqual([node('a')])
+    const stub = planMountedWindow(entries, ['a', 'b'], { kind: 'frozen', head: 'a' }, true)
+    expect(stub.entries).toEqual([node('a')])
+    expect(stub.keys.has('b')).toBe(true)
+  })
+
   it('holds the resident tail slice beside a frozen window', () => {
     const order = keys(60)
     const entries = order.map(node)
@@ -101,15 +122,55 @@ describe('mounted window plan', () => {
     expect(plan.signature).toBe(`k0:${MOUNTED_ROW_LIMIT}`)
     expect(plan.atTail).toBe(false)
   })
+
+  it('reuses a frozen resolution until its resident key slice moves', () => {
+    const entries = [node('head'), group('g'), node('tail')]
+    const planned = (order: readonly string[]): readonly RenderEntry[] =>
+      planMountedWindow(entries, order, { kind: 'frozen', head: 'head' }, false).entries
+    expect(planned(['head', 'm0', 'm1', 'tail'])).toEqual([node('head'), group('g'), node('tail')])
+    // The same head key and entries identity under different resident keys: the
+    // cached pairing no longer describes this slice.
+    expect(planned(['head', 'n0', 'n1', 'tail'])).toEqual([node('head'), group('g'), node('tail')])
+    // A shorter resident order leaves the cached slice longer than the window.
+    expect(planned(['head', 'n0', 'tail'])).toEqual([node('head'), group('g'), node('tail')])
+  })
+
+  it('visits only the window slice as the resident order grows', () => {
+    let visits = 0
+    // One root entry per resident row, plus the group whose members keep arriving:
+    // the entries identity survives the append, so an append may cost only the
+    // rows the window holds, not the whole root list.
+    const entries = new Proxy([...keys(5_000).map(node), group('g')], {
+      get(target, property, receiver): unknown {
+        if (typeof property === 'string' && /^\d+$/.test(property)) visits += 1
+        return Reflect.get(target, property, receiver)
+      },
+    }) as readonly RenderEntry[]
+    const resident = (members: number): string[] => [...keys(5_000), ...keys(members).map(key => `m${key}`)]
+    planMountedWindow(entries, resident(60), { kind: 'tail' }, false)
+    planMountedWindow(entries, resident(60), { kind: 'frozen', head: 'k0' }, true)
+    visits = 0
+    for (const members of [160, 1_600, 16_000]) {
+      const order = resident(members)
+      expect(planMountedWindow(entries, order, { kind: 'tail' }, false).entries).toContainEqual(group('g'))
+      expect(planMountedWindow(entries, order, { kind: 'frozen', head: 'k0' }, true).entries).toContainEqual(group('g'))
+    }
+    expect(visits).toBeLessThanOrEqual(4 * MOUNTED_ROW_LIMIT)
+  })
 })
 
 describe('mounted window anchor keys', () => {
   it('resolves rendered anchor keys to resident rows', () => {
     expect(orderIndexOfAnchor(['k0', 'k1'], 'k1')).toBe(1)
     expect(orderIndexOfAnchor(['k0', 'k1'], '["k1","reasoning"]')).toBe(1)
-    expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process","k1"]')).toBe(-1)
+    expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process","k1","reasoning"]')).toBe(1)
+    expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process","k1",null]')).toBe(1)
+    expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process",null,"k1"]')).toBe(1)
+    expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["process","missing",null]')).toBe(-1)
+    expect(orderIndexOfAnchor(['k0', 'k1'], 'group:["broken')).toBe(-1)
     expect(orderIndexOfAnchor(['k0', 'k1'], '["missing","reasoning"]')).toBe(-1)
     expect(orderIndexOfAnchor(['k0', 'k1'], '["broken')).toBe(-1)
+    expect(orderIndexOfAnchor(['k0', 'k1'], 'call:tool-1')).toBe(-1)
     expect(orderIndexOfAnchor(['k0', 'k1'], null)).toBe(-1)
   })
 })
@@ -133,20 +194,41 @@ describe('mounted window hook', () => {
     expect(result.current.tailMounted).toBe(true)
   })
 
-  it('starts at the live tail and reveals toward older resident rows', () => {
-    const { result } = bind(input())
+  it('starts at the live tail, which a reveal leaves alone without a reader row', () => {
+    const { result, rerender } = bind(input())
     expect(result.current.atTail).toBe(true)
     expect(result.current.canReveal).toBe(true)
     expect(result.current.entries).toHaveLength(MOUNTED_ROW_LIMIT)
-    act(() => { expect(result.current.reveal()).toBe(true) })
-    expect(result.current.headKey).toBe('k0')
-    expect(result.current.atTail).toBe(false)
-    expect(result.current.canReveal).toBe(false)
-    expect(result.current.tailMounted).toBe(false)
+    // A following reader owns no row inside the window: moving the head would
+    // unmount the newest rows the reading policy still reports as followed, so
+    // the click pages resident history in instead.
     act(() => { expect(result.current.reveal()).toBe(false) })
-    act(() => { result.current.release() })
     expect(result.current.atTail).toBe(true)
     expect(result.current.tailMounted).toBe(true)
+    expect(result.current.entries).toHaveLength(MOUNTED_ROW_LIMIT)
+    rerender(input({ followingTail: false, anchorKey: 'k20' }))
+    expect(result.current.atTail).toBe(false)
+    expect(result.current.keys.has('k20')).toBe(true)
+    // Releasing pairs with the reading policy clearing the saved row, which is
+    // what lets the window stay at the tail.
+    act(() => { result.current.release() })
+    rerender(input({ followingTail: true, anchorKey: null }))
+    expect(result.current.atTail).toBe(true)
+    expect(result.current.tailMounted).toBe(true)
+  })
+
+  it('reveals older rows while the saved reader row stays mounted', () => {
+    const order = keys(130)
+    const { result } = bind(input({ order, followingTail: false, anchorKey: 'k70' }))
+    expect(result.current.headKey).toBe('k45')
+    expect(result.current.canReveal).toBe(true)
+    act(() => { expect(result.current.reveal()).toBe(true) })
+    expect(result.current.headKey).toBe('k21')
+    expect(result.current.keys.has('k70')).toBe(true)
+    expect(result.current.keys.has('k20')).toBe(false)
+    // The clamp stops the head once the reader row would leave the window.
+    act(() => { expect(result.current.reveal()).toBe(false) })
+    expect(result.current.headKey).toBe('k21')
   })
 
   it('adopts the session reader row and holds the reader row across a prepend', () => {
@@ -155,11 +237,28 @@ describe('mounted window hook', () => {
     expect(result.current.atTail).toBe(false)
     expect(result.current.headKey).toBe('k0')
     expect(result.current.keys.has('k20')).toBe(true)
-    // The frozen head key keeps its row when older pages prepend above it.
+    // The window keeps its distance above the reader row when older pages
+    // prepend, which shifts every resident index under it.
     const prepended = [...keys(10).map(key => `old${key}`), ...order]
     rerender(input({ order: prepended, followingTail: false, anchorKey: 'k20' }))
-    expect(result.current.headKey).toBe('k0')
+    expect(result.current.headKey).toBe('oldk5')
     expect(result.current.keys.has('k20')).toBe(true)
+    expect(result.current.entries).toHaveLength(MOUNTED_ROW_LIMIT)
+  })
+
+  it('freezes on a saved group anchor and keeps the row it names mounted', () => {
+    const order = keys(60)
+    const anchorKey = `group:${JSON.stringify(['process', 'k20', 'reasoning'])}`
+    const { result } = bind(input({ order, followingTail: false, anchorKey }))
+    expect(result.current.atTail).toBe(false)
+    expect(result.current.keys.has('k20')).toBe(true)
+    expect(result.current.entries).toHaveLength(MOUNTED_ROW_LIMIT)
+  })
+
+  it('keeps the tail at the resident floor for a saved anchor no row carries', () => {
+    const order = keys(60)
+    const { result } = bind(input({ order, followingTail: false, anchorKey: 'call:tool-1' }))
+    expect(result.current.atTail).toBe(true)
     expect(result.current.entries).toHaveLength(MOUNTED_ROW_LIMIT)
   })
 
@@ -199,6 +298,17 @@ describe('mounted window hook', () => {
     expect(result.current.headKey).toBe('k5')
     rerender({ ...props, anchorKey: 'k95' })
     act(() => { expect(result.current.reveal()).toBe(false) })
+  })
+
+  it('returns a jump-moved window to the tail when the reader owns it again', () => {
+    const order = keys(200)
+    const { result, rerender } = bind(input({ order, followingTail: false, anchorKey: 'k0' }))
+    act(() => { expect(result.current.hold('k100')).toBe(true) })
+    expect(result.current.headKey).toBe('k75')
+    expect(result.current.atTail).toBe(false)
+    rerender(input({ order, followingTail: true, anchorKey: null }))
+    expect(result.current.atTail).toBe(true)
+    expect(result.current.tailMounted).toBe(true)
   })
 
   it('holds the resident tail beside a frozen window while a Turn streams', () => {

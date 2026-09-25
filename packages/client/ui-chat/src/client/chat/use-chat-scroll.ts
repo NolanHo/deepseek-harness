@@ -5,6 +5,8 @@ import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { useChatNavigation, type ChatNavigation, type ChatNavigationInput } from './use-chat-navigation.ts'
 import { useChatReading, type ChatReadingState } from './use-chat-reading.ts'
 import { useChatViewport } from './use-chat-viewport.ts'
+// Fork patch (FORK_SURFACE.md): the mounted window resolves the saved reader row.
+import { orderIndexOfAnchor } from './fork/mounted-window.ts'
 
 /** Committed content and Session operations used to reconcile scroll ownership. */
 export interface ChatScrollInput extends ChatNavigationInput {
@@ -68,6 +70,12 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     if (current.ready && !content.current.opened) {
       content.current.opened = true
       navigation.reset()
+      // Fork patch (FORK_SURFACE.md): the mounted window is the only place that
+      // resolves the saved row, so the restore path learns whether it has one and
+      // keeps an unresolvable saved position instead of flattening it to the tail.
+      reading.setAnchorResolved(
+        orderIndexOfAnchor(current.order, current.chatScroll.read()?.anchorKey ?? null) >= 0,
+      )
       reading.restore()
       return
     }
