@@ -143,6 +143,15 @@ export class ChatReading {
   /** Settle pending reader movement at the browser's scrollend. */
   readonly onScrollEnd = (): void => { this.flushSample() }
 
+  /**
+   * Hold one known reader row for reflows that no prepend compensates.
+   *
+   * Fork patch (FORK_SURFACE.md): the mounted window re-mounts the session's
+   * saved row itself, so its position re-arms the reflow hold.
+   * @param position - semantic reader position to hold; null releases the hold.
+   */
+  hold(position: ChatScrollPosition | null): void { this.viewport.armReflow(position) }
+
   /** Reconcile a layout change without overriding unsampled reader input. */
   onResize(): void {
     if (this.pending) return

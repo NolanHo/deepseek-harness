@@ -4084,3 +4084,143 @@ describe('ChatView', () => {
     expect(failedView.container.querySelector('[data-state="error"]')).not.toBeNull()
   })
 })
+
+describe('ChatView mounted window', () => {
+  const toolInTurn = (seq: number, id: string) => ({ ...toolResult(seq, id), turn: 1 })
+
+  /** One Turn's prompt and answer per number, every Turn closed. */
+  function closedTurns(count: number): { nodes: ConversationNode[]; turnEnds: Map<number, number> } {
+    const nodes: ConversationNode[] = []
+    const turnEnds = new Map<number, number>()
+    for (let turn = 1; turn <= count; turn++) {
+      nodes.push(userInTurn(turn * 2 - 1, `prompt ${turn}`, turn), assistant(turn * 2, `answer ${turn}`, turn))
+      turnEnds.set(turn, turn * 2 + 1)
+    }
+    return { nodes, turnEnds }
+  }
+
+  /** jsdom reports zeroed geometry, where every position reads as the floor. */
+  function installReaderGeometry(): void {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(2_000)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400)
+  }
+
+  function groupedTools(tools: readonly ToolResultNode[]): {
+    snapshot: ChatSnapshot
+    groups: ConversationGroupStore<ProcessGroupData>
+  } {
+    const builder = new ChatSnapshotBuilder()
+    const state = new ProcessState()
+    const groups = new ConversationGroupStore<ProcessGroupData>()
+    const snapshot = installGroupedSnapshot(builder, state, groups, chatSnapshotFixture({
+      nodes: [userInTurn(1, 'prompt', 1), ...tools],
+      turnEnds: new Map([[1, 100]]),
+    }))
+    return { snapshot, groups }
+  }
+
+  it('mounts no more member rows than the window holds for one oversized group', () => {
+    const tools = Array.from({ length: 60 }, (_, index) => toolInTurn(index + 2, `g${index}`))
+    const { snapshot, groups } = groupedTools(tools)
+    const h = makeHarness({ chat: snapshot })
+    h.setGrouped(groups)
+    const view = render(<h.ChatView {...h.props} />)
+    const rows = [...view.container.querySelectorAll<HTMLElement>('[data-step-process-content] > [data-chat-node-key]')]
+    expect(rows.length).toBeLessThanOrEqual(50)
+    expect(rows[0]?.dataset.chatFlowKey).toBe('fixture:tool:g11')
+    expect(rows.at(-1)?.dataset.chatFlowKey).toBe('fixture:tool:g59')
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:tool:g0"]')).toBeNull()
+  })
+
+  it('keeps a folded group mounted and hidden inside the window', () => {
+    const tools = Array.from({ length: 3 }, (_, index) => toolInTurn(index + 2, `f${index}`))
+    const { snapshot, groups } = groupedTools(tools)
+    const h = makeHarness({ chat: snapshot })
+    h.setGrouped(groups)
+    const view = render(<h.ChatView {...h.props} />)
+    const member = view.container.querySelector<HTMLElement>('[data-chat-flow-key="fixture:tool:f0"]')
+    expect(member).not.toBeNull()
+    expect(member?.closest('[hidden]')?.getAttribute('hidden')).toBe('until-found')
+  })
+
+  it('reveals resident rows before paging the session', () => {
+    const h = makeHarness({ nodes: Array.from({ length: 60 }, (_, index) => user(index + 1, `row ${index}`)) }, { hasMore: true })
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:1"]')).toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:60"]')).not.toBeNull()
+    fireEvent.click(view.getByText('加载更早'))
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:1"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:60"]')).toBeNull()
+    expect(h.loadOlder).not.toHaveBeenCalled()
+    fireEvent.click(view.getByText('加载更早'))
+    expect(h.loadOlder).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts an unmounted turn before a rail jump lands on it', async () => {
+    const { nodes, turnEnds } = closedTurns(26)
+    const h = makeHarness({}, {}, chatSnapshotFixture({ nodes, turnEnds }))
+    const view = render(<h.ChatView {...h.props} />)
+    const first = await view.findByRole('button', { name: '跳转到第 1 轮' })
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:1"]')).toBeNull()
+    fireEvent.click(first)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:1"]')).not.toBeNull()
+    expect(view.getByRole('button', { name: '跳转到第 1 轮' }).getAttribute('aria-current')).toBe('true')
+  })
+
+  it('keeps the reader row mounted when a frozen window takes a prepend', () => {
+    installReaderGeometry()
+    const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows })
+    h.chatScroll.save({ anchorKey: 'fixture:user:121', anchorTop: 0, scrollTop: 0 })
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.container.querySelector('[data-chat-anchor-key="fixture:user:121"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-anchor-key="fixture:user:160"]')).toBeNull()
+    act(() => {
+      h.set({ nodes: [...Array.from({ length: 10 }, (_, index) => user(91 + index, `older ${index}`)), ...rows] })
+    })
+    // The frozen head key kept its own row, so the reader's row is still mounted
+    // and the window still holds its bound.
+    expect(view.container.querySelector('[data-chat-anchor-key="fixture:user:121"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-anchor-key="fixture:user:160"]')).toBeNull()
+    expect(view.container.querySelectorAll('[data-chat-flow-key]').length).toBeLessThanOrEqual(50)
+  })
+
+  it('mounts the tail again when the reader sends while frozen', () => {
+    installReaderGeometry()
+    const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows })
+    h.chatScroll.save({ anchorKey: 'fixture:user:121', anchorTop: 0, scrollTop: 0 })
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).toBeNull()
+    act(() => { h.set({ nodes: [...rows, user(161, 'mine')] }) })
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:161"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).not.toBeNull()
+  })
+
+  it('returns a frozen window to the tail from Back to bottom', () => {
+    installReaderGeometry()
+    const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows })
+    h.chatScroll.save({ anchorKey: 'fixture:user:121', anchorTop: 0, scrollTop: 0 })
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).toBeNull()
+    fireEvent.click(view.getByRole('button', { name: '回到底部' }))
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).not.toBeNull()
+    expect(h.chatScroll.read()).toBeNull()
+  })
+
+  it('snaps a frozen window to the tail when the reader reaches its floor', () => {
+    installReaderGeometry()
+    const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows })
+    h.chatScroll.save({ anchorKey: 'fixture:user:121', anchorTop: 0, scrollTop: 0 })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[data-chat-flow]')!.parentElement as HTMLDivElement
+    installScrollMetrics(scroller, 2_000, 400)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).toBeNull()
+    // The mounted floor is not the transcript floor here: resident rows remain below it.
+    readerScroll(scroller, 1_600)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).not.toBeNull()
+    expect(h.chatScroll.read()).toBeNull()
+  })
+})

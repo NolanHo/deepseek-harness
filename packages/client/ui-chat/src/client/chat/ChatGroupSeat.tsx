@@ -126,7 +126,7 @@ const ProcessGroupHeader = memo(function ProcessGroupHeader({ groupKey, useChatG
 })
 
 /** Render a process group with local disclosure and the existing outer-Turn visibility. */
-export const ChatGroupSeat = memo(function ChatGroupSeat({ groupKey, useChatGroup, ...props }: ChatGroupSeatProps) {
+export const ChatGroupSeat = memo(function ChatGroupSeat({ groupKey, useChatGroup, mountedKeys, ...props }: ChatGroupSeatProps) {
   const members = useChatGroup(groupKey, group => group?.members)
   const turn = useChatGroup(groupKey, group => group?.data.turn)
   const closed = useChatGroup(groupKey, group => group?.data.closed)
@@ -166,6 +166,10 @@ export const ChatGroupSeat = memo(function ChatGroupSeat({ groupKey, useChatGrou
     setOpen(!open)
   }, [closed, initialize, open, setOpen])
   if (members === undefined) return null
+  // Fork patch (FORK_SURFACE.md): a mounted window keeps only the members inside
+  // it, and a group whose members all fell outside mounts no box at all.
+  const mountedMembers = mountedKeys === undefined ? members : members.filter(member => mountedKeys.has(member.key))
+  if (mountedMembers.length === 0) return null
   const classes = [css.body, !grouped ? css.expandedBody : '',
     grouped && edges.canScrollUp ? css.fadeTop : '', grouped && edges.canScrollDown ? css.fadeBottom : '']
   return (
@@ -181,7 +185,7 @@ export const ChatGroupSeat = memo(function ChatGroupSeat({ groupKey, useChatGrou
         data-scroll-up={edges.canScrollUp || undefined} data-scroll-down={edges.canScrollDown || undefined}
         {...events}>
         <div ref={contentRef} className={css.content} data-step-process-content data-chat-flow="">
-          <GroupMembers {...props} members={members} />
+          <GroupMembers {...props} members={mountedMembers} />
         </div>
       </div>
     </div>

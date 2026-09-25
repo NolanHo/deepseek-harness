@@ -21,6 +21,9 @@ interface ChatNodeSeatProps extends ChatNodeOwnerProps {
   readonly actions: ChatViewSlotProps['actions']
   readonly renderSlot: ChatViewSlotProps['renderSlot']
   readonly t: ChatViewSlotProps['t']
+  // Fork patch (FORK_SURFACE.md): the mounted transcript window's resident keys,
+  // which a group seat filters its members by.
+  readonly mountedKeys?: ReadonlySet<string>
 }
 
 type RoutedChatNodeOwner = {

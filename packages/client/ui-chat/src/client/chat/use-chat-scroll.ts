@@ -1,7 +1,7 @@
 /** Composes viewport operations, reading policy, and history navigation for Chat. */
 import { useCallback, useLayoutEffect, useMemo, useRef, type RefObject } from 'react'
+import type { ChatScrollPosition, ChatViewSlotProps } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
-import type { ChatViewSlotProps } from '../contract/slots.ts'
 import { useChatNavigation, type ChatNavigation, type ChatNavigationInput } from './use-chat-navigation.ts'
 import { useChatReading, type ChatReadingState } from './use-chat-reading.ts'
 import { useChatViewport } from './use-chat-viewport.ts'
@@ -17,6 +17,9 @@ export interface ChatScrollInput extends ChatNavigationInput {
   readonly submissionId: string | null
   readonly running: boolean
   readonly loadedTurns: ReturnType<ChatSnapshot['navigation']['items']>
+  // Fork patch (FORK_SURFACE.md): the mounted transcript window's identity, so a
+  // moved window re-anchors the reader instead of ResizeObserver timing.
+  readonly mountSignature: string
 }
 
 interface ChatScrollState extends ChatReadingState {
@@ -26,6 +29,9 @@ interface ChatScrollState extends ChatReadingState {
   readonly navigateToTurn: ChatNavigation['navigateToTurn']
   readonly loadEarlier: ChatNavigation['loadEarlier']
   readonly returnToBottom: () => void
+  // Fork patch (FORK_SURFACE.md): the mounted window re-mounts the reader's saved
+  // row, so the view re-arms the reflow hold from the session's scroll memory.
+  readonly holdReader: (position: ChatScrollPosition | null) => void
 }
 
 /**
@@ -37,7 +43,7 @@ interface ChatScrollState extends ChatReadingState {
 export function useChatScroll(input: ChatScrollInput): ChatScrollState {
   const {
     ready, order, firstSeq, lastKey, lastIsUser, steeringId, submissionId, running,
-    loadedTurns, chatScroll, hasMore, loadingOlder, loadOlder, loadThrough,
+    loadedTurns, chatScroll, hasMore, loadingOlder, loadOlder, loadThrough, mountSignature,
   } = input
   const { viewport, listRef, columnRef } = useChatViewport()
   const { reading, state } = useChatReading(viewport, chatScroll, loadedTurns.at(-1)?.turn ?? null)
@@ -120,16 +126,22 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
   useLayoutEffect(() => {
     const previous = content.current.input
     content.current.input = {
-      ready, order, lastKey, lastIsUser, steeringId, submissionId, running, loadedTurns, chatScroll, ...navigationInput,
+      ready, order, lastKey, lastIsUser, steeringId, submissionId, running, loadedTurns, chatScroll,
+      mountSignature, ...navigationInput,
     }
     viewport.updateTurns(loadedTurns)
     const layoutChanged = previous.order !== order || previous.ready !== ready
     if (layoutChanged) viewport.invalidate()
     processContent()
     if (layoutChanged) reading.refreshActiveTurn()
+    // Fork patch (FORK_SURFACE.md): a moved mounted window changes the flow above
+    // the reading line with no prepend to compensate, so re-assert the held row.
+    // A prepended page moves the head with the paging anchor already holding the
+    // reader's row, and re-asserting it here would compensate the same growth twice.
+    if (previous.order[0] === order[0] && previous.mountSignature !== mountSignature) reading.reflow()
   }, [
     viewport, reading, processContent, navigationInput, ready, order, lastKey, lastIsUser,
-    steeringId, submissionId, running, loadedTurns, chatScroll,
+    steeringId, submissionId, running, loadedTurns, chatScroll, mountSignature,
   ])
 
   const returnToBottom = useCallback(() => {
@@ -137,10 +149,16 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     reading.followTail()
   }, [navigation, reading])
 
+  const holdReader = useCallback((position: ChatScrollPosition | null) => {
+    reading.hold(position)
+    if (position !== null) reading.reflow()
+  }, [reading])
+
   return {
     listRef, columnRef, ...state, busyTurn,
     navigateToTurn: navigation.navigateToTurn,
     loadEarlier: navigation.loadEarlier,
     returnToBottom,
+    holdReader,
   }
 }

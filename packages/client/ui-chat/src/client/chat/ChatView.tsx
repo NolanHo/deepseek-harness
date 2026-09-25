@@ -1,7 +1,7 @@
 // An enclosing `[data-conversation-scroll]` owns scrolling when present;
 // otherwise this view owns it. Each row subscribes to one stable node key.
 
-import { memo, useCallback, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import type {
   NodeKey, RenderEntry, RenderMessageImages,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -18,8 +18,10 @@ import { ChatGroupSeat } from './ChatGroupSeat.tsx'
 import { chatRenderKey } from './render-entry.ts'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { TurnNavigator } from './TurnNavigator.tsx'
-import { mergeTurnRailItems } from './turn-rail-items.ts'
+import { mergeTurnRailItems, type TurnRailItem } from './turn-rail-items.ts'
 import { useChatScroll } from './use-chat-scroll.ts'
+// Fork patch (FORK_SURFACE.md): bound the mounted transcript to the reader's window.
+import { useMountedWindow } from './fork/mounted-window.ts'
 import { fileMediaUrl, resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
 import css from './ChatView.module.css'
 
@@ -60,16 +62,24 @@ type ChatNodeListProps = Omit<ComponentProps<typeof ChatNodeSeat>, 'nodeKey' | '
   readonly useChatGroup: ChatViewSlotProps['useChatGroup']
   readonly pendingInputs: readonly PendingInput[]
   readonly lastInputTurn: number | undefined
+  // Fork patch (FORK_SURFACE.md): whether the mounted entries reach the resident tail.
+  readonly mountedTail: boolean
 }
 
-const ChatNodeList = memo(function ChatNodeList({ entries, useChatGroup, pendingInputs, lastInputTurn, ...seatProps }: ChatNodeListProps) {
+const ChatNodeList = memo(function ChatNodeList({
+  entries, useChatGroup, pendingInputs, lastInputTurn, mountedTail, ...seatProps
+}: ChatNodeListProps) {
+  // Fork patch (FORK_SURFACE.md): only a group seat reads the window's key set, and
+  // it moves on every resident append, so a node seat never takes it as a prop.
+  const { mountedKeys, ...nodeProps } = seatProps
   const rows = entries.map((entry) => {
     switch (entry.kind) {
       case 'node':
-        return <ChatNodeSeat {...seatProps} key={chatRenderKey(entry)} nodeKey={entry.key}
+        return <ChatNodeSeat {...nodeProps} key={chatRenderKey(entry)} nodeKey={entry.key}
           {...entry.groupPart === undefined ? {} : { groupPart: entry.groupPart }} />
       case 'group':
-        return <ChatGroupSeat {...seatProps} key={chatRenderKey(entry)} groupKey={entry.key} useChatGroup={useChatGroup} />
+        return <ChatGroupSeat {...nodeProps} key={chatRenderKey(entry)} groupKey={entry.key}
+          useChatGroup={useChatGroup} {...mountedKeys === undefined ? {} : { mountedKeys }} />
       default:
         return assertNever(entry)
     }
@@ -81,7 +91,9 @@ const ChatNodeList = memo(function ChatNodeList({ entries, useChatGroup, pending
     <PendingSteeringBubble key={item.id} content={item.content}
       renderMessageImages={seatProps.renderMessageImages} t={seatProps.t} />
   ))
-  const tail = entries.at(-1)
+  // Fork patch (FORK_SURFACE.md): a frozen window's last mounted entry is not the
+  // resident tail, so the opening echo only splices while the tail is mounted.
+  const tail = mountedTail ? entries.at(-1) : undefined
   const node = tail?.kind === 'node' ? seatProps.nodeStore.get(tail.key) : undefined
   // An empty opening control follows one local transcript echo, never steering.
   // All rows share this keyed list so inserting the control keeps the echo mounted.
@@ -209,6 +221,17 @@ export function ChatView({
   const latestSteering = pendingInputs.findLast(item => 'source' in item)
   const steeringId = latestSteering?.source.kind === 'user' && 'rpcId' in latestSteering.source
     ? latestSteering.source.rpcId : latestSteering?.id ?? null
+  // Fork patch (FORK_SURFACE.md): mount only the reader's window of the resident
+  // order; every loaded page stays resident in the snapshot. The session's scroll
+  // memory is both the reader's row and the tail signal the window transitions on.
+  const readerMemory = chatScroll.read()
+  const mounted = useMountedWindow({
+    entries,
+    order,
+    followingTail: readerMemory === null,
+    anchorKey: readerMemory?.anchorKey ?? null,
+    running,
+  })
   const scroll = useChatScroll({
     ready: openState === 'open',
     order, firstSeq, lastKey, running, loadingOlder, hasMore, chatScroll, loadOlder, loadThrough,
@@ -216,7 +239,89 @@ export function ChatView({
     steeringId,
     submissionId: visibleSubmissions.at(-1)?.requestId ?? null,
     loadedTurns: turnNavigationItems,
+    mountSignature: mounted.signature,
   })
+  /**
+   * Rail target whose jump waits for its row. `awaited` is set when the window
+   * itself was moved for that target, so the jump is re-issued on the commit
+   * that mounts the row instead of landing on whatever row is nearest.
+   */
+  const pendingJump = useRef<{ readonly item: TurnRailItem; readonly awaited: boolean } | null>(null)
+
+  // The commit that re-mounts the tail replaces a frozen window's floor with the
+  // transcript floor, so the landing is re-issued against the mounted rows.
+  const wasAtTail = useRef(mounted.atTail)
+  const landAtTail = scroll.returnToBottom
+  useLayoutEffect(() => {
+    const previous = wasAtTail.current
+    wasAtTail.current = mounted.atTail
+    if (mounted.atTail && !previous) landAtTail()
+  }, [landAtTail, mounted.atTail])
+
+  // The frozen window mounts the session's saved row itself, so freezing re-arms
+  // the reflow hold from that row instead of the capture the restore fell back to.
+  const holdReader = scroll.holdReader
+  const wasFrozen = useRef(false)
+  useLayoutEffect(() => {
+    const frozen = !mounted.atTail
+    const entered = frozen && !wasFrozen.current
+    wasFrozen.current = frozen
+    if (!entered) return
+    const saved = chatScroll.read()
+    if (saved !== null) holdReader(saved)
+  }, [chatScroll, holdReader, mounted.atTail])
+
+  // A jump whose row the window could not hold yet lands on the commit that
+  // brings the row in: an unmounted target mounts here, and a paged target stays
+  // pending until its own page turns the rail item loaded.
+  const hold = mounted.hold
+  const jumpTo = scroll.navigateToTurn
+  useLayoutEffect(() => {
+    const pending = pendingJump.current
+    if (pending === null) return
+    const item = railItems.find(candidate => candidate.turn === pending.item.turn)
+    if (item === undefined || item.anchor.kind !== 'loaded') return
+    if (pending.awaited) {
+      if (hold(item.anchor.key)) return
+      pendingJump.current = null
+      jumpTo(item)
+      return
+    }
+    if (pending.item.anchor.kind !== 'unloaded') { pendingJump.current = null; return }
+    // The page arrived: a row the window already holds is the in-flight jump's own
+    // landing, and re-issuing it would cancel that jump before it settles.
+    if (hold(item.anchor.key)) pendingJump.current = { item, awaited: true }
+    else pendingJump.current = null
+  }, [hold, jumpTo, railItems, mounted.signature])
+
+  const navigateToTurn = useCallback((item: TurnRailItem) => {
+    // Fork patch (FORK_SURFACE.md): mount the target's resident rows first, so the
+    // landing below finds its anchor row in the DOM.
+    if (item.anchor.kind === 'loaded') {
+      pendingJump.current = hold(item.anchor.key) ? { item, awaited: true } : null
+      if (pendingJump.current !== null) return
+    } else pendingJump.current = { item, awaited: false }
+    jumpTo(item)
+  }, [hold, jumpTo])
+
+  const reveal = mounted.reveal
+  const pageEarlier = scroll.loadEarlier
+  const loadEarlier = useCallback(() => {
+    // Fork patch (FORK_SURFACE.md): resident rows the window dropped come back
+    // before the next server page is requested.
+    pendingJump.current = null
+    if (reveal() || !hasMore) return
+    pageEarlier()
+  }, [hasMore, pageEarlier, reveal])
+
+  const release = mounted.release
+  const returnToBottom = useCallback(() => {
+    // Fork patch (FORK_SURFACE.md): the floor of a frozen window is not the
+    // transcript floor; the tail mounts in this commit and the effect re-lands.
+    pendingJump.current = null
+    release()
+    landAtTail()
+  }, [landAtTail, release])
 
   return (
     <div className={css.frame}>
@@ -225,7 +330,7 @@ export function ChatView({
           items={railItems}
           activeTurn={scroll.activeTurn}
           busyTurn={scroll.busyTurn}
-          onNavigate={scroll.navigateToTurn}
+          onNavigate={navigateToTurn}
           t={t}
         />
       )}
@@ -238,16 +343,20 @@ export function ChatView({
                 {t('chat.loadError', { message: openError.message, code: openError.code })}
               </div>
             )}
-            {hasMore && (
+            {/* Fork patch (FORK_SURFACE.md): resident rows the window dropped are
+                reachable before the next server page. */}
+            {(hasMore || mounted.canReveal) && (
               <div className={css.older}>
-                <button type="button" disabled={loadingOlder} onClick={scroll.loadEarlier}>
+                <button type="button" disabled={loadingOlder} onClick={loadEarlier}>
                   {loadingOlder ? t('loading') : t('chat.loadOlder')}
                 </button>
               </div>
             )}
             <MarkdownDelegateProvider openExternalLink={openExternalLink} openFile={requestOpenFile} fileImages={fileImages}>
               <ChatNodeList
-                entries={entries}
+                entries={mounted.entries}
+                mountedKeys={mounted.keys}
+                mountedTail={mounted.tailMounted}
                 pendingInputs={pendingInputs}
                 lastInputTurn={lastInputTurn}
                 nodeStore={nodeStore}
@@ -281,7 +390,7 @@ export function ChatView({
             type="button"
             className={css.toBottom}
             aria-label={t('chat.toBottom')}
-            onClick={scroll.returnToBottom}
+            onClick={returnToBottom}
           >
             <IconChevronDownOutlineRegular />
           </button>
