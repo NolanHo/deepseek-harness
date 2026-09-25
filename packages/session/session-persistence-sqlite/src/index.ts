@@ -19,6 +19,7 @@ import {
   SessionPersistence,
   SessionPersistenceNotFoundError,
   materializeCreateHeader,
+  matchesListSelection,
   type SessionHandle,
   type SessionPersistenceCreateOptions,
   type SessionPersistenceListOptions,
@@ -279,10 +280,11 @@ export class SqliteSessionPersistence extends SessionPersistence {
   }
 
   /**
-   * List every stored session visible to this process: durable rows plus this
-   * process's created-but-unmaterialized sessions.
-   * @param options - optional cancellation.
-   * @returns one snapshot per session, in no promised order.
+   * List the stored sessions visible to this process in a row selection:
+   * durable rows selected in SQL, plus this process's created-but-unmaterialized
+   * sessions that belong to the same selection.
+   * @param options - optional cancellation and row selection.
+   * @returns one snapshot per selected session, in no promised order.
    */
   async list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]> {
     const signal = options?.signal
@@ -292,12 +294,16 @@ export class SqliteSessionPersistence extends SessionPersistence {
     // append lands mid-scan is then still in this snapshot, so
     // create-to-list visibility never has a hole.
     const pending = [...this.tracker.pendingEntries()]
-    for (const stored of await this.store.list(signal)) {
+    for (const stored of await this.store.list(signal, options)) {
       listed.add(stored.header.id)
       snapshots.push({ header: stored.header, revision: stored.revision })
     }
     for (const [id, entry] of pending) {
-      if (!listed.has(id)) snapshots.push({ header: entry.header, revision: entry.revision })
+      // A pending row never reaches the SQL scan, so the same selection is
+      // applied to its in-memory header.
+      if (!listed.has(id) && matchesListSelection(entry.header, options)) {
+        snapshots.push({ header: entry.header, revision: entry.revision })
+      }
     }
     signal?.throwIfAborted()
     return snapshots

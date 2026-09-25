@@ -421,8 +421,12 @@ abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<S
 
 /**
  * List every stored session visible to this process, in no promised order.
- * @param options - optional cancellation.
- * @returns one snapshot per stored session.
+ *
+ * A backend may push the row selection into its own read so an excluded row
+ * is never decoded; one that cannot select in storage returns every row, and
+ * the caller applies the same selection to the returned headers.
+ * @param options - optional cancellation and row selection.
+ * @returns one snapshot per stored session in the selection.
  */
 abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
 ```
