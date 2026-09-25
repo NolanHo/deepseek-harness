@@ -1813,9 +1813,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the current attached state or persisted header and event prefix.',
       },
       {
-        signature: '@Remote(\'list\') async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>',
-        description: 'Read all visible Session rows without resuming an Agent.',
-        parameters: [{ name: '_request', description: 'reserved empty list request.' }, { name: 'signal', description: 'cancellation for persistence reads.' }],
+        signature: '@Remote(\'list\') async list(request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>',
+        description: 'Read the requested Session rows without resuming an Agent.',
+        parameters: [{ name: 'request', description: 'row scope; an absent scope selects the sidebar\'s listed rows.' }, { name: 'signal', description: 'cancellation for persistence reads.' }],
         returns: 'visible Session summaries ordered by activity.',
       },
       {
@@ -2141,9 +2141,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'matching event hits and their target header from one indexed generation.',
       },
       {
-        signature: 'listSessions(signal?: AbortSignal): Promise<SessionRecord[]>',
-        description: 'List the complete logical corpus using live-preferred records.',
-        parameters: [{ name: 'signal', description: 'optional cancellation for persistence listing.' }],
+        signature: 'listSessions(signal?: AbortSignal, scope?: SessionListScope): Promise<SessionRecord[]>',
+        description: 'List the live-preferred logical corpus using cloned records.',
+        parameters: [{ name: 'signal', description: 'optional cancellation for persistence listing.' }, { name: 'scope', description: 'optional row selection; absent keeps the complete corpus.' }],
         returns: 'deterministic newest-first cloned session records.',
       },
       {
@@ -6313,7 +6313,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionListRequest',
-    declaration: 'export interface SessionListRequest {\n    readonly cursor?: string;\n}',
+    declaration: 'export interface SessionListRequest {\n    readonly scope?: \'listed\' | \'all\';\n    readonly parentSessionId?: SessionId;\n    readonly cursor?: string;\n}',
+  },
+  {
+    name: 'SessionListScope',
+    declaration: 'export interface SessionListScope {\n    readonly scope?: \'listed\' | \'all\';\n    readonly parentSessionId?: SessionId;\n}',
   },
   {
     name: 'SessionListValue',

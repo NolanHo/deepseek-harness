@@ -33,6 +33,21 @@ export interface SessionRecord {
   persisted: boolean
 }
 
+/** Row selection for one logical-corpus listing. */
+export interface SessionListScope {
+  /**
+   * Origins the listing keeps: `listed` keeps every row whose origin is not
+   * `subagent` — roots and fork children alike — while `all` keeps every row.
+   * Defaults to `all`.
+   */
+  readonly scope?: 'listed' | 'all'
+  /**
+   * When set, the listing keeps exactly the rows whose `parentSession` is this
+   * id, whatever their origin, and ignores {@link SessionListScope.scope}.
+   */
+  readonly parentSessionId?: SessionId
+}
+
 /** One atomic live-preferred observation of a session's current model surface. */
 export interface SessionSurfaceSnapshot {
   /** Cloned session header selected from the same corpus observation as `events`. */

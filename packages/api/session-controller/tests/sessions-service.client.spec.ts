@@ -121,6 +121,18 @@ describe('list store projection', () => {
   })
 })
 
+describe('list scope request', () => {
+  it('pulls the listed scope so the store never enumerates subagent children', async ({ bench }) => {
+    const b = bench()
+    b.mock.remote.session.list.mockResolvedValue(ok({ items: [] }))
+
+    await b.svc.refresh()
+
+    expect(b.mock.remote.session.list).toHaveBeenCalled()
+    expect(b.mock.remote.session.list.mock.calls.at(-1)?.[0]).toMatchObject({ scope: 'listed' })
+  }, COLD_BOOT_TIMEOUT_MS)
+})
+
 describe('search', () => {
   it('delegates transient content search without changing the list snapshot', async ({ bench }) => {
     const b = bench()

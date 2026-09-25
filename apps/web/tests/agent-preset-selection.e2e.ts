@@ -191,7 +191,7 @@ async function livePreset(scaffold: WebScaffold): Promise<string | undefined> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       type: 'client-request', rpcId: 'agent-preset-live', method: 'session/list',
-      payload: { args: { _request: {} } },
+      payload: { args: { request: {} } },
     }),
   })
   const body = await response.json() as {

@@ -3,7 +3,7 @@
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent, SessionHeader, SessionId , SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type SessionPersistence from '@deepseek-ai/dsh-session-persistence'
-import type { SessionRecord } from './types.ts'
+import type { SessionListScope, SessionRecord } from './types.ts'
 import { SessionQueryError } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
 import { assertSessionHeadersCompatible } from './sources.ts'
@@ -54,14 +54,17 @@ export class SessionCorpus {
   }
 
   /**
-   * List the complete logical corpus with live precedence and cloned headers.
+   * List the logical corpus with live precedence and cloned headers.
    * @param signal - optional cancellation for persistence listing.
+   * @param scope - optional row selection; absent keeps the complete corpus.
    * @returns records in deterministic newest-first order.
    */
-  async listSessions(signal?: AbortSignal): Promise<SessionRecord[]> {
+  async listSessions(signal?: AbortSignal, scope?: SessionListScope): Promise<SessionRecord[]> {
     signal?.throwIfAborted()
     const persistence = this._persistence
-    const persisted = persistence === undefined ? [] : await listPersisted(persistence, signal)
+    const persisted = persistence === undefined
+      ? []
+      : await listPersisted(persistence, signal, scope?.scope)
     signal?.throwIfAborted()
     const records = new Map<SessionId, SessionRecord>()
     for (const header of persisted) {
@@ -76,7 +79,9 @@ export class SessionCorpus {
         persisted: durable !== undefined,
       })
     }
-    return [...records.values()].sort(compareSessions)
+    return [...records.values()]
+      .filter(record => matchesListScope(record, scope))
+      .sort(compareSessions)
   }
 
   /**
@@ -257,9 +262,14 @@ function orderedResults<Value>(
 async function listPersisted(
   persistence: SessionPersistence,
   signal?: AbortSignal,
+  scope?: 'listed' | 'all',
 ): Promise<SessionHeader[]> {
   try {
-    const snapshots = await persistence.list(signal === undefined ? undefined : { signal })
+    const options = {
+      ...(signal === undefined ? {} : { signal }),
+      ...(scope === undefined ? {} : { scope }),
+    }
+    const snapshots = await persistence.list(options)
     return snapshots.map(snapshot => snapshot.header)
   } catch (error: unknown) {
     if (signal?.aborted) signal.throwIfAborted()
@@ -302,6 +312,13 @@ function snapshotLive(session: Session): LogicalSession {
     // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
     events: session.snapshotEvents().map(event => structuredClone(event)),
   }
+}
+
+/** Row-selection predicate for one listing scope. */
+function matchesListScope(record: SessionRecord, scope?: SessionListScope): boolean {
+  if (scope?.parentSessionId !== undefined) return record.header.parentSession === scope.parentSessionId
+  if (scope?.scope === 'listed') return record.header.origin !== 'subagent'
+  return true
 }
 
 function compareSessions(a: SessionRecord, b: SessionRecord): number {

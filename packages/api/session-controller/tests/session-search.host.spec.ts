@@ -94,6 +94,49 @@ function installSearchQuery(
 }
 
 describe('session.search', () => {
+  it('keeps a subagent child searchable: the list scope does not narrow search', async () => {
+    // `session/list` scope is out of scope for the search path, so the search
+    // visibility set stays the complete corpus (a subagent child with a cwd
+    // stays searchable) whatever the enumeration default becomes.
+    const ctx = await baseContext()
+    const child: SessionHeader = {
+      ...header('search-child', '/work'),
+      parentSession: sid('search-parent'),
+      origin: 'subagent',
+    }
+    ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
+      list: () => Promise.resolve([child]),
+    }) as never)
+    const searchSessions = vi.fn((_request: SessionSearchRequest) => Promise.resolve({
+      items: [{
+        header: child,
+        live: false,
+        persisted: true,
+        bestMatch: {
+          sessionId: child.id,
+          seq: 1,
+          type: 'user/message' as const,
+          time: 300,
+          surface: 'current' as const,
+          snippet: 'child match',
+        },
+      }],
+    }))
+    installSearchQuery(ctx, searchSessions)
+
+    const response = await createSessionTestRemote(ctx, defaults).search(
+      request('child match'),
+      new AbortController().signal,
+    )
+
+    expect(response).toEqual({
+      ok: true,
+      value: { items: [{ sessionId: 'search-child', snippet: 'child match' }], hasMore: false },
+    })
+    expect(searchSessions).toHaveBeenCalledOnce()
+    await ctx.fiber.dispose()
+  })
+
   it('rejects search when the query service is absent', async () => {
     const ctx = await baseContext()
     const list = new ApiSessionList(ctx)

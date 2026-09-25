@@ -6,7 +6,7 @@ import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionSnapshot } from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import { SessionQueryError, type SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
+import { SessionQueryError, type SessionListScope, type SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { z } from 'zod'
 import {
@@ -119,13 +119,14 @@ export class ApiSessionList {
   }
 
   /**
-   * Read every visible attached and persisted Session without activating an Agent.
+   * Read the requested attached and persisted Session rows without activating an Agent.
    * @param signal - optional cancellation for persistence reads.
+   * @param scope - optional query-enumeration row selection.
    * @returns visible Session summaries ordered by activity.
    */
-  async list(signal?: AbortSignal): Promise<SessionSummary[]> {
+  async list(signal?: AbortSignal, scope?: SessionListScope): Promise<SessionSummary[]> {
     signal?.throwIfAborted()
-    const records = await this.ctx.sessionQuery.listSessions(signal)
+    const records = await this.ctx.sessionQuery.listSessions(signal, scope)
     signal?.throwIfAborted()
     const items: SessionSummary[] = []
     const cold: SessionHeader[] = []
