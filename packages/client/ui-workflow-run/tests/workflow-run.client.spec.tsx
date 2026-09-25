@@ -849,6 +849,43 @@ describe('WorkflowRunPanel', () => {
     })
   })
 
+  it('resolves every member through one catalog index pass, not one scan per member', () => {
+    const catalogSize = 200
+    const memberCount = 30
+    const entries = Array.from({ length: catalogSize }, (_, at) => ({
+      createdAt: at, id: `child-${at}` as SessionId, mode: 'one-shot' as const,
+    }))
+    let reads = 0
+    const catalog = new Proxy(entries, {
+      get(target, property, receiver): unknown {
+        if (typeof property === 'string' && /^\d+$/.test(property)) reads += 1
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    // Members resolve at the catalog tail, so a per-member scan reads the whole array each time.
+    const members = Array.from({ length: memberCount }, (_, at) => ({
+      seq: at,
+      label: `worker-${at}`,
+      childId: `child-${catalogSize - memberCount + at}` as SessionId,
+      status: 'running' as const,
+    }))
+    const sessions = listState({
+      projectionsBySession: { [PARENT_ID]: { state: 'ready', error: null, values: { subagentCatalog: catalog } } },
+    })
+    const statuses = new Map(members.map(member => [
+      member.childId,
+      { running: true, pendingInteraction: undefined, completionUnread: false },
+    ]))
+    const props = (visible: typeof members): WorkflowRunPanelProps => ({
+      ...panelProps({ name: 'audit', status: 'running', phases: [phase({ members: visible })] }, sessions),
+      useSessionStatus: select => select(statuses),
+    })
+    const view = render(<WorkflowRunPanel {...props([members[0]!])} />)
+    view.rerender(<WorkflowRunPanel {...props(members)} />)
+    expect(screen.getAllByRole('button', { name: /^打开 worker-/ })).toHaveLength(memberCount)
+    expect(reads).toBeLessThanOrEqual(catalogSize)
+  })
+
   it('uses observed running state for a catalog-only member', () => {
     const data: WorkflowRunChatData = { name: 'audit', status: 'running', phases: [phase()] }
     const sessions = listState({

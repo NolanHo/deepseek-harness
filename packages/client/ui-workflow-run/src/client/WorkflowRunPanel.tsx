@@ -7,7 +7,9 @@ import {
   type DisclosureRowProps, type StateDotState,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SessionListState, SessionTarget } from '@deepseek-ai/dsh-api-session-controller/client'
+import type {
+  SessionListState, SessionProjectionSnapshot, SessionTarget,
+} from '@deepseek-ai/dsh-api-session-controller/client'
 import { shallowEqual } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionStatusSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
@@ -180,19 +182,42 @@ function phaseStatusSummary(members: readonly WorkflowRunMemberData[], t: Workfl
   return visible.map(status => statusCount(status, count(status), t)).join(' · ')
 }
 
+/** Direct-child discovery rows one parent Session's projection snapshot carries. */
+type SubagentCatalog = NonNullable<SessionProjectionSnapshot['values']['subagentCatalog']>
+
+/** Child ids one parent catalog carries, indexed once per catalog identity. */
+const catalogIdIndexes = new WeakMap<SubagentCatalog, ReadonlySet<SessionId>>()
+
+/**
+ * Child ids a parent catalog carries, indexed once per `catalog` identity. The
+ * workflow-run selector runs on every Session-store notification, so members
+ * resolve through this index instead of scanning the catalog once per member.
+ * @param catalog - direct-child discovery rows of the member's parent Session.
+ * @returns the child ids this catalog carries.
+ */
+function catalogChildIds(catalog: SubagentCatalog): ReadonlySet<SessionId> {
+  let ids = catalogIdIndexes.get(catalog)
+  if (ids === undefined) {
+    ids = new Set(catalog.map(entry => entry.id))
+    catalogIdIndexes.set(catalog, ids)
+  }
+  return ids
+}
+
 function navigableMembers(
   sessions: SessionListState,
   phases: readonly WorkflowRunPhaseData[],
   parentId: SessionId,
   statuses: SessionStatusSnapshot,
 ): readonly SessionId[] {
-  const catalog = sessions.projectionsBySession[parentId]
+  const catalog = sessions.projectionsBySession[parentId]?.values.subagentCatalog
+  const childIds = catalog === undefined ? undefined : catalogChildIds(catalog)
   const result: SessionId[] = []
   for (const phase of phases) {
     for (const member of phase.members) {
-      const child = catalog?.values.subagentCatalog?.find(entry => entry.id === member.childId)
       if (member.status === 'running'
-        && child !== undefined && (statuses.get(child.id)?.running ?? sessions.byId[child.id]?.running) === true) {
+        && childIds?.has(member.childId) === true
+        && (statuses.get(member.childId)?.running ?? sessions.byId[member.childId]?.running) === true) {
         result.push(member.childId)
       }
     }
