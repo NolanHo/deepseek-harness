@@ -12,7 +12,13 @@ import Hmr from '@deepseek-ai/dsh-hmr'
 import DefaultModel from '@deepseek-ai/dsh-agent-default-model'
 import Settings from '../src/index.ts'
 
-export async function configurationFixture(options: { schema?: z; apply?: (ctx: Context, config: unknown) => void; hmr?: boolean } = {}) {
+export async function configurationFixture(options: {
+  schema?: z
+  apply?: (ctx: Context, config: unknown) => void
+  hmr?: boolean
+  settings?: typeof Settings
+  logs?: (message: { type: string; args: readonly unknown[] }) => void
+} = {}) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'settings-config-')))
   const dir = join(home, 'profiles', 'test')
   onTestFinished(() => { rmSync(home, { recursive: true, force: true }) })
@@ -41,8 +47,13 @@ export async function configurationFixture(options: { schema?: z; apply?: (ctx: 
     const ctx = await boot('test', join(dir, 'cordis.yml'), readProfilePatches('test', profile), (ctx) => {
       ctx.provide('profileContext', profile)
       ctx.provide('appReady', { onReady: (listener: () => void) => { listener(); return () => {} } })
+      if (options.logs !== undefined) {
+        const collect = options.logs
+        // The built-in buffer exporter stops at INFO; this one also records WARN so tests can assert warnings.
+        ctx.logger.exporter({ levels: { default: 2 }, export: (message) => { collect(message) } })
+      }
       Object.assign(ctx.loader.builtins, {
-        editor: ConfigEditor, settings: Settings, model: DefaultModel, probe: Probe,
+        editor: ConfigEditor, settings: options.settings ?? Settings, model: DefaultModel, probe: Probe,
       })
     })
     onTestFinished(async () => { await ctx.fiber.dispose() })
