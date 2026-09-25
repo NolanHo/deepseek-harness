@@ -22,6 +22,15 @@ interface Breadcrumb {
   readonly subagent: boolean
 }
 
+/**
+ * Ancestor chain above one Session, outermost first. Rows come from what the
+ * client store retains: the listed pull plus the children the manager read for
+ * an opened Session. The walk never fetches — a missing row truncates the chain
+ * instead of turning rendering into an unbounded lineage read.
+ * @param list - current Session store snapshot.
+ * @param id - Session whose breadcrumb is rendered.
+ * @returns crumbs from the outermost known ancestor down to that Session.
+ */
 function deriveAncestry(list: SessionListState, id: SessionId): readonly Breadcrumb[] {
   const chain: Breadcrumb[] = []
   const seen = new Set<SessionId>()
