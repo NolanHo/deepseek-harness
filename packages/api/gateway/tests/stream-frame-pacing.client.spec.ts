@@ -1,3 +1,4 @@
+// Fork patch (FORK_SURFACE.md): regression spec for the fork-owned journal frame pacing.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   FRAME_PACING_FRAME_BUDGET,
@@ -34,12 +35,48 @@ class ControlledChannel {
   deliver(): void { this.listener?.() }
 }
 
+/** The host's own `MessageChannel`, captured before a spec stubs the global. */
+const HostMessageChannel = MessageChannel
+
+/**
+ * Real `MessageChannel` that reports the consumer's publish progress each time
+ * the host delivers a ping, so the spec observes the returned event-loop turn
+ * itself instead of racing a timer against the paced loop.
+ */
+class ObservedChannel {
+  /** Publish progress read at delivery; the owning spec points it at its fixture. */
+  static progress: () => number = () => 0
+  /** Publish counts recorded at delivered pings, in host delivery order. */
+  static readonly deliveries: number[] = []
+
+  private readonly channel = new HostMessageChannel()
+
+  readonly port1 = {
+    start: (): void => { this.channel.port1.start() },
+    addEventListener: (_type: 'message', listener: () => void): void => {
+      this.channel.port1.addEventListener('message', () => {
+        ObservedChannel.deliveries.push(ObservedChannel.progress())
+        listener()
+      })
+    },
+    close: (): void => { this.channel.port1.close() },
+  }
+
+  readonly port2 = {
+    postMessage: (value: undefined): void => { this.channel.port2.postMessage(value) },
+    close: (): void => { this.channel.port2.close() },
+  }
+}
+
 const channels: ControlledChannel[] = []
 
-beforeEach(() => { channels.length = 0 })
+beforeEach(() => {
+  channels.length = 0
+  ObservedChannel.progress = () => 0
+  ObservedChannel.deliveries.length = 0
+})
 
 afterEach(() => {
-  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -112,21 +149,38 @@ describe('afterFrame', () => {
     await pending
   })
 
-  it('restarts the batch after an idle gap instead of yielding for a fresh frame', async () => {
+  it('yields once per frame when a single frame spends the time budget', async () => {
+    vi.stubGlobal('MessageChannel', ControlledChannel)
+    const at = frozenClock()
+    const signal = new AbortController().signal
+    const frames = FRAME_PACING_FRAME_BUDGET + 1
+    const yieldedAt: number[] = []
+    let elapsed = 0
+
+    for (let frame = 1; frame <= frames; frame += 1) {
+      // The frame's own downstream work alone: production measured about 122 ms
+      // of folding work per long frame against the 4 ms budget.
+      elapsed += FRAME_PACING_TIME_BUDGET_MS * 2
+      at(elapsed)
+      const started = channels.length
+      const pending = afterFrame(signal)
+      if (channels.length === started) continue
+      yieldedAt.push(frame)
+      channels[started]?.deliver()
+      await pending
+    }
+
+    expect(yieldedAt).toEqual(Array.from({ length: frames - 1 }, (_unused, index) => index + 2))
+    expect(channels).toHaveLength(frames - 1)
+  })
+
+  it('yields on the frame after an idle gap instead of restarting the batch', async () => {
     vi.stubGlobal('MessageChannel', ControlledChannel)
     const at = frozenClock()
     const signal = new AbortController().signal
     await afterFrame(signal)
 
     at(FRAME_PACING_TIME_BUDGET_MS * 3)
-    await afterFrame(signal)
-    expect(channels).toEqual([])
-
-    at(FRAME_PACING_TIME_BUDGET_MS * 3 + 2)
-    await afterFrame(signal)
-    expect(channels).toEqual([])
-
-    at(FRAME_PACING_TIME_BUDGET_MS * 3 + 4)
     const pending = afterFrame(signal)
 
     expect(channels).toHaveLength(1)
@@ -161,33 +215,6 @@ describe('afterFrame', () => {
 
     expect(settled).toBe(true)
     expect(channels[0]?.closedPorts).toBe(2)
-  })
-
-  it('falls back to a timer on a host without MessageChannel', async () => {
-    vi.stubGlobal('MessageChannel', undefined)
-    frozenClock()
-    const signal = new AbortController().signal
-    for (let frame = 1; frame < FRAME_PACING_FRAME_BUDGET; frame += 1) await afterFrame(signal)
-
-    let settled = false
-    const pending = afterFrame(signal).then(() => { settled = true })
-    await drainMicrotasks()
-
-    expect(settled).toBe(false)
-    await pending
-    expect(settled).toBe(true)
-  })
-
-  it('settles a pending fallback timer when the stream is aborted', async () => {
-    vi.stubGlobal('MessageChannel', undefined)
-    vi.useFakeTimers({ toFake: ['setTimeout'] })
-    frozenClock()
-    const lifetime = new AbortController()
-    for (let frame = 1; frame < FRAME_PACING_FRAME_BUDGET; frame += 1) await afterFrame(lifetime.signal)
-
-    const pending = afterFrame(lifetime.signal)
-    lifetime.abort()
-    await pending
   })
 })
 
@@ -225,7 +252,6 @@ class BurstJournal extends RemoteJournalStream<Page, Entry, number, PageRequest>
     private readonly frames: readonly JournalFrame[],
     changes: JournalChange[],
     failed: (error: unknown) => void,
-    onChange: (published: number) => void,
   ) {
     super(STREAM_FACTORY, {
       name: 'burst journal',
@@ -236,10 +262,7 @@ class BurstJournal extends RemoteJournalStream<Page, Entry, number, PageRequest>
       last: entry => entry.seq,
       compare: (left, right) => left - right,
       follows: (left, right) => right === left + 1,
-      publish: (change) => {
-        changes.push(change)
-        onChange(publishedCount(changes))
-      },
+      publish: (change) => { changes.push(change) },
       failed,
     })
   }
@@ -287,10 +310,7 @@ function entrySeqs(changes: readonly JournalChange[]): number[] {
   return seqs
 }
 
-function burstFixture(
-  count: number,
-  onChange: (published: number) => void = () => {},
-): {
+function burstFixture(count: number): {
   readonly journal: RemoteJournalStream<Page, Entry, number, PageRequest>
   readonly changes: JournalChange[]
   readonly failed: ReturnType<typeof vi.fn>
@@ -304,7 +324,7 @@ function burstFixture(
   const changes: JournalChange[] = []
   const failed = vi.fn()
   return {
-    journal: new BurstJournal(frames, changes, failed, onChange),
+    journal: new BurstJournal(frames, changes, failed),
     changes,
     failed,
   }
@@ -362,23 +382,20 @@ describe('RemoteJournalStream frame pacing', () => {
   })
 
   it('returns to the event loop while a large burst drains', async () => {
+    vi.stubGlobal('MessageChannel', ObservedChannel)
     const total = 1_000
-    const observed: number[] = []
-    let published = 0
-    let observationArmed = false
-    const fixture = burstFixture(total, (count) => {
-      published = count
-      if (observationArmed) return
-      observationArmed = true
-      setTimeout(() => { observed.push(published) }, 0)
-    })
+    const fixture = burstFixture(total)
+    ObservedChannel.progress = () => publishedCount(fixture.changes)
 
     await fixture.journal.open({})
-    await vi.waitFor(() => { expect(published).toBe(total) }, { interval: 5, timeout: 10_000 })
+    await vi.waitFor(
+      () => { expect(publishedCount(fixture.changes)).toBe(total) },
+      { interval: 5, timeout: 10_000 },
+    )
 
-    expect(observed.length).toBeGreaterThan(0)
-    expect(observed[0]).toBeGreaterThan(0)
-    expect(observed[0]).toBeLessThan(total)
+    expect(ObservedChannel.deliveries.length).toBeGreaterThan(1)
+    expect(ObservedChannel.deliveries[0]).toBeGreaterThan(0)
+    expect(ObservedChannel.deliveries[0]).toBeLessThan(total)
     expect(entrySeqs(fixture.changes)).toEqual([...Array(total).keys()])
     expect(fixture.failed).not.toHaveBeenCalled()
     await fixture.journal.dispose()
