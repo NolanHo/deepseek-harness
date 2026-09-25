@@ -252,6 +252,7 @@ export function ChatView({
     loadedTurns: turnNavigationItems,
     mountSignature: mounted.signature,
     // Fork patch (FORK_SURFACE.md): a settled sample at the window head reveals one step.
+    willRevealAtHead: mounted.willRevealAtHead,
     revealAtHead: mounted.revealAtHead,
   })
   /**

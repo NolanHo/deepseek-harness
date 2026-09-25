@@ -24,6 +24,7 @@ export interface ChatScrollInput extends ChatNavigationInput {
   // moved window re-anchors the reader instead of ResizeObserver timing.
   readonly mountSignature: string
   // Fork patch (FORK_SURFACE.md): the mounted window's sample-driven reveal.
+  readonly willRevealAtHead: MountedWindowState['willRevealAtHead']
   readonly revealAtHead: MountedWindowState['revealAtHead']
 }
 
@@ -49,6 +50,7 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
   const {
     ready, order, firstSeq, lastKey, lastIsUser, steeringId, submissionId, running,
     loadedTurns, chatScroll, hasMore, loadingOlder, loadOlder, loadThrough, mountSignature,
+    willRevealAtHead,
     revealAtHead,
   } = input
   const { viewport, listRef, columnRef } = useChatViewport()
@@ -104,7 +106,28 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
 
   useLayoutEffect(() => {
     const disconnectViewport = viewport.connect({
-      scroll: reading.onScroll,
+      // Fork patch (FORK_SURFACE.md): a reader scroll that comes within one
+      // viewport of the mounted head reveals the next window step, so a wheel or
+      // touch gesture alone keeps older resident rows coming. The latest
+      // committed input carries the history state, and a retained paging anchor
+      // or an in-flight page request owns the layout while it runs.
+      scroll: (scroll) => {
+        reading.onScroll(scroll)
+        const latest = content.current.input
+        const head = {
+          top: scroll.metrics.top, height: scroll.metrics.height, movedByReader: scroll.movedByReader,
+        }
+        const historyBusy = viewport.preserving || latest.loadingOlder
+        // A pending sample blocks the reflow that compensates the rows a reveal
+        // adds above the reading line, so a head step settles this scroll first:
+        // the sample arms the hold on the row the reader has reached, and the
+        // window move is then absorbed instead of shifting the page down. The
+        // settle costs a layout read, so it runs only for a scroll that steps.
+        if (latest.willRevealAtHead(head, historyBusy)) {
+          reading.onScrollEnd()
+          latest.revealAtHead(head, historyBusy)
+        }
+      },
       scrollEnd: () => {
         reading.onScrollEnd()
         navigation.readerSettled()
@@ -125,12 +148,6 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     })
     const disconnectReading = reading.connect((sample) => {
       navigation.readerSampled(sample)
-      // Fork patch (FORK_SURFACE.md): a settled sample of the reader's own
-      // scrolling at the mounted head reveals the next window step. The latest
-      // committed input carries the history state, and a retained paging anchor
-      // or an in-flight page request owns the layout while it runs.
-      const latest = content.current.input
-      latest.revealAtHead(sample, viewport.preserving || latest.loadingOlder)
       processContent()
     })
     return () => {
@@ -145,7 +162,7 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     const previous = content.current.input
     content.current.input = {
       ready, order, lastKey, lastIsUser, steeringId, submissionId, running, loadedTurns, chatScroll,
-      mountSignature, revealAtHead, ...navigationInput,
+      mountSignature, willRevealAtHead, revealAtHead, ...navigationInput,
     }
     viewport.updateTurns(loadedTurns)
     const layoutChanged = previous.order !== order || previous.ready !== ready
