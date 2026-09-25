@@ -120,17 +120,27 @@ async function openSeed(page: Page): Promise<void> {
   await nextPaint(page)
 }
 
-async function wheelUntilMounted(page: Page, selector: string, deltaY: number): Promise<void> {
-  const scrollport = page.locator('[data-conversation-scroll]')
-  const box = await scrollport.boundingBox()
-  if (box === null) throw new Error('conversation scrollport has no layout box')
-  await page.mouse.move(box.x + box.width / 2, box.y + Math.min(140, box.height / 3))
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (await page.locator(selector).count() > 0) return
-    await page.mouse.wheel(0, deltaY)
-    await nextPaint(page)
-  }
-  throw new Error(`semantic Chat target did not mount: ${selector}`)
+/**
+ * Bring one Turn's mark into the outline rail's virtual ladder and activate it.
+ * The rail renders only the marks around its scroller's own offset, and both
+ * Turns this lane reaches by rail sit in the newest band, which one scroll of
+ * that scroller brings in — the counterpart of the oldest-end gesture the rail
+ * assertions use for turn 1. The activated mark lands the reader on its own
+ * Turn's row, which the mark then reports as current.
+ * @param page - the scenario page.
+ * @param turn - the Turn whose mark to activate.
+ */
+async function jumpToTurn(page: Page, turn: number): Promise<void> {
+  const rail = page.getByRole('navigation', { name: 'Turn navigation' })
+  const scroller = rail.locator('[class*="scroller"]')
+  await scroller.hover()
+  await page.mouse.wheel(0, FIXTURE_TURNS * 10)
+  await expect.poll(
+    () => scroller.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop),
+  ).toBe(0)
+  const mark = rail.getByRole('button', { name: `Jump to turn ${String(turn)}`, exact: true })
+  await mark.press('Enter')
+  await expect.poll(() => mark.getAttribute('aria-current'), { timeout: 15_000 }).toBe('true')
 }
 
 /**
@@ -305,7 +315,18 @@ describe('web e2e: long Chat interaction contract', () => {
     await page.setViewportSize({ width: 1_680, height: 900 })
     await turnNavigation.waitFor({ state: 'visible', timeout: 5_000 })
 
-    await wheelUntilMounted(page, `[data-chat-call-id="${TARGET_CALL_2}"]`, -1_100)
+    // The tool Turn is the fixture's last one, far below the mounted window the
+    // turn-1 landing left pinned to the reader's own row at the transcript head.
+    // From that pinned state a rail jump activates the mark but never lands: the
+    // window stays put and the landing finds no anchor row. Reach the tail
+    // through the product's own back-to-bottom affordance first, which releases
+    // the window to the newest rows; the tool Turn's mark then lands on it.
+    await page.getByRole('button', { name: 'Back to bottom', exact: true }).click()
+    await jumpToTurn(page, TOOL_TURN)
+    await expect.poll(
+      () => page.locator(`[data-chat-call-id="${TARGET_CALL_2}"]`).count(),
+      { timeout: 10_000 },
+    ).toBe(1)
     const toolUserKey = messageKey(toolUserEvent)
     const toolAssistantKey = assistantKey(toolAssistantEvent)
     const toolUserRow = page.locator(`[data-chat-anchor-key="${toolUserKey}"]`)
@@ -353,10 +374,11 @@ describe('web e2e: long Chat interaction contract', () => {
 
     const branchUserKey = messageKey(branchUserEvent)
     const branchAssistantKey = assistantKey(branchAssistantEvent)
-    await wheelUntilMounted(page, `[data-chat-anchor-key="${branchUserKey}"]`, -1_100)
+    await jumpToTurn(page, BRANCH_TURN)
     const userRow = page.locator(`[data-chat-anchor-key="${branchUserKey}"]`)
     const assistantRow = page.locator(`[data-chat-anchor-key="${branchAssistantKey}"]`)
     const turnTailRow = page.locator(`[data-chat-anchor-key="${turnTailKey(BRANCH_TURN)}"]`)
+    await expect.poll(() => userRow.count(), { timeout: 10_000 }).toBe(1)
     expect(await userRow.textContent()).toContain(branchUserMarker)
     expect(await assistantRow.textContent()).toContain(branchAssistantMarker)
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
