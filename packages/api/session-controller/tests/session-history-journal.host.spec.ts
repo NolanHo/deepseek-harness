@@ -1,4 +1,4 @@
-/** Raw Session journal transport and message-aligned pagination coverage. */
+/** Raw Session journal transport and Turn-aligned pagination coverage. */
 
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -45,6 +45,23 @@ function appendAssistantText(session: Session, text: string, step: number, turn 
  */
 function appendExtension(session: Session, type: string, data: unknown): SessionEvent {
   return (session.append as unknown as (type: string, data: unknown) => SessionEvent)(type, data)
+}
+
+/**
+ * Two Turns whose second holds more messages than the production 500-message
+ * opening budget, so the walk's floor stops inside it. Returns each Turn's
+ * `turn/start` — the boundary a page or opening may expose.
+ */
+function longSecondTurn(session: Session): SessionEvent[] {
+  const starts: SessionEvent[] = []
+  for (const [index, replies] of [4, 600].entries()) {
+    const turn = index + 1
+    starts.push(session.append('turn/start', { turn }))
+    appendUserText(session, `prompt ${turn}`)
+    for (let step = 1; step <= replies; step++) appendAssistantText(session, `reply ${turn}/${step}`, step, turn)
+    session.append('turn/end', { turn, reason: { kind: 'completed' } })
+  }
+  return starts
 }
 
 async function harness(): Promise<{ ctx: Context }> {
@@ -756,7 +773,7 @@ describe('Session history raw journal', () => {
     { name: 'navigation until 200 messages', replies: [9, 49, 49, 49, 49], beforeMessage: undefined, firstTurn: 2, steering: false, minMessages: 200 },
     { name: 'steering within one Turn', replies: [9, 39, 39], beforeMessage: undefined, firstTurn: 2, steering: true },
     { name: 'exhausted history below both minima', replies: [9], beforeMessage: undefined, firstTurn: 1, steering: false },
-    { name: 'the 500-message cap inside one Turn', replies: [9, 600], beforeMessage: undefined, firstTurn: undefined, steering: false },
+    { name: 'the message floor crossed inside one Turn', replies: [9, 600], beforeMessage: undefined, firstTurn: 2, steering: false },
   ])('paginates $name in one contiguous Turn window', async ({ replies, beforeMessage, firstTurn, steering, minMessages = 50 }) => {
     const { ctx } = await harness()
     onTestFinished(() => ctx.fiber.dispose())
@@ -787,16 +804,11 @@ describe('Session history raw journal', () => {
     })
     if (!response.ok) throw new Error('expected a history page')
     const page = pageEvents(response.value)
-    const expectedStart = firstTurn === undefined ? messages.at(-1)!.at(-500)!.seq : starts[firstTurn - 1]!.seq
+    const expectedStart = starts[firstTurn - 1]!.seq
     expect(page.map(event => event.seq)).toEqual(Array.from({ length: beforeSeq - expectedStart }, (_, index) => expectedStart + index))
     expect(response.value.hasMore).toBe(expectedStart > 0)
-    if (firstTurn === undefined) {
-      expect(page.filter(event => event.type === 'user/message' || event.type === 'assistant/message')).toHaveLength(500)
-      expect(page.some(event => event.type === 'user/message')).toBe(false)
-    } else {
-      expect(page[0]?.type).toBe('turn/start')
-      expect(page.some(event => event.seq === messages[firstTurn - 1]![0]!.seq)).toBe(true)
-    }
+    expect(page[0]?.type).toBe('turn/start')
+    expect(page.some(event => event.seq === messages[firstTurn - 1]![0]!.seq)).toBe(true)
     if (beforeMessage === undefined) {
       const abort = new AbortController()
       const stream = remote.follow({
@@ -816,6 +828,64 @@ describe('Session history raw journal', () => {
     }
   })
 
+  it('cuts a page at the Turn start the message budget crossed', async () => {
+    const { ctx } = await harness()
+    onTestFinished(() => ctx.fiber.dispose())
+    const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
+    const session = ctx.sessions.create(undefined, { meta: { cwd: '/workspace' } })
+    const starts = longSecondTurn(session)
+
+    // The production older-page request: the 500-message floor stops inside
+    // Turn 2, so the page must widen back to Turn 2's start instead of exposing
+    // a partial Turn from an assistant message.
+    const response = await remote.page({
+      address: { kind: 'session', sessionId: session.id },
+      throughSeq: session.seq - 1,
+      maxMessages: 500,
+      turnWindow: { minMessages: 8, minTurns: 2 },
+    })
+    if (!response.ok) throw new Error('expected a history page')
+    const page = pageEvents(response.value)
+
+    expect(page[0]?.type).toBe('turn/start')
+    expect(page[0]?.seq).toBe(starts[1]?.seq)
+    // The budget is a floor, not a cap: the crossed Turn's residual part rides
+    // along, so the page holds more than maxMessages counted messages.
+    expect(page.filter(event => event.type === 'user/message' || event.type === 'assistant/message'))
+      .toHaveLength(601)
+    expect(response.value.hasMore).toBe(true)
+    expect(page.at(-1)?.seq).toBe(session.seq - 1)
+  })
+
+  it('opens a follow snapshot at the Turn start the message budget crossed', async () => {
+    const { ctx } = await harness()
+    onTestFinished(() => ctx.fiber.dispose())
+    const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
+    const session = ctx.sessions.create(undefined, { meta: { cwd: '/workspace' } })
+    const starts = longSecondTurn(session)
+
+    // The production opening request, assistant frames included: the same floor
+    // crosses the same Turn, and the snapshot must open at its Turn start.
+    const abort = new AbortController()
+    const stream = remote.follow({
+      address: { kind: 'session', sessionId: session.id },
+      assistantStream: true,
+      maxMessages: 500,
+      turnWindow: { minMessages: 8, minTurns: 2 },
+    }, abort.signal)[Symbol.asyncIterator]()
+    try {
+      const first = await stream.next()
+      if (first.done || first.value.type !== 'snapshot') throw new Error('follow did not open with a snapshot')
+
+      expect(first.value.records[0]?.event.type).toBe('turn/start')
+      expect(first.value.records[0]?.event.seq).toBe(starts[1]?.seq)
+      expect(first.value.cursor).toBe(session.seq - 1)
+    } finally {
+      abort.abort()
+      await stream.return?.()
+    }
+  })
+
   it('counts only append-origin messages toward maxMessages and keeps each compaction summary with its replacement', async () => {
     const { ctx } = await harness()
     const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
@@ -823,6 +893,8 @@ describe('Session history raw journal', () => {
     session.append('turn/start', { turn: 1 })
     const first = appendUserText(session, 'first prompt')
     appendAssistantText(session, 'first reply', 1)
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    const secondStart = session.append('turn/start', { turn: 2 })
     const third = appendUserText(session, 'second prompt')
     appendAssistantText(session, 'second reply', 2)
     const shadowed = [...session.surface.nodes]
@@ -857,9 +929,11 @@ describe('Session history raw journal', () => {
     if (!response.ok) throw new Error('unreachable')
     const page = pageEvents(response.value)
     // Two append-origin messages fill the page even though a replacement copy of
-    // the same event type sits in the window: the copy is model-only.
+    // the same event type sits in the window: the copy is model-only, so the
+    // floor stays inside Turn 2 and the cut is Turn 2's own start.
     const messages = page.filter(event => event.type === 'user/message' || event.type === 'assistant/message')
     expect(messages.map(event => event.seq)).toEqual([third.seq, third.seq + 1, third.seq + 3])
+    expect(page[0]).toMatchObject({ type: 'turn/start', seq: secondStart.seq })
     expect(page.some(event => event.seq === first.seq)).toBe(false)
     expect(response.value.hasMore).toBe(true)
     // The range stays contiguous, so the checkpoint's summary record is readable on
@@ -867,15 +941,15 @@ describe('Session history raw journal', () => {
     const summaryIndex = page.findIndex(event => event.seq === summary.seq)
     expect(summaryIndex).toBeGreaterThan(-1)
     expect(page[summaryIndex + 1]?.seq).toBe(summary.seq + 1)
-    expect(page.map(event => event.seq)).toEqual(page.map((_event, index) => third.seq + index))
+    expect(page.map(event => event.seq)).toEqual(page.map((_event, index) => secondStart.seq + index))
   })
 
   it('paginates a message with a large embedded stream without expanding physical records', async () => {
     const { ctx } = await harness()
     const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
     const session = ctx.sessions.create(undefined, { meta: { cwd: '/workspace' } })
-    session.append('turn/start', { turn: 1 })
-    session.append('step/start', { turn: 1, step: 1 })
+    const start = session.append('turn/start', { turn: 1 })
+    const step = session.append('step/start', { turn: 1, step: 1 })
     const texts = Array.from({ length: 128 }, () => 'x')
     const message = session.append('assistant/message', {
       turn: 1,
@@ -900,15 +974,22 @@ describe('Session history raw journal', () => {
         maxMessages: 1,
       })
       if (!response.ok) throw new Error('unreachable')
-      expect(pageEvents(response.value).map(event => event.seq)).toEqual([message.seq])
-      expect(response.value.records).toEqual([{ type: 'event', event: message }])
-      expect(response.value.hasMore).toBe(true)
+      // One counted message: the Turn and step that opened it ride along, and the
+      // assistant's 128-chunk stream stays one physical record. The page reaches
+      // the log head, so no older history remains.
+      expect(pageEvents(response.value).map(event => event.seq)).toEqual([start.seq, step.seq, message.seq])
+      expect(response.value.records).toEqual([
+        { type: 'event', event: start },
+        { type: 'event', event: step },
+        { type: 'event', event: message },
+      ])
+      expect(response.value.hasMore).toBe(false)
     } finally {
       min.mockRestore()
     }
   })
 
-  it('keeps an earlier declared source on the same message-aligned page', async () => {
+  it('keeps an earlier declared source on the same Turn-aligned page', async () => {
     const { ctx } = await harness()
     const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
     const session = ctx.sessions.create(undefined, { meta: { cwd: '/workspace' } })

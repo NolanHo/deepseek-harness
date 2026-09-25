@@ -108,7 +108,7 @@ export class SessionHistoryController {
   }
 
   /**
-   * Read one message-aligned history page without activating an Agent.
+   * Read one Turn-aligned history page without activating an Agent.
    * @param request - durable address and backwards-page cursor.
    * @param signal - caller cancellation for persistence reads.
    * @returns a contiguous event page.
@@ -453,7 +453,7 @@ export class SessionHistoryController {
    * page for the same request.
    * @param beforeSeq - the request's exclusive page bound, undefined when the
    *   page ends at the read's own cursor (the opening page).
-   * @param maxMessages - the request's page cap in messages.
+   * @param maxMessages - the request's message floor in messages.
    * @param turnWindow - the request's turn window, undefined when it carries none.
    * @returns the rule the fork read plan applies to each window it accepts.
    */
@@ -664,10 +664,18 @@ function rejectNotFound(address: SessionAddress): never {
 }
 
 /**
- * Cut one backwards page with the session's page rule: the walk stops at the
- * max-th append-origin message below the page end (widening to its origin
- * group head), or, when `turnWindow` is set, at the turn/start carrying both
- * its minima.
+ * Cut one backwards page with the session's page rule. The walk's own stop —
+ * the max-th append-origin message below the page end, widened to its origin
+ * group head, or, when `turnWindow` is set, the turn/start carrying both its
+ * minima — only selects where the page may start; the cut itself is the
+ * enclosing Turn start. A message stop landing inside a Turn widens backward to
+ * that Turn's `turn/start`, so no page head exposes a partial Turn (an
+ * assistant/message, step, or tool record without the Turn that opened it).
+ * `maxMessages` is therefore a floor, not a hard cap: the cut Turn's residual
+ * part beyond the budget stays on the page. Only a walk that reaches no Turn
+ * start stops at the window head and reports `exhausted`, which the indexed
+ * fast path reads as an unproven window and widens or falls back; the log head
+ * is then the boundary, with no older Turn start to align to.
  *
  * Fork patch (FORK_SURFACE.md): the indexed fast path applies this same walk to
  * a dense suffix window (`baseSeq` is that window's first seq), so the indexed
@@ -676,12 +684,13 @@ function rejectNotFound(address: SessionAddress): never {
  *
  * @param events - the log or one dense suffix window of it, in seq order.
  * @param beforeSeq - exclusive page-before bound, undefined when the page ends at `throughSeq`.
- * @param maxMessages - page cap in append-origin messages.
+ * @param maxMessages - append-origin message floor the walk counts to before it widens back to a Turn start.
  * @param throughSeq - inclusive page end seq, -1 before any event exists.
  * @param turnWindow - optional turn minima the walk also stops at.
  * @param baseSeq - absolute seq of `events[0]`; 0 for a whole log.
- * @returns the page events, whether older history exists, the absolute cut seq,
- *   and whether the walk reached the window head without cutting.
+ * @returns the page events, whether older history exists, the absolute cut seq
+ *   (never below `baseSeq`), and whether the walk reached the window head
+ *   without cutting.
  */
 export function paginate(
   events: readonly SessionEvent[],
@@ -697,12 +706,17 @@ export function paginate(
   readonly events: SessionEvent[]
   readonly hasMore: boolean
   /**
-   * Absolute seq of the page's first event, or `baseSeq` when the walk ran out
-   * of window; below `baseSeq` when the cut's origin group reaches past the
-   * window head, which the caller reads as an unproven window.
+   * Absolute seq of the page's first event; always at or above `baseSeq`, and
+   * `baseSeq` exactly when the walk ran out of window before finding a Turn
+   * start (see `exhausted`).
    */
   readonly cut: number
-  /** Whether the backwards walk reached the window head without cutting. */
+  /**
+   * Whether the backwards walk reached the window head without cutting. A
+   * windowed caller reads this as an unproven window: the slice it holds may
+   * still start inside a Turn, so it widens its read or falls back to the whole
+   * log instead of serving that slice.
+   */
   readonly exhausted: boolean
 } {
   const end = SessionLogOffset(Math.min(throughSeq + 1, beforeSeq ?? throughSeq + 1))
@@ -710,15 +724,23 @@ export function paginate(
   let turns = 0
   let cut = baseSeq
   let exhausted = true
+  // Seq the message floor selected; the walk continues below it to the Turn
+  // start that owns it, so the cut is a Turn start or the window head.
+  let stopSeq = -1
   for (let index = end - 1 - baseSeq; index >= 0; index--) {
     const event = events[index] as SessionEvent
-    if (turnWindow !== undefined && event.type === 'turn/start') {
-      turns++
-      if (count >= turnWindow.minMessages && turns >= turnWindow.minTurns) {
-        cut = SessionLogOffset(index + baseSeq)
+    const at = SessionLogOffset(index + baseSeq)
+    if (event.type === 'turn/start') {
+      if (turnWindow !== undefined) turns++
+      const windowStop = turnWindow !== undefined
+        && count >= turnWindow.minMessages
+        && turns >= turnWindow.minTurns
+      if (windowStop || (stopSeq >= 0 && at <= stopSeq)) {
+        cut = at
         exhausted = false
         break
       }
+      continue
     }
     if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
     count++
@@ -729,15 +751,11 @@ export function paginate(
         if (source < groupStart) groupStart = source
       }
     }
-    if (count >= maxMessages) {
-      cut = SessionLogOffset(groupStart)
-      exhausted = false
-      break
-    }
+    if (count >= maxMessages && stopSeq < 0) stopSeq = groupStart
   }
-  // A cut below the window head widens an origin group past this read: the
-  // caller reads that off `cut` and widens its window instead of serving this
-  // slice.
+  // A walk that ran out of window before finding a Turn start cannot prove its
+  // cut: the caller reads that off `exhausted` and widens its window instead of
+  // serving this slice.
   return {
     events: events.slice(Math.max(cut - baseSeq, 0), Math.max(end - baseSeq, 0)),
     hasMore: cut > 0,

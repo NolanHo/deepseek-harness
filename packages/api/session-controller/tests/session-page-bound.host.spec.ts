@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { MessageId } from '@deepseek-ai/dsh-llm'
+import { MessageId, createMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, {
   SESSION_FORMAT_VERSION,
   SessionId,
@@ -165,6 +165,101 @@ function source(
 
 const signal = (): AbortSignal => new AbortController().signal
 
+/**
+ * Closed Turns where the final Turn holds `replies` assistant messages, so the
+ * 500-message floor of a production request stops inside one Turn.
+ * @param replies - assistant messages in the last Turn.
+ * @returns the log, in seq order.
+ */
+function longTurnLog(replies: number): SessionEvent[] {
+  const events: SessionEvent[] = []
+  const seq = (): SessionSeq => SessionSeq(events.length)
+  for (const turn of [1, 2]) {
+    events.push({ type: 'turn/start', seq: seq(), time: events.length, data: { turn } })
+    events.push({
+      type: 'user/message',
+      seq: seq(),
+      time: events.length,
+      surfaceOp: 'append',
+      data: createUserMessage({ content: [{ type: 'text', text: `q${String(turn)}` }], source: { kind: 'user' } }),
+    })
+    for (let step = 1; step <= (turn === 2 ? replies : 1); step++) {
+      events.push({
+        type: 'assistant/message',
+        seq: seq(),
+        time: events.length,
+        surfaceOp: 'append',
+        data: {
+          turn,
+          step,
+          message: createMessage({
+            role: 'assistant',
+            content: [{ type: 'text', text: `a${String(step)}` }],
+            source: { kind: 'model', provider: 'p', model: 'm' },
+          }),
+          stream: [],
+        },
+      })
+    }
+    events.push({ type: 'turn/end', seq: seq(), time: events.length, data: { turn, reason: { kind: 'completed' } } })
+  }
+  return events
+}
+
+describe('turn-aligned page cuts', () => {
+  it('widens a message-floor cut back to the Turn start that owns it', () => {
+    const events = turnLog(4)
+    const cursor = events.at(-1)?.seq ?? -1
+    const page = paginate(events, undefined, 2, SessionSeq(cursor))
+
+    // The second message back is Turn 3's prompt at seq 7; the page must start
+    // at Turn 3's `turn/start` at seq 6 instead.
+    expect(page.events[0]).toMatchObject({ type: 'turn/start', seq: 6 })
+    expect(page.cut).toBe(6)
+    expect(page.hasMore).toBe(true)
+    expect(page.exhausted).toBe(false)
+  })
+
+  it('reports a window holding no Turn start below the floor as exhausted', () => {
+    // A suffix window inside Turn 2: its prompt at seq 4 and the Turn end at 5.
+    const window = turnLog(2).slice(4)
+    const page = paginate(window, undefined, 1, SessionSeq(5), undefined, 4)
+
+    // The floor selected Turn 2's prompt and no Turn start exists in the window:
+    // the walk stops at the window head, which the caller reads as an unproven
+    // window and widens instead of serving a partial Turn.
+    expect(page.cut).toBe(4)
+    expect(page.exhausted).toBe(true)
+    expect(page.events.map(event => event.seq)).toEqual([4, 5])
+  })
+
+  it('keeps a cited source below the enclosing Turn start on one page', () => {
+    // Turn 2's prompt cites Turn 1's prompt, so the floor message's origin group
+    // reaches below Turn 2's start: the cut must skip that Turn start and land
+    // on Turn 1's, keeping the cited source and the citing message together.
+    const events = turnLog(2)
+    const citing: SessionEvent = {
+      type: 'user/message',
+      seq: SessionSeq(4),
+      time: 4,
+      surfaceOp: 'append',
+      sourceEventSeqs: [SessionSeq(1)],
+      data: createUserMessage({ content: [{ type: 'text', text: 'cited' }], source: { kind: 'user' } }),
+    }
+    events.splice(4, 0, citing)
+    for (let index = 5; index < events.length; index++) {
+      events[index] = { ...events[index], seq: SessionSeq(index), time: index } as SessionEvent
+    }
+
+    const page = paginate(events, undefined, 2, SessionSeq(events.length - 1))
+
+    expect(page.events[0]).toMatchObject({ type: 'turn/start', seq: 0 })
+    expect(page.exhausted).toBe(false)
+    expect(page.events.some(event => event.seq === 1)).toBe(true)
+    expect(page.events.some(event => event.seq === 4)).toBe(true)
+  })
+})
+
 describe('indexed page reads with an exclusive bound', () => {
   const events = turnLog(400)
   const cursor = events.at(-1)?.seq ?? -1
@@ -296,12 +391,16 @@ async function mountController(options: {
   readonly honorBound?: boolean
   /** Omit the observed stored end, as a released three-argument provider does. */
   readonly reportStoredEnd?: boolean
+  /** Stored log the mount answers, for request shapes the default log cannot build. */
+  readonly events?: readonly SessionEvent[]
 }): Promise<{
   readonly ctx: Context
   readonly page: (request: PageRequest) => Promise<unknown>
   readonly readFrom: ReadFromMock
+  /** The persistence inspection the observation path reads; untouched when the fast path serves. */
+  readonly inspect: Mock<() => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>>
 }> {
-  const events = turnLog(400)
+  const events = options.events ?? turnLog(400)
   const ctx = new Context()
   ownedContexts.add(ctx)
   await ctx.plugin(SessionStore)
@@ -323,9 +422,10 @@ async function mountController(options: {
     }
     return { ...answered, storedEnd: events.at(-1)?.seq ?? -1 }
   })
+  const inspect = vi.fn(() => Promise.resolve({ meta: header(), events }))
   const adapted = testSessionPersistence(ctx, {
     list: () => Promise.resolve([header()]),
-    inspect: () => Promise.resolve({ meta: header(), events }),
+    inspect,
     ...options.seekable
       ? {
         seekable: () => Promise.resolve(true),
@@ -343,6 +443,7 @@ async function mountController(options: {
   return {
     ctx,
     readFrom,
+    inspect,
     page: request => remote.page({
       address: { kind: 'session', sessionId: SESSION_ID },
       throughSeq: request.throughSeq,
@@ -466,6 +567,28 @@ describe('history controller older pages', () => {
     for (const shape of shapes) {
       expect(await bounded.page(shape), JSON.stringify(shape)).toEqual(await observed.page(shape))
     }
+  })
+
+  it('agrees with the observation path when the message floor crosses one Turn', async () => {
+    // A production page over a Turn holding 600 messages: the 500-message floor
+    // stops inside it, and both read paths must widen to that Turn's start.
+    const events = longTurnLog(600)
+    const cursor = events.at(-1)?.seq ?? -1
+    const bounded = await mountController({ seekable: true, events })
+    const observed = await mountController({ seekable: false, events })
+    const request: PageRequest = {
+      throughSeq: cursor,
+      maxMessages: 500,
+      turnWindow: { minMessages: 8, minTurns: 2 },
+    }
+    const page = await bounded.page(request) as PageResponse
+    const reference = await observed.page(request) as PageResponse
+
+    expect(page).toEqual(reference)
+    expect(page.value?.records[0]?.event).toMatchObject({ type: 'turn/start', seq: 4 })
+    // The seed reaches the log head, so the indexed window is the whole log and
+    // the aligned cut is provably inside it: the indexed path served the page.
+    expect(bounded.inspect).not.toHaveBeenCalled()
   })
 
   it('widens a turn-windowed page to the Turn start the observation cuts', async () => {

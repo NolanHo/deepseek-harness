@@ -689,11 +689,12 @@ describe('indexed page fast path', () => {
     })
     if (!response.ok) throw new Error('page failed')
     const events = response.value.records.map(record => record.event)
-    // The cut lands two messages back from the request cursor in the merged
-    // pagination rule, so the page spans seq 17 through 19.
-    expect(events[0]).toMatchObject({ type: 'user/message', seq: 17 })
+    // Two messages back from the request cursor put the floor at Turn 5's prompt;
+    // the cut widens to the Turn start that owns it, so the page spans seq 16
+    // through 19.
+    expect(events[0]).toMatchObject({ type: 'turn/start', seq: 16 })
     expect(events.at(-1)).toMatchObject({ type: 'turn/end', seq: 19 })
-    expect(events.length).toBe(3)
+    expect(events.length).toBe(4)
     expect(response.value.hasMore).toBe(true)
     expect(borrow).not.toHaveBeenCalled()
     expect(readFrom).toHaveBeenCalledWith(sessionId, 0, 20, expect.anything())

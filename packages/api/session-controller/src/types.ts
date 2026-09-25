@@ -499,14 +499,19 @@ export interface SessionWireEvent {
   readonly surfaceOp?: JsonValue
 }
 
-/** One message-aligned backwards-history request. */
+/** One Turn-aligned backwards-history request. */
 export interface SessionPageRequest {
   readonly address: SessionAddress
   /** Inclusive log cut obtained from the corresponding follow opening frame. */
   readonly throughSeq: number
   readonly beforeSeq?: number
   readonly maxMessages?: number
-  /** Stop at a Turn start after both minima, unless maxMessages or history exhaustion wins. */
+  /**
+   * Stop at a Turn start once the walk has counted this many append-origin
+   * messages and crossed this many Turn starts. The maxMessages stop widens
+   * back to a Turn start too, so the cut is a Turn start or, when the walk
+   * reaches the log head without finding one, the log head itself.
+   */
   readonly turnWindow?: {
     /** Minimum append-origin user/assistant messages; must not exceed maxMessages. */
     readonly minMessages: number

@@ -743,7 +743,7 @@ describe('SessionHistoryController', () => {
     expect(childSnapshot).toHaveBeenCalledWith(childSession)
   })
 
-  it('keeps message-aligned pagination contiguous across replacement source-event references', async () => {
+  it('keeps turn-aligned pagination contiguous across replacement source-event references', async () => {
     const { ctx, transport } = await setup()
     const session = ctx.sessions.create(SessionId('pagination'), { meta: { cwd: '/workspace' } })
     session.append('turn/start', { turn: 1 })
@@ -760,15 +760,18 @@ describe('SessionHistoryController', () => {
     const page = await transport.page({
       address: { kind: 'session', sessionId: session.id }, throughSeq: replacement.seq, maxMessages: 2,
     }, signal())
-    // Two messages back from the replacement in the merged pagination rule: the
-    // page keeps the cited source events that belong to its own messages.
+    // Two messages back from the replacement put the floor at the second prompt;
+    // the cut widens to the Turn start that owns it, so one contiguous range
+    // keeps the cited source events on the same page as the replacement.
     expect(page.records.map(entry => entry.event.seq))
-      .toEqual([3, 4, 5, replacement.seq])
-    expect(page.hasMore).toBe(true)
+      .toEqual([0, 1, 2, 3, 4, 5, replacement.seq])
+    expect(page.hasMore).toBe(false)
     const before = await transport.page({
       address: { kind: 'session', sessionId: session.id }, throughSeq: replacement.seq, beforeSeq: 3, maxMessages: 1,
     }, signal())
-    expect(before.records.map(entry => entry.event.seq)).toEqual([2])
+    // The same rule under the page-before bound: the floor is the second reply,
+    // and the Turn start above it is the log head.
+    expect(before.records.map(entry => entry.event.seq)).toEqual([0, 1, 2])
   })
 
   it('keeps cited source events in the page that owns their appended message', async () => {

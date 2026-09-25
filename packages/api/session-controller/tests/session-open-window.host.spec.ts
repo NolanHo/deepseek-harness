@@ -88,6 +88,29 @@ function appendTurn(session: Session, turn: number): void {
   session.append('turn/end', { turn, reason: { kind: 'completed' } })
 }
 
+/** One Turn holding `replies` assistant steps, so a message floor crosses it. */
+function appendDenseTurn(session: Session, turn: number, replies: number): void {
+  session.append('turn/start', { turn })
+  session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text: `dense ${String(turn)}` }],
+    source: { kind: 'user' },
+  }), { surfaceOp: 'append' })
+  for (let step = 1; step <= replies; step++) {
+    session.append('assistant/message', {
+      turn,
+      step,
+      stream: [],
+      message: {
+        role: 'assistant',
+        id: MessageId(`dense-${String(turn)}-${String(step)}`),
+        content: [{ type: 'text', text: `d${String(step)}` }],
+        source: { kind: 'model', provider: 'p', model: 'm' },
+      },
+    }, { surfaceOp: 'append' })
+  }
+  session.append('turn/end', { turn, reason: { kind: 'completed' } })
+}
+
 /** Whole-value page records for one event slice, matching the wire encoding. */
 function pageRecords(events: readonly SessionEvent[]): Extract<SessionFollowFrame, { type: 'event' }>[] {
   return events.map(event => ({ type: 'event', event }) as Extract<SessionFollowFrame, { type: 'event' }>)
@@ -241,6 +264,8 @@ interface MountOptions {
   readonly openTurn?: boolean
   /** Append bare prompts after the turns, for a log with no turn boundaries. */
   readonly userMessagesOnly?: number
+  /** Append a final Turn holding this many assistant steps, for a floor that crosses it. */
+  readonly denseTurnReplies?: number
   /** Append turns AFTER the checkpoint write, leaving its rows behind the log. */
   readonly staleTurns?: number
   /** Register the marker unit at this version, then bump it past the write. */
@@ -311,6 +336,7 @@ async function mountSession(options: MountOptions = {}): Promise<Mounted> {
   }, { inject: ['sessions'] }))
   if (session === undefined) throw new Error('session was not created')
   for (let turn = 1; turn <= turns; turn++) appendTurn(session, turn)
+  if (options.denseTurnReplies !== undefined) appendDenseTurn(session, turns + 1, options.denseTurnReplies)
   if (options.openTurn === true) {
     session.append('turn/start', { turn: turns + 1 })
     session.append('user/message', createUserMessage({
@@ -593,17 +619,17 @@ describe('windowed session open', () => {
     expect(windowed.projections).toEqual(reference.projections)
   })
 
-  it('cuts the windowed page at the max-th message back from the log end', async () => {
-    // Eight turns hold sixteen messages, so the page starts at the eighth
-    // message back — turn 5's prompt — and older history remains. The seed is
-    // the eighth-from-end prompt, which reaches the log head, so one read serves
-    // the page.
+  it('cuts the windowed page at the Turn start enclosing the message floor', async () => {
+    // Eight Turns hold sixteen messages, so the floor stops at the eighth
+    // message back — Turn 5's prompt — and the cut widens to Turn 5's Turn start
+    // at seq 16. Older history remains, and the seed reaches the log head, so one
+    // read serves the page.
     const mount = await mountSession({ turns: 8, maxMessages: 8 })
     const snapshot = await opening(mount.history, mount.sessionId, mount.maxMessages)
 
     expect(snapshot.records).toEqual(mount.records)
     expect(snapshot.hasMore).toBe(true)
-    expect(snapshot.records[0]?.event).toMatchObject({ type: 'user/message', seq: 17 })
+    expect(snapshot.records[0]?.event).toMatchObject({ type: 'turn/start', seq: 16 })
     expect(snapshot.records.at(-1)?.event.seq).toBe(snapshot.cursor)
     expect(snapshot.projections).toEqual({
       asOfSeq: mount.projections.asOfSeq,
@@ -636,6 +662,29 @@ describe('windowed session open', () => {
     expect(windowed.projections).toEqual(reference.projections)
     // The cut widened past the message floor to the Turn start both paths cut.
     expect(windowed.records[0]?.event).toMatchObject({ type: 'turn/start', seq: 224 })
+  })
+
+  it('serves a turn-aligned opening page when the message floor crosses one dense Turn', async () => {
+    // The production opening request over a Turn holding 600 messages: the
+    // 500-message floor stops inside it, and the windowed read must widen to that
+    // Turn's start instead of serving a partial Turn.
+    const mount = await mountSession({ turns: 3, denseTurnReplies: 600, maxMessages: 500 })
+    const turnWindow = { minMessages: 8, minTurns: 2 }
+    const snapshot = await opening(mount.history, mount.sessionId, mount.maxMessages, turnWindow)
+
+    // The whole-log cut under the same request, not under a looser one: the
+    // windowed read must serve exactly the page the observation path cuts.
+    const reference = wholeLogPage(mount.events, mount.maxMessages, turnWindow)
+    expect(snapshot.records).toEqual(pageRecords(reference.events))
+    expect(snapshot.hasMore).toBe(reference.hasMore)
+    expect(snapshot.records[0]?.event).toMatchObject({ type: 'turn/start', seq: 12 })
+    expect(snapshot.cursor).toBe(mount.cursor)
+    expect(snapshot.projections).toEqual({
+      asOfSeq: mount.projections.asOfSeq,
+      values: mount.projections.values,
+    })
+    // The seed read reached the log head, so the index served the page itself.
+    expect(mount.inspect).not.toHaveBeenCalled()
   })
 
   it('seeds a stale checkpoint by folding the log tail behind its rows', async () => {
@@ -1222,15 +1271,13 @@ describe('windowed session open', () => {
     expect(mount.inspect).not.toHaveBeenCalled()
   })
 
-  it('keeps the observation path for a tail window with no turn boundary', async () => {
-    // A log with no turn events at all: a window whose head sits past the log
-    // head cannot tell a closed tail from one whose boundary sits below it, so
-    // the observation path answers. A boundary below the window decides the
-    // synthetic recovery closer, which a windowed fold must not guess.
+  it('serves a boundary-free log by widening the window to the log head', async () => {
+    // A log with no turn events at all: no Turn start exists to cut at, so the
+    // walk widens to the log head, where the closed tail is provable and the
+    // windowed read serves the page the observation path serves.
     const mount = await mountSession({ turns: 0, userMessagesOnly: 200 })
     const snapshot = await opening(mount.history, mount.sessionId, mount.maxMessages)
 
-    expect(mount.readFrom.mock.calls[0]?.[1]).toBeGreaterThan(0)
     expect(snapshot.records).toEqual(mount.records)
     expect(snapshot.hasMore).toBe(mount.hasMore)
     expect(snapshot.cursor).toBe(mount.cursor)
@@ -1238,7 +1285,11 @@ describe('windowed session open', () => {
       asOfSeq: mount.projections.asOfSeq,
       values: mount.projections.values,
     })
-    expect(mount.inspect).toHaveBeenCalled()
+    // The seed window sits inside the log and holds no Turn start, so the ladder
+    // re-reads from the head before the page is accepted.
+    expect(mount.readFrom.mock.calls[0]?.[1]).toBeGreaterThan(0)
+    expect(mount.readFrom.mock.calls.at(-1)?.[1]).toBe(0)
+    expect(mount.inspect).not.toHaveBeenCalled()
   })
 
   it('keeps the subagent fence for a child addressed as an ordinary Session', async () => {

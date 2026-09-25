@@ -7,13 +7,15 @@
 import type { SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 
 /**
- * Headroom read before a message-indexed cut: the cut seqs an append-origin
- * user message while the page cut lands at its group head (turn boundary and
- * any source events a few seqs earlier). The margin covers the ordinary lead
- * without re-reading a whole window; a compaction replacement widens its
- * group head across the whole shadowed range, so an incomplete window
- * retries once at the deep margin before falling back to the observation
- * path.
+ * Headroom read before a message-indexed seek: the seek answers an
+ * append-origin user message while the page cut lands on the Turn start that
+ * owns the message floor, which the indexed seek does not itself locate. The
+ * margin covers the ordinary lead — the prompt's own Turn start a few events
+ * earlier, or a compaction replacement's group head a few seqs earlier —
+ * without re-reading a whole window. A dense Turn puts its start further back
+ * than the margin, so an incomplete window retries once at the deep margin
+ * before falling back to the observation path, which reads the whole log to
+ * cut the same page.
  */
 const PAGE_CUT_LEAD_MARGIN = 128
 const PAGE_CUT_DEEP_MARGIN = 4096
@@ -79,8 +81,8 @@ export interface WindowPage {
  * @param baseSeq - absolute seq of the window's first event; 0 for a whole log.
  * @param throughSeq - inclusive absolute page end.
  * @returns the page events, the cut seq, and whether the walk ran out of window
- *   before cutting: a cut below the window head widens an origin group past
- *   this read, so the caller widens the window or falls back.
+ *   before cutting: a walk that reaches the window head cannot prove its cut is
+ *   the whole log's cut, so the caller widens the window or falls back.
  */
 export type WindowPageCut = (
   window: readonly SessionEvent[],
@@ -214,9 +216,10 @@ export async function readIndexedSuffix(
     // A cut inside the window IS the whole log's cut: the walk made every
     // decision the observation path's walk makes from the same page end. A walk
     // that ran out of window proves its cut only when the window is the log
-    // prefix below that end (`fromSeq === 0`); a cut below the window head
-    // widens an origin group past the read. Both unproven shapes take the
-    // ladder rather than serving a page the observation path would not.
+    // prefix below that end (`fromSeq === 0`). A cut below the window head is
+    // the same unproven shape for a caller-supplied rule, whose contract places
+    // it at or above `baseSeq`. Unproven shapes take the ladder rather than
+    // serving a page the observation path would not.
     const proven = !page.exhausted && page.cut >= fromSeq
     // A page-less window is never worth serving: the observation path answers
     // the same page, and the windowed open reads its cursor off the page tail.

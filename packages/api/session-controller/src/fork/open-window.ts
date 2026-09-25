@@ -34,7 +34,7 @@ export interface OpeningWindow {
   readonly header: SessionHeader
   /** Last observed event seq, or -1 for an empty log. */
   readonly cursor: SessionSeqCursor
-  /** The message-aligned opening page. */
+  /** The Turn-aligned opening page. */
   readonly events: readonly SessionEvent[]
   /** Whether older history exists below the page. */
   readonly hasMore: boolean
