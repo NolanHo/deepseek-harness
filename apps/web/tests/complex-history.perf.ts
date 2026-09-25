@@ -28,7 +28,9 @@ import {
 // Carries the session/title event declaration into the fixture builder.
 import type {} from '@deepseek-ai/dsh-session-title'
 import {
+  countHistoryPages,
   launchWebScaffold,
+  loadEarlierStep,
   seedSession,
   watchConsole,
   webSnapshotMode,
@@ -44,7 +46,20 @@ const TOOL_TURN_INTERVAL = 10
 const TOOLS_PER_TOOL_TURN = 10
 const EXPECTED_TOOL_CALLS = LONG_HISTORY_TURNS / TOOL_TURN_INTERVAL * TOOLS_PER_TOOL_TURN
 const EXPECTED_TRAJECTORY_ROWS = 2_100
-const DEFAULT_HISTORY_TURNS = 24
+/**
+ * Resident order keys the fork's mounted transcript window holds. Mirrors
+ * `MOUNTED_ROW_LIMIT` in
+ * `packages/client/ui-chat/src/client/chat/fork/mounted-window.ts`: this lane is a
+ * host-plane program and must not reach client source, so the cap is mirrored.
+ */
+const MOUNTED_ROW_LIMIT = 50
+/**
+ * Mounted key-row ceiling for this lane's fixtures: the window mounts at most
+ * MOUNTED_ROW_LIMIT resident keys, a mounted group adds its own root row, and one
+ * key can render twice (a group member that is also its own root entry), so the
+ * derived row ceiling is three times the key cap.
+ */
+const MOUNTED_ROW_CEILING = MOUNTED_ROW_LIMIT * 3
 const PERF_REPLAY_CONTEXT_WINDOW = 10_000_000
 const STREAM_PACE_MS = 8
 const STREAM_DELTA_COUNT = 120
@@ -811,12 +826,81 @@ async function stableCount(
   throw new Error(`browser row count did not stabilize; last count ${String(previous)}`)
 }
 
-async function conversationTurns(page: Page): Promise<number> {
-  // Loaded-window turn count: one mounted turn-tail footer per settled turn in
-  // the window (context keys are `${kind.length}:${kind}${id}`). The stats
-  // strip cannot serve as this probe: its counts ride the whole-log
-  // sessionStats projection and stay fixed across paging by design.
-  return stableCount(page.locator('[data-chat-flow-key^="9:turn-tail"]'), count => count > 0)
+/** Mounted transcript rows carrying a flow identity. */
+function mountedFlowRows(page: Page): Promise<number> {
+  return page.locator('[data-chat-flow-key]').count()
+}
+
+/**
+ * Turn of the oldest mounted transcript row, which is the mounted window's head.
+ * It falls as Load earlier reveals resident rows and pages older ones in, so it
+ * reads 1 exactly when every page is resident and the window sits at its head.
+ * @param page - the scenario page.
+ * @returns the head row's Turn, or null when no mounted row carries one.
+ */
+function oldestMountedTurn(page: Page): Promise<number | null> {
+  return page.evaluate(() => {
+    for (const row of document.querySelectorAll<HTMLElement>('[data-chat-flow-key]')) {
+      const turn = row.dataset.chatTurn
+      if (turn !== undefined) return Number(turn)
+    }
+    return null
+  })
+}
+
+/**
+ * Assert the mounted transcript window is bounded. The rows counted are the
+ * window's resident keys, one root row per mounted group, and at most one extra
+ * row per key that renders as a group member and as its own root entry. The
+ * stats strip cannot serve as this probe: its counts ride the whole-log
+ * sessionStats projection and stay fixed while the loaded log grows.
+ * @param page - the scenario page, queried while no Turn streams: the planner
+ *   keeps a resident tail stub beside a frozen window while a Turn runs.
+ */
+async function expectBoundedWindow(page: Page): Promise<void> {
+  const rows = await mountedFlowRows(page)
+  const groups = await page.locator('[data-chat-group-key]').count()
+  expect(rows).toBeLessThanOrEqual(MOUNTED_ROW_CEILING)
+  expect(rows - groups).toBeLessThanOrEqual(MOUNTED_ROW_LIMIT * 2)
+}
+
+/**
+ * Whole-log Turn count from the composer stats strip, which reports the
+ * sessionStats projection over the complete log on every page.
+ * @param page - the scenario page.
+ * @returns the strip's Turn count.
+ */
+async function sessionTurns(page: Page): Promise<number> {
+  const text = await page.locator('[data-composer-stats]').first().textContent()
+  const match = /(\d+) turns/.exec(text ?? '')
+  if (match === null) throw new Error(`composer stats strip carries no Turn count: ${JSON.stringify(text)}`)
+  return Number(match[1])
+}
+
+/**
+ * Page the whole history in, one measured Load-earlier gesture at a time. The
+ * mounted window reveals resident rows before it requests the next server page,
+ * so a gesture is not one page; progress is the window head reaching Turn 1.
+ * @param page - the scenario page.
+ * @param cdp - the page's CDP session for the per-gesture metrics.
+ * @returns one entry per gesture, in order.
+ */
+async function pageInWholeHistory(
+  page: Page,
+  cdp: CDPSession,
+): Promise<{ oldestTurn: number | null; mountedRows: number; measurement: Measurement }[]> {
+  const requested = countHistoryPages(page)
+  const steps: { oldestTurn: number | null; mountedRows: number; measurement: Measurement }[] = []
+  while (await oldestMountedTurn(page) !== 1) {
+    if (steps.length >= 512) throw new Error('Load earlier never reached the oldest Turn')
+    const step = await measure(cdp, async () => {
+      await loadEarlierStep(page, requested)
+      return { mountedRows: await mountedFlowRows(page), oldestTurn: await oldestMountedTurn(page) }
+    })
+    await expectBoundedWindow(page)
+    steps.push({ ...step.value, measurement: step.measurement })
+  }
+  return steps
 }
 
 function retainedDelta(
@@ -930,14 +1014,22 @@ async function openPerformancePage(
   return group
 }
 
-async function openLongHistory(page: Page): Promise<number> {
+/**
+ * Open the seeded long Session and report what its transcript mounts. The
+ * mounted window is bounded, so the open is described by its capped rows and by
+ * the whole-log Turn count the strip projects.
+ * @param page - the scenario page.
+ * @returns the mounted row count and the whole-log Turn count.
+ */
+async function openLongHistory(page: Page): Promise<{ mountedRows: number; turns: number }> {
   await page.getByRole('textbox', { name: 'Search name, keywords...', exact: true })
     .fill('LONG_PERF_SENTINEL')
   const results = page.getByRole('tree', { name: 'Search results' }).getByRole('treeitem')
   await expect.poll(() => results.count(), { timeout: 60_000 }).toBe(1)
   await results.first().click()
   await page.getByRole('tab', { name: 'Chat', exact: true }).waitFor({ timeout: 30_000 })
-  return conversationTurns(page)
+  await expectBoundedWindow(page)
+  return { mountedRows: await mountedFlowRows(page), turns: await sessionTurns(page) }
 }
 
 async function continueConversation(
@@ -1026,8 +1118,12 @@ async function continueConversation(
       .filter(block => block.type === 'text')
       .map(block => block.text)
       .join('')).toBe(spec.prompt)
-    const resultingTurns = await conversationTurns(world.page)
+    // The strip's whole-log Turn count advances by one per settled Turn while
+    // the mounted window stays at its cap: the two probes are independent, one
+    // over the projection and one over the DOM.
+    const resultingTurns = await sessionTurns(world.page)
     expect(resultingTurns).toBe(options.startingTurns + index)
+    await expectBoundedWindow(world.page)
     turns.push({
       ordinal: index,
       resultingTurns,
@@ -1131,7 +1227,8 @@ async function measurePostSoakUserRender(
   expect(turnEvents.filter(event => event.type === 'tool/call')).toHaveLength(0)
   expect(turnEvents.filter(event => event.type === 'tool/result')).toHaveLength(0)
   expect(world.scaffold.ctx.agents.get(settledSessionId)).toBeDefined()
-  expect(await conversationTurns(world.page)).toBe(POST_SOAK_RENDER_TURN)
+  expect(await sessionTurns(world.page)).toBe(POST_SOAK_RENDER_TURN)
+  await expectBoundedWindow(world.page)
 
   return {
     ordinal: POST_SOAK_RENDER_TURN,
@@ -1245,9 +1342,11 @@ describe('manual web performance: complex workspace and history', () => {
       const opened = await measure(cdp, async () => {
         await contentSearch.value.click()
         await page.getByRole('tab', { name: 'Trajectory', exact: true }).waitFor({ timeout: 30_000 })
-        return conversationTurns(page)
+        await expectBoundedWindow(page)
+        return { mountedRows: await mountedFlowRows(page), turns: await sessionTurns(page) }
       })
-      expect(opened.value).toBe(DEFAULT_HISTORY_TURNS)
+      expect(opened.value.turns).toBe(LONG_HISTORY_TURNS)
+      expect(opened.value.mountedRows).toBeLessThanOrEqual(MOUNTED_ROW_CEILING)
 
       const trajectoryRows = page.getByRole('row')
       const coldTrajectory = await measure(cdp, async () => {
@@ -1268,19 +1367,7 @@ describe('manual web performance: complex workspace and history', () => {
       expect(trajectorySearch.value).toBeLessThan(20)
 
       await page.getByRole('tab', { name: 'Chat', exact: true }).click()
-      const historyPages: { turns: number; measurement: Measurement }[] = []
-      let turns = await conversationTurns(page)
-      while (turns < LONG_HISTORY_TURNS) {
-        const previousTurns = turns
-        const older = await measure(cdp, async () => {
-          await page.getByRole('button', { name: 'Load earlier', exact: true }).click()
-          await expect.poll(() => conversationTurns(page), { timeout: 30_000 })
-            .toBeGreaterThan(previousTurns)
-          return conversationTurns(page)
-        })
-        turns = older.value
-        historyPages.push({ turns, measurement: older.measurement })
-      }
+      const historySteps = await pageInWholeHistory(page, cdp)
 
       const warmTrajectory = await measure(cdp, async () => {
         await page.getByRole('tab', { name: 'Trajectory', exact: true }).click()
@@ -1289,9 +1376,12 @@ describe('manual web performance: complex workspace and history', () => {
       expect(warmTrajectory.value).toBe(EXPECTED_TRAJECTORY_ROWS)
       const warmConversation = await measure(cdp, async () => {
         await page.getByRole('tab', { name: 'Chat', exact: true }).click()
-        return conversationTurns(page)
+        // The window sits at its head with the whole log resident: the oldest
+        // Turn is mounted while the mounted rows stay capped.
+        expect(await oldestMountedTurn(page)).toBe(1)
+        await expectBoundedWindow(page)
+        return mountedFlowRows(page)
       })
-      expect(warmConversation.value).toBe(LONG_HISTORY_TURNS)
 
       console.info(`WEB_PERF_RESULT ${JSON.stringify({
         scenario: 'workspace-history-trajectory',
@@ -1311,13 +1401,13 @@ describe('manual web performance: complex workspace and history', () => {
         },
         sidebarExpand: sidebar.measurement,
         contentSearch: contentSearch.measurement,
-        openLongHistory: { initialTurns: opened.value, ...opened.measurement },
+        openLongHistory: { ...opened.value, ...opened.measurement },
         coldTrajectory: { rows: coldTrajectory.value, ...coldTrajectory.measurement },
         collapseTurns: { rows: collapseTurns.value, ...collapseTurns.measurement },
         trajectorySearch: { rows: trajectorySearch.value, ...trajectorySearch.measurement },
-        historyPages,
+        historySteps,
         warmTrajectory: { rows: warmTrajectory.value, ...warmTrajectory.measurement },
-        warmConversation: { turns: warmConversation.value, ...warmConversation.measurement },
+        warmConversation: { mountedRows: warmConversation.value, ...warmConversation.measurement },
       }, null, 2)}`)
       expect(world.tripwire.warnings).toEqual([])
       expect(world.tripwire.pageErrors).toEqual([])
@@ -1326,7 +1416,7 @@ describe('manual web performance: complex workspace and history', () => {
     }
   })
 
-  it('reports default 24-turn history plus eight continued turns', async () => {
+  it('reports the default long-history open plus eight continued turns', async () => {
     const world = await launchPerformanceWorld({
       browser,
       replay: performanceReplayOverride(COMPARISON_TURNS, comparisonTurn),
@@ -1337,9 +1427,10 @@ describe('manual web performance: complex workspace and history', () => {
       const cdp = await world.page.context().newCDPSession(world.page)
       await cdp.send('Performance.enable')
       const opened = await measure(cdp, () => openLongHistory(world.page))
-      expect(opened.value).toBe(DEFAULT_HISTORY_TURNS)
+      expect(opened.value.turns).toBe(LONG_HISTORY_TURNS)
+      expect(opened.value.mountedRows).toBeLessThanOrEqual(MOUNTED_ROW_CEILING)
       const conversation = await continueConversation(world, cdp, {
-        startingTurns: DEFAULT_HISTORY_TURNS,
+        startingTurns: LONG_HISTORY_TURNS,
         turnCount: COMPARISON_TURNS,
         turnSpec: comparisonTurn,
         expectedSessionId: SessionId(LONG_SESSION_ID),
@@ -1349,7 +1440,7 @@ describe('manual web performance: complex workspace and history', () => {
         scenario: 'default-resume-24-plus-8',
         setupMs: rounded(world.setupMs),
         replayContextWindow: PERF_REPLAY_CONTEXT_WINDOW,
-        openLongHistory: { turns: opened.value, ...opened.measurement },
+        openLongHistory: { ...opened.value, ...opened.measurement },
         conversation,
       }, null, 2)}`)
       expect(world.tripwire.warnings).toEqual([])
@@ -1369,21 +1460,11 @@ describe('manual web performance: complex workspace and history', () => {
       await openPerformancePage(world, 1)
       const cdp = await world.page.context().newCDPSession(world.page)
       await cdp.send('Performance.enable')
-      expect(await openLongHistory(world.page)).toBe(DEFAULT_HISTORY_TURNS)
-      const historyPages: { turns: number; measurement: Measurement }[] = []
-      let turns = DEFAULT_HISTORY_TURNS
-      while (turns < LONG_HISTORY_TURNS) {
-        const previousTurns = turns
-        const older = await measure(cdp, async () => {
-          await world.page.getByRole('button', { name: 'Load earlier', exact: true }).click()
-          await expect.poll(() => conversationTurns(world.page), { timeout: 30_000 })
-            .toBeGreaterThan(previousTurns)
-          return conversationTurns(world.page)
-        })
-        turns = older.value
-        historyPages.push({ turns, measurement: older.measurement })
-      }
-      expect(turns).toBe(LONG_HISTORY_TURNS)
+      const opened = await openLongHistory(world.page)
+      expect(opened.turns).toBe(LONG_HISTORY_TURNS)
+      expect(opened.mountedRows).toBeLessThanOrEqual(MOUNTED_ROW_CEILING)
+      const historySteps = await pageInWholeHistory(world.page, cdp)
+      expect(await oldestMountedTurn(world.page)).toBe(1)
       const conversation = await continueConversation(world, cdp, {
         startingTurns: LONG_HISTORY_TURNS,
         turnCount: COMPARISON_TURNS,
@@ -1395,7 +1476,7 @@ describe('manual web performance: complex workspace and history', () => {
         scenario: 'expanded-history-500-plus-8',
         setupMs: rounded(world.setupMs),
         replayContextWindow: PERF_REPLAY_CONTEXT_WINDOW,
-        historyPages,
+        historySteps,
         conversation,
       }, null, 2)}`)
       expect(world.tripwire.warnings).toEqual([])

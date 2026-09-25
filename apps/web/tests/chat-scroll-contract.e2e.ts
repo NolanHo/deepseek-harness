@@ -16,8 +16,10 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { createChatScrollFixture, type ChatScrollFixture } from './chat-scroll-fixture.ts'
 import {
+  countHistoryPages,
   expandAllTurnFolds,
   launchWebScaffold,
+  loadEarlierStep,
   parseSeedFixture,
   seedSession,
   watchConsole,
@@ -27,6 +29,19 @@ import {
 import { expandOwningTurnProcess, newEnglishPage, saveFailureShot } from './support.ts'
 
 const MODE = webSnapshotMode()
+/**
+ * Resident order keys the fork's mounted transcript window holds. Mirrors
+ * `MOUNTED_ROW_LIMIT` in
+ * `packages/client/ui-chat/src/client/chat/fork/mounted-window.ts`: this lane is
+ * a host-plane program and must not reach client source (the same rule that
+ * restates `conversationContextKey` in support.ts), so the cap is mirrored.
+ */
+const MOUNTED_ROW_LIMIT = 50
+/**
+ * Resident key rows a frozen window may hold beside the live tail stub the same
+ * planner mounts while a Turn streams above it.
+ */
+const MOUNTED_ROW_CEILING = MOUNTED_ROW_LIMIT * 2
 const HISTORY_SESSION_ID = 'chat-scroll-history-e2e'
 const TOOL_SESSION_ID = 'chat-scroll-tool-e2e'
 const RESTORE_SESSION_A_ID = 'chat-scroll-restore-a-e2e'
@@ -87,6 +102,8 @@ interface FlowAnchor {
 interface ScrollWorld {
   readonly assistantFrames: AssistantStreamFrame[]
   readonly events: SessionEvent[]
+  /** Session-history page requests this page issued so far. */
+  readonly historyPages: () => number
   readonly page: Page
   readonly replayDir?: string
   readonly scaffold: WebScaffold
@@ -190,6 +207,7 @@ async function launchScrollWorld(options: ScrollWorldOptions): Promise<ScrollWor
     scaffold.ctx.on('session/event', (_session, event: SessionEvent) => { events.push(event) })
     scaffold.ctx.on('agent/assistant-stream', ({ frame }) => { assistantFrames.push(frame) })
     page = await newEnglishPage(browser, 900)
+    const historyPages = countHistoryPages(page)
     const tripwire = watchConsole(page)
     await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
     await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
@@ -201,6 +219,7 @@ async function launchScrollWorld(options: ScrollWorldOptions): Promise<ScrollWor
     return {
       assistantFrames,
       events,
+      historyPages,
       page,
       scaffold,
       tripwire,
@@ -278,15 +297,33 @@ function scrollGeometry(page: Page): Promise<ScrollGeometry> {
 }
 
 /**
- * Rendered transcript rows in the loaded window. The stats strip cannot serve
- * as this probe: its turn/step counts ride the whole-log sessionStats
- * projection and stay fixed across paging by design, while the row count is
- * exactly what grows when an older page prepends or a live turn streams in.
+ * Resident key rows the mounted transcript window holds. The window's cap counts
+ * resident order keys, while `[data-chat-flow-key]` also carries one root row per
+ * mounted group, so the group roots are subtracted. The stats strip cannot serve
+ * as this probe: its turn/step counts ride the whole-log sessionStats projection
+ * and stay fixed across paging by design, while these rows are exactly what the
+ * window bounds.
  * @param page - the scenario page.
- * @returns the number of mounted chat flow rows.
+ * @returns mounted resident key rows, at most MOUNTED_ROW_LIMIT while no Turn streams.
  */
-async function loadedFlowRows(page: Page): Promise<number> {
-  return page.locator('[data-chat-flow-key]').count()
+async function mountedKeyRows(page: Page): Promise<number> {
+  const [rows, groups] = await Promise.all([
+    page.locator('[data-chat-flow-key]').count(),
+    page.locator('[data-chat-group-key]').count(),
+  ])
+  return rows - groups
+}
+
+/**
+ * Whether the "Load earlier" control is gone for good: no resident row remains
+ * above the window and no page is left to request. The control renames itself to
+ * its loading label while a page request is in flight, so both labels are read.
+ * @param page - the scenario page.
+ * @returns whether the transcript head is reached.
+ */
+async function historyHeadReached(page: Page): Promise<boolean> {
+  const controls = page.getByRole('button', { name: /^(?:Load earlier|Loading…)$/ })
+  return await controls.count() === 0
 }
 
 /** Open the mobile overlay drawer when its floating frame opener is showing. */
@@ -494,19 +531,22 @@ async function expectMarkerAboveComposer(page: Page, marker: string): Promise<vo
   expect(geometry.rowBottom).toBeLessThanOrEqual(geometry.composerTop + GEOMETRY_TOLERANCE)
 }
 
-async function loadEarlierWithAnchor(page: Page): Promise<void> {
+async function loadEarlierWithAnchor(world: ScrollWorld): Promise<void> {
+  const page = world.page
   await wheelToHistoryStart(page)
   const older = page.getByRole('button', { name: 'Load earlier', exact: true })
-  const loading = page.getByRole('button', { name: 'Loading…', exact: true })
-  await older.waitFor({ timeout: 10_000 })
+  // A page from the previous gesture may still be in flight: the control returns
+  // to its idle label when it lands, and stays gone when it reached the head.
+  await expect.poll(async () => await older.count() > 0 || await historyHeadReached(page), { timeout: 30_000 })
+    .toBe(true)
+  if (await historyHeadReached(page)) return
   const anchor = await visibleFlowAnchor(page)
-  const before = await loadedFlowRows(page)
-  await older.click()
-  await expect.poll(async () => (
-    await loadedFlowRows(page) > before && await loading.count() === 0
-  ), { timeout: 30_000 }).toBe(true)
+  await loadEarlierStep(page, world.historyPages)
   await nextPaint(page)
-  if (await page.getByRole('button', { name: 'Load earlier', exact: true }).count() === 0) {
+  // The mounted window holds at most its cap of resident rows however deep the
+  // loaded log grows; a live Turn's resident tail stub may sit beside it.
+  expect(await mountedKeyRows(page)).toBeLessThanOrEqual(MOUNTED_ROW_CEILING)
+  if (await historyHeadReached(page)) {
     expect(await page.locator('[data-turn-process][aria-expanded="false"]').count()).toBeGreaterThan(0)
     return
   }
@@ -673,12 +713,22 @@ describe('web e2e: long Chat scroll contract', () => {
         await world.page.getByRole('button', { name: 'Send message', exact: true }).click()
         await world.page.getByText(LIVE_TEXT_FIRST, { exact: false }).last().waitFor({ timeout: 15_000 })
         await wheelToHistoryStart(world.page)
-        const beforeRows = await loadedFlowRows(world.page)
-        await world.page.getByRole('button', { name: 'Load earlier', exact: true }).click()
+        // The mounted window reveals resident rows before it requests a page, so
+        // the held server page takes gestures until one of them asks for it; the
+        // request counter is what proves the gated page is finally in flight.
+        const pagesBeforeGate = world.historyPages()
+        for (let gesture = 0; gesture < 12 && world.historyPages() === pagesBeforeGate; gesture += 1) {
+          if (await historyHeadReached(world.page)) break
+          await loadEarlierStep(world.page, world.historyPages)
+        }
+        expect(world.historyPages()).toBeGreaterThan(pagesBeforeGate)
         await expect.poll(() => held, { timeout: 10_000 }).toBe(true)
 
         await wheelTranscript(world.page, 420)
         const readerAnchor = await visibleFlowAnchor(world.page)
+        // The frozen window keeps the resident tail stub mounted while the Turn
+        // streams, so the live row stays reachable above the reader's window.
+        expect(await world.page.locator('[data-streaming="true"]').count()).toBeGreaterThan(0)
         const chunksAfterAnchor = world.assistantFrames.filter(frame => frame.type === 'chunk').length
         releaseText()
         await expect.poll(
@@ -687,8 +737,15 @@ describe('web e2e: long Chat scroll contract', () => {
         ).toBeGreaterThan(chunksAfterAnchor + 5)
 
         releaseHistory()
-        await expect.poll(() => loadedFlowRows(world.page), { timeout: 30_000 }).toBeGreaterThan(beforeRows)
+        // The held page lands when the control leaves its loading label; the
+        // reader's frozen window keeps its head row while the page prepends rows
+        // above it, and the window never grows past its cap.
+        await expect.poll(
+          () => world.page.getByRole('button', { name: 'Loading…', exact: true }).count(),
+          { timeout: 30_000 },
+        ).toBe(0)
         await nextPaint(world.page)
+        expect(await mountedKeyRows(world.page)).toBeLessThanOrEqual(MOUNTED_ROW_CEILING)
         await expectSameFlowTop(world.page, readerAnchor)
       } finally {
         releaseText()
@@ -700,23 +757,24 @@ describe('web e2e: long Chat scroll contract', () => {
       await world.page.getByText(LIVE_TEXT_DONE, { exact: false }).last().waitFor({ timeout: 15_000 })
       await world.page.unroute('**/api/session/page')
 
-      let additionalPages = 0
-      // The cap covers the session's full depth at the current 8-message
-      // page size (89 fixture turns need 12 pages); the Load-earlier
-      // disappearance still breaks the loop early when history completes.
-      while (additionalPages < 24) {
+      let additionalGestures = 0
+      // The cap covers the session's full depth at the current 8-message page
+      // size plus the resident reveals each page needs before it pages; the
+      // Load-earlier disappearance still breaks the loop once the head is reached.
+      while (additionalGestures < 96) {
         await wheelToHistoryStart(world.page)
-        if (await world.page.getByRole('button', { name: 'Load earlier', exact: true }).count() === 0) break
-        await loadEarlierWithAnchor(world.page)
-        additionalPages += 1
+        if (await historyHeadReached(world.page)) break
+        await loadEarlierWithAnchor(world)
+        additionalGestures += 1
       }
-      expect(additionalPages).toBeGreaterThan(0)
-      // The whole log is loaded: turn 1's unique marker renders in the
-      // transcript (scoped: the sidebar search row also carries it) and no
-      // page remains.
+      expect(additionalGestures).toBeGreaterThan(0)
+      // The whole log is resident and the window sits at its head: turn 1's
+      // unique marker renders in the transcript (scoped: the sidebar search row
+      // also carries it), no page remains, and the mounted rows stay capped.
+      expect(await historyHeadReached(world.page)).toBe(true)
+      expect(await mountedKeyRows(world.page)).toBeLessThanOrEqual(MOUNTED_ROW_LIMIT)
       expect(await world.page.locator('[data-conversation-scroll]')
         .getByText(HISTORY_FIXTURE.markers.user(1), { exact: false }).count()).toBe(1)
-      expect(await world.page.getByRole('button', { name: 'Load earlier', exact: true }).count()).toBe(0)
       assertClean(world)
     })
   }, 180_000)
@@ -870,7 +928,8 @@ describe('web e2e: long Chat scroll contract', () => {
       await firstUnloaded.waitFor({ state: 'visible' })
       expect((await scrollGeometry(world.page)).scrollTop).toBe(bodyBeforeRailScroll.scrollTop)
 
-      const beforeRows = await loadedFlowRows(world.page)
+      // The mounted window holds its cap before the jump pages the rest in.
+      expect(await mountedKeyRows(world.page)).toBeLessThanOrEqual(MOUNTED_ROW_LIMIT)
       await firstUnloaded.focus()
       const tooltip = world.page.getByRole('tooltip')
       await expect.poll(() => tooltip.count(), { timeout: 15_000 }).toBe(1)
@@ -904,12 +963,12 @@ describe('web e2e: long Chat scroll contract', () => {
       await world.page.keyboard.press('Enter')
 
       // The jump pages history in and lands on turn 1: its mark flips to the
-      // loaded label and becomes current, the window grew, and the turn-1
-      // user row sits at the reading line.
+      // loaded label and becomes current, the window holds the target's row, and
+      // the mounted rows stay at their cap while the loaded log grows.
       const firstLoaded = rail.getByRole('button', { name: 'Jump to turn 1', exact: true })
       await expect.poll(() => firstLoaded.count(), { timeout: 60_000 }).toBe(1)
       await expect.poll(() => firstLoaded.getAttribute('aria-current'), { timeout: 15_000 }).toBe('true')
-      expect(await loadedFlowRows(world.page)).toBeGreaterThan(beforeRows)
+      expect(await mountedKeyRows(world.page)).toBeLessThanOrEqual(MOUNTED_ROW_LIMIT)
       // Drop mark focus so its hover/focus preview (which echoes the prompt
       // marker) leaves the DOM before the transcript count below.
       await firstLoaded.evaluate((el) => { (el as HTMLElement).blur() })
@@ -1035,8 +1094,8 @@ describe('web e2e: long Chat scroll contract', () => {
         RESTORE_FIXTURE_A,
         RESTORE_FIXTURE_A.markers.assistant(RESTORE_FIXTURE_A.turns),
       )
-      await loadEarlierWithAnchor(world.page)
-      await loadEarlierWithAnchor(world.page)
+      await loadEarlierWithAnchor(world)
+      await loadEarlierWithAnchor(world)
       await wheelToHistoryStart(world.page)
       await wheelTranscript(world.page, 1_300)
       const sessionAnchor = await visibleFlowAnchor(world.page)

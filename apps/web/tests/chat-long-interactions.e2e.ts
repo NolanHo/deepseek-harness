@@ -15,6 +15,7 @@ import { createChatScrollFixture } from './chat-scroll-fixture.ts'
 import {
   expandAllTurnFolds,
   launchWebScaffold,
+  mountedHeadKey,
   seedSession,
   watchConsole,
   webSnapshotMode,
@@ -23,6 +24,14 @@ import {
 import { conversationContextKey, expandOwningTurnProcess, newEnglishPage, saveFailureShot } from './support.ts'
 
 const MODE = webSnapshotMode()
+/**
+ * Resident order keys the fork's mounted transcript window holds. Mirrors
+ * `MOUNTED_ROW_LIMIT` in
+ * `packages/client/ui-chat/src/client/chat/fork/mounted-window.ts`: this lane is
+ * a host-plane program and must not reach client source (the same rule that
+ * restates `conversationContextKey` in support.ts), so the cap is mirrored.
+ */
+const MOUNTED_ROW_LIMIT = 50
 const SESSION_ID = 'chat-long-interactions-e2e'
 const FIXTURE_TURNS = 88
 const TOOL_TURN = FIXTURE_TURNS
@@ -122,6 +131,32 @@ async function wheelUntilMounted(page: Page, selector: string, deltaY: number): 
     await nextPaint(page)
   }
   throw new Error(`semantic Chat target did not mount: ${selector}`)
+}
+
+/**
+ * Mount an older resident row through "Load earlier". The fork's mounted window
+ * reveals resident rows before it pages the session, so a gesture that only
+ * requests a page leaves the window head in place; keep gesturing until an older
+ * row is mounted, which is what a paged row's identity assertion needs.
+ * @param page - the scenario page.
+ * @returns the mounted window head key after the reveal.
+ */
+async function revealOlderRow(page: Page): Promise<string> {
+  const older = page.getByRole('button', { name: 'Load earlier', exact: true })
+  const loading = page.getByRole('button', { name: 'Loading…', exact: true })
+  const head = await mountedHeadKey(page)
+  for (let gesture = 0; gesture < 8; gesture += 1) {
+    // A page request renames the control to its loading label; the next click
+    // waits for the idle control, which is the page having landed.
+    if (await loading.count() > 0) {
+      await expect.poll(async () => await loading.count() === 0, { timeout: 30_000 }).toBe(true)
+    }
+    if (await older.count() === 0) break
+    await older.first().click()
+    const revealed = await mountedHeadKey(page)
+    if (revealed !== null && revealed !== head) return revealed
+  }
+  throw new Error('Load earlier never mounted an older resident row')
 }
 
 function requiredEvent<T extends SessionEvent['type']>(
@@ -235,11 +270,18 @@ describe('web e2e: long Chat interaction contract', () => {
     ))
     expect(await markPitch()).toBe(10)
 
-    const loadEarlier = page.getByRole('button', { name: 'Load earlier', exact: true })
-    const loadedRows = page.locator('[data-chat-flow-key]')
-    const loadedBefore = await loadedRows.count()
-    await loadEarlier.click()
-    await expect.poll(() => loadedRows.count(), { timeout: 15_000 }).toBeGreaterThan(loadedBefore)
+    const headBefore = await mountedHeadKey(page)
+    const revealedHead = await revealOlderRow(page)
+    // The newly revealed older row is mounted at the window head, and the window
+    // stays bounded: the fork mounts MOUNTED_ROW_LIMIT resident rows around the
+    // reader, never the whole loaded log.
+    expect(revealedHead).not.toBe(headBefore)
+    expect(await mountedHeadKey(page)).toBe(revealedHead)
+    const [mountedRows, mountedGroups] = [
+      await page.locator('[data-chat-flow-key]').count(),
+      await page.locator('[data-chat-group-key]').count(),
+    ]
+    expect(mountedRows - mountedGroups).toBeLessThanOrEqual(MOUNTED_ROW_LIMIT)
     await railScroller.hover()
     await page.mouse.wheel(0, -FIXTURE_TURNS * 10)
     await expect.poll(() => railScroller.evaluate(element => element.scrollTop)).toBe(0)

@@ -1583,26 +1583,86 @@ export async function expandAllTurnFolds(page: Page): Promise<void> {
 }
 
 /**
+ * Count the Session-history page requests a page issues. The fork's mounted
+ * transcript window reveals resident rows before it pages the Session, and a
+ * page that lands above a frozen window leaves no trace in the mounted rows, so
+ * the request itself is the landing signal for the paging path.
+ * @param page - the web-test page.
+ * @returns a reader of the running request count.
+ */
+export function countHistoryPages(page: Page): () => number {
+  let requested = 0
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/api/session/page')) requested += 1
+  })
+  return () => requested
+}
+
+/**
+ * Order key of the oldest mounted transcript row, which is the mounted window's
+ * head. It moves toward the transcript head as Load earlier reveals resident
+ * rows, and keeps its row while a page prepends above a frozen window.
+ * @param page - the web-test page.
+ * @returns the head row's `data-chat-anchor-key`, or null when no row is mounted.
+ */
+export function mountedHeadKey(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const row = document.querySelector<HTMLElement>('[data-chat-flow-key]')
+    return row?.dataset.chatAnchorKey ?? null
+  })
+}
+
+/**
+ * Issue one "Load earlier" gesture and wait for its effect. The mounted window
+ * reveals resident rows before it requests a page, so the gesture either moves
+ * the window head in the click's own commit or asks the history route for the
+ * next page (which `requested` reports); the control carries the request under
+ * its loading label until the page lands, so the next gesture starts from a
+ * settled control.
+ * @param page - the web-test page.
+ * @param requested - history-page request count reader from {@link countHistoryPages}.
+ * @returns whether the gesture requested a server page.
+ */
+export async function loadEarlierStep(page: Page, requested: () => number): Promise<boolean> {
+  const more = page.getByRole('button', { name: 'Load earlier', exact: true })
+  const loading = page.getByRole('button', { name: 'Loading…', exact: true })
+  await expect.poll(async () => await loading.count() === 0, { timeout: 30_000 }).toBe(true)
+  if (await more.count() === 0) return false
+  const pages = requested()
+  const head = await mountedHeadKey(page)
+  try {
+    await more.first().click({ timeout: 5_000 })
+  } catch {
+    // The control disappeared between the settling poll and the click: the page
+    // that landed in between reached the transcript head, so no gesture remains.
+    return false
+  }
+  await expect.poll(async () => requested() > pages || await mountedHeadKey(page) !== head
+    || await more.count() === 0, { timeout: 30_000 }).toBe(true)
+  return requested() > pages
+}
+
+/**
  * Page the whole Session history in through the "Load earlier" control until
  * `done` answers true or the log is exhausted. The fork pages at
- * `PAGE_MESSAGES = 8` (`FORK_SURFACE.md`, upstream 50), so a scenario that
- * needs the oldest content asks for as many pages as its own composition
- * requires instead of assuming one.
+ * `PAGE_MESSAGES = 8` (`FORK_SURFACE.md`, upstream 50) and the mounted window
+ * reveals resident rows before it requests the next page, so a scenario that
+ * needs the oldest content asks for as many gestures as its own composition
+ * requires instead of assuming one page per gesture.
  * @param page - the web-test page.
  * @param done - probe answering whether the wanted older content is loaded.
  * @returns the final probe answer.
  */
 export async function loadEarlierUntil(page: Page, done: () => Promise<boolean>): Promise<boolean> {
-  const more = page.getByRole('button', { name: 'Load earlier' })
-  for (let attempt = 0; attempt < 64; attempt += 1) {
+  const more = page.getByRole('button', { name: 'Load earlier', exact: true })
+  const loading = page.getByRole('button', { name: 'Loading…', exact: true })
+  for (let attempt = 0; attempt < 256; attempt += 1) {
+    // A page request renames the control to its loading label, so an absent idle
+    // control ends the loop only once that request has landed.
+    await expect.poll(async () => await loading.count() === 0, { timeout: 20_000 }).toBe(true)
     if (await done()) return true
     if (await more.count() === 0) break
-    const button = more.first()
-    // The control disables itself for the whole request, so the next page has
-    // landed once it is enabled again (or the control is gone with the tail of
-    // the log).
-    await button.click()
-    await expect.poll(async () => await button.count() === 0 || await button.isEnabled(), { timeout: 20_000 }).toBe(true)
+    await more.first().click()
   }
   return await done()
 }

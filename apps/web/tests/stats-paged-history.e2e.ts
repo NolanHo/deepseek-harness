@@ -26,6 +26,14 @@ const SEED_ID = 'stats-paged-history-web-e2e'
 /** Turn count: 2 chat messages per turn, so 28 turns overflow one 50-message page. */
 const TURNS = 28
 const FULL_COUNTS = `${TURNS} turns ${TURNS} steps`
+/**
+ * Resident order keys the fork's mounted transcript window holds. Mirrors
+ * `MOUNTED_ROW_LIMIT` in
+ * `packages/client/ui-chat/src/client/chat/fork/mounted-window.ts`: this lane is
+ * a host-plane program and must not reach client source (the same rule that
+ * restates `conversationContextKey` in support.ts), so the cap is mirrored.
+ */
+const MOUNTED_ROW_LIMIT = 50
 
 /**
  * Generate the seed: TURNS closed single-step turns of one short user prompt
@@ -127,20 +135,21 @@ describe('web e2e: whole-session stats survive history paging', () => {
 
     // 加载更早: prepending the older pages must not move ANY strip figure —
     // counts, wall times, or token groups. The deployment pages at
-    // PAGE_MESSAGES=8 (FORK_SURFACE.md), so the whole log takes several
-    // requests; the Turn navigation drops its "Load and jump" wording once
-    // every Turn is in the window.
+    // PAGE_MESSAGES=8 (FORK_SURFACE.md) and the fork's mounted window reveals
+    // resident rows before it requests the next server page, so reaching the head
+    // takes a gesture per reveal plus a gesture per page; the oldest Turn's row
+    // being mounted is the barrier that every page between it and the tail is
+    // resident.
     expect(
-      await loadEarlierUntil(page, async () =>
-        await page.getByRole('button', { name: 'Load earlier', exact: true }).count() === 0),
+      await loadEarlierUntil(page, async () => await page.getByText('m1', { exact: true }).count() === 1),
       'load-earlier pages in the whole log',
     ).toBe(true)
     expect(await strip.textContent()).toBe(stripBeforePaging)
-    // The mounted window stays bounded by virtualization: the deployment's
-    // 8-message pages (FORK_SURFACE.md: session.ts PAGE_MESSAGES 8 over
-    // upstream's 50) keep a handful of turn-tail footers resident, not the
-    // whole-log count upstream's single 50-message page mounted. The strip
-    // above still reports the complete log.
+    expect(await page.getByRole('button', { name: 'Load earlier', exact: true }).count()).toBe(0)
+    // The mounted window stays bounded while the strip above reports the complete
+    // log from the sessionStats projection: the head of the mounted rows is the
+    // oldest Turn, so its own turn-tail footer row is still mounted with it.
+    expect(await page.locator('[data-chat-flow-key]').count()).toBeLessThanOrEqual(MOUNTED_ROW_LIMIT)
     expect(await page.locator('[data-chat-flow-key^="9:turn-tail"]').count()).toBeGreaterThan(0)
   }, 60_000)
 
