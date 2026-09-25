@@ -473,7 +473,7 @@ describe('session.history projections block', () => {
 })
 
 describe('session.list projections column', () => {
-  it('serves every already-materialized wire value from the live registry without folding', async () => {
+  it('serves already-materialized list-plane values from the live registry without folding', async () => {
     const { ctx, session } = await harness(true)
     ctx.sessionProjections.register(lastUserUnit())
     const gateway = remote(ctx)
@@ -483,7 +483,8 @@ describe('session.list projections column', () => {
     const response = await gateway.list(request({}))
     if (!response.ok) throw new Error('unreachable')
     const row = response.value.items.find(item => item.sessionId === session.id)
-    expect(row?.projections?.values['test/last-user']).toEqual({ text: 'm0' })
+    // A non-list-plane key stays off the list wire; the Session-open baseline serves it.
+    expect(row?.projections?.values['test/last-user']).toBeUndefined()
     expect(row?.projections?.values.sessionListMetadata).toEqual({
       blank: false,
       lastPromptAt: session.eventAt(SessionSeq(session.seq - 1))?.time,
@@ -532,7 +533,7 @@ describe('session.list projections column', () => {
     expect(row !== undefined && 'projections' in row).toBe(false)
   })
 
-  it('serves every available cold projection hint from the cache with zero log loads', async () => {
+  it('serves the list-plane cold projection hints from the cache with zero log loads', async () => {
     const { ctx } = await harness(true)
     const coldId = SessionId('session-cold-listing')
     const load = () => { throw new Error('list must not load event logs') }
@@ -563,7 +564,6 @@ describe('session.list projections column', () => {
       kind: 'cached',
       asOfSeq: 7,
       values: {
-        'test/last-user': { text: 'cached' },
         sessionListMetadata: { blank: false, lastPromptAt: 6 },
         title: 'Cached title',
       },

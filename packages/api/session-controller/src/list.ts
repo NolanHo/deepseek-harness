@@ -292,19 +292,62 @@ export class ApiSessionList {
 }
 
 /**
+ * Projection keys a Session-list row may carry across the wire. The list
+ * plane reads these from list-derived stores: `sessionListMetadata` (blank,
+ * lastPromptAt) and `title` build the row; `subagentCatalog` feeds the
+ * workspace tree, lineage, and catalog surfaces; `schedule` drives the
+ * tree's active-reminder badge; `subagentTiming` and `tokenUsage` supply the
+ * lineage metrics of cold children; `subagent` labels the sidebar chat tab;
+ * `agentPreset` labels the conversation header; `agentTeam` serves the Team
+ * panel for a cold lead Session. Every other projection, `turnOutline`,
+ * `inbox`, `todos`, and the rest, is read only by an opened Session's
+ * surfaces, which receive the complete baseline on the Session-open path, so
+ * a listing never ships those keys.
+ */
+const LIST_PROJECTION_KEYS: readonly string[] = [
+  'agentPreset',
+  'agentTeam',
+  'schedule',
+  'sessionListMetadata',
+  'subagent',
+  'subagentCatalog',
+  'subagentTiming',
+  'title',
+  'tokenUsage',
+]
+
+/**
+ * Project one block down to the keys the list plane reads.
+ * @param block - the block produced by the live registry or the persisted cache.
+ * @returns the kept values, or `undefined` when the block carries none of them.
+ */
+function listProjectionValues(block: ProjectionSnapshot): SessionProjectionValues | undefined {
+  const source: SessionProjectionValues = block.values as SessionProjectionValues
+  const values = Object.fromEntries(
+    LIST_PROJECTION_KEYS.flatMap((key) => {
+      const value = source[key]
+      return value === undefined ? [] : [[key, value]]
+    }),
+  ) as SessionProjectionValues
+  return Object.keys(values).length === 0 ? undefined : values
+}
+
+/**
  * Wrap one projection block as Session-list hints of the named sequence space.
  * @param kind - which sequence space the block's watermark belongs to.
  * @param block - the block, or `undefined` when no source served one.
- * @returns the hints, or `undefined` when the block is absent or carries no value.
+ * @returns the hints, or `undefined` when the block is absent or carries no list-plane value.
  */
 function hintsOf(
   kind: SessionProjectionHints['kind'],
   block: ProjectionSnapshot | undefined,
 ): SessionProjectionHints | undefined {
-  if (block === undefined || Object.keys(block.values).length === 0) return undefined
-  // Listing hints contain every wire value the source currently holds but
-  // remain partial: missing cells and cache rows are never materialized here.
-  return { kind, asOfSeq: block.asOfSeq, values: block.values as SessionProjectionValues }
+  if (block === undefined) return undefined
+  const values = listProjectionValues(block)
+  if (values === undefined) return undefined
+  // Listing hints stay partial: only list-plane keys cross the wire, and
+  // missing cells and cache rows are never materialized here.
+  return { kind, asOfSeq: block.asOfSeq, values }
 }
 
 function normalizeSearchQuery(query: string): string {
