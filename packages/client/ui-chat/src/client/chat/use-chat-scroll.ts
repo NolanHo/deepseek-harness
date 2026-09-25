@@ -137,14 +137,16 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
         reading.onScrollEnd()
         navigation.readerSettled()
       },
-      interact: () => {
-        navigation.cancel()
+      interact: () => { navigation.cancel() },
+      intent: (event) => {
         // A gesture against the mounted head moves nothing, so it produces no
-        // scroll event; the intent itself reads the geometry and steps.
+        // scroll event; the intent itself reads the geometry and steps. A wheel
+        // arrives before the position it produces, so its direction decides:
+        // only a gesture toward older rows may step the head.
+        if (event instanceof WheelEvent && event.deltaY >= 0) return
         const scroll = viewport.readScroll()
-        if (scroll !== null) {
-          stepHeadAtReader({ top: scroll.metrics.top, height: scroll.metrics.height, movedByReader: true })
-        }
+        if (scroll === null) return
+        stepHeadAtReader({ top: scroll.metrics.top, height: scroll.metrics.height, movedByReader: true })
       },
       resize: () => {
         const committed = navigation.contentCommitted()

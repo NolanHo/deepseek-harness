@@ -25,6 +25,8 @@ interface ViewportEvents {
   scrollEnd: () => void
   resize: () => void
   interact: () => void
+  /** Fork patch (FORK_SURFACE.md): a reader gesture on the transcript, movement or not. */
+  intent?: (event: Event) => void
 }
 
 interface ViewportElements {
@@ -488,6 +490,9 @@ export class ChatViewport {
       if (event.target instanceof Element && event.target.closest('[data-composer-seat]') !== null) return
       if (event.type === 'keydown' && (!(event instanceof KeyboardEvent) || !SCROLL_KEYS.has(event.key))) return
     }
+    // Fork patch (FORK_SURFACE.md): deliver the gesture itself, because a gesture
+    // against the mounted window head scrolls nothing and so emits no scroll event.
+    this.events?.intent?.(event)
     if (this.paging === null) return
     this.stopPreserving()
     this.events?.interact()
