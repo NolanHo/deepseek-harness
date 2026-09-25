@@ -11,7 +11,7 @@ import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
-import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
+import { SessionQueryError, type SessionListScope, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import {
   ApiSessionAgentController,
@@ -250,14 +250,14 @@ export class SessionController extends TypertRemoteService {
   }
 
   /**
-   * Read all visible Session rows without resuming an Agent.
-   * @param _request - reserved empty list request.
+   * Read the requested Session rows without resuming an Agent.
+   * @param request - row scope; an absent scope selects the sidebar's listed rows.
    * @param signal - cancellation for persistence reads.
    * @returns visible Session summaries ordered by activity.
    */
   @Remote('list')
-  async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue> {
-    return { items: await this.listState.list(signal) }
+  async list(request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue> {
+    return { items: await this.listState.list(signal, listScopeOf(request)) }
   }
 
   /**
@@ -516,6 +516,16 @@ export class SessionController extends TypertRemoteService {
   }
 
 
+}
+
+/**
+ * Translate one wire list request into the query enumeration scope.
+ * @param request - wire request whose absent scope selects the sidebar's listed rows.
+ * @returns the enumeration scope; `parentSessionId` takes precedence over `scope`.
+ */
+function listScopeOf(request: SessionListRequest): SessionListScope {
+  const { parentSessionId, scope } = request
+  return parentSessionId === undefined ? { scope: scope ?? 'listed' } : { parentSessionId }
 }
 
 export { buildModelCatalog }

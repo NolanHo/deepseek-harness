@@ -28,6 +28,7 @@ import {
   createSessionTestController,
   createSessionTestRemote,
   testSessionPersistence,
+  type TestSessionRemote,
 } from './test-remote.ts'
 
 const sid = (id: string): SessionId => id as SessionId
@@ -168,7 +169,9 @@ describe('sessions.list cold merge', () => {
     } as never)
     const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
 
-    const response = await remote.list(request({}))
+    // The subject is cold projection, not row scope: list every origin so the
+    // subagent row keeps proving its carried parent and origin fields.
+    const response = await remote.list(request({ scope: 'all' }))
     expect(response.ok).toBe(true)
     if (!response.ok) throw new Error('unreachable')
     const byId = Object.fromEntries(response.value.items.map(item => [item.sessionId, item]))
@@ -197,6 +200,164 @@ describe('sessions.list cold merge', () => {
     expect(inspect).not.toHaveBeenCalled()
   })
 
+})
+
+/**
+ * Cold headers for the `session/list` scope fixture: two roots, a fork child
+ * (parentSession set, no subagent origin) that must stay visible, and a
+ * subagent child plus grandchild that only an explicit `all` or a
+ * `parentSessionId` query may return.
+ */
+function scopeHeaders(): SessionHeader[] {
+  return [
+    header('scope-other-root', 500),
+    header('scope-root', 400),
+    header('scope-fork-child', 300, { parentSession: sid('scope-root') }),
+    header('scope-subagent-child', 200, { parentSession: sid('scope-root'), origin: 'subagent' }),
+    header('scope-grandchild', 100, { parentSession: sid('scope-subagent-child'), origin: 'subagent' }),
+  ]
+}
+
+async function scopeContext(
+  metas: readonly SessionHeader[],
+): Promise<{ ctx: Context; remote: TestSessionRemote }> {
+  const ctx = new Context()
+  await ctx.plugin(SessionStore)
+  await ctx.plugin(AgentRegistry)
+  providePersistence(ctx, { list: () => Promise.resolve(metas.map(meta => structuredClone(meta))) })
+  const remote = createSessionTestRemote(ctx, {
+    defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+    cwd: '/tmp',
+  })
+  return { ctx, remote }
+}
+
+/** Attach one live subagent child so the scope covers attached rows too. */
+function addLiveSubagent(ctx: Context): void {
+  ctx.sessions.create(sid('scope-live-subagent'), {
+    meta: {
+      cwd: '/proj',
+      createdAt: 250,
+      parentSession: sid('scope-root'),
+      origin: 'subagent',
+    },
+  })
+}
+
+function listedIds(response: Awaited<ReturnType<TestSessionRemote['list']>>): string[] {
+  if (!response.ok) throw new Error(`list failed: ${response.error.code}`)
+  return response.value.items.map(item => item.sessionId)
+}
+
+describe('session/list scope', () => {
+  it('hides subagent rows by default and keeps fork children visible', async () => {
+    const { ctx, remote } = await scopeContext(scopeHeaders())
+    addLiveSubagent(ctx)
+
+    const response = await remote.list(request({}))
+
+    expect(listedIds(response)).toEqual([
+      'scope-other-root',
+      'scope-root',
+      'scope-fork-child',
+    ])
+    if (!response.ok) throw new Error('unreachable')
+    const byId = Object.fromEntries(response.value.items.map(item => [item.sessionId, item]))
+    // A fork child has a parent and no subagent origin: its row shape is
+    // unchanged, only the set of rows changed.
+    expect(byId['scope-fork-child']).toEqual({
+      sessionId: 'scope-fork-child',
+      updatedAt: 300,
+      agentAvailable: false,
+      running: false,
+      blank: false,
+      parentSessionId: 'scope-root',
+      cwd: '/proj',
+    })
+    expect(byId['scope-root']).toEqual({
+      sessionId: 'scope-root',
+      updatedAt: 400,
+      agentAvailable: false,
+      running: false,
+      blank: false,
+      cwd: '/proj',
+    })
+    expect(byId['scope-subagent-child']).toBeUndefined()
+    expect(byId['scope-grandchild']).toBeUndefined()
+    expect(byId['scope-live-subagent']).toBeUndefined()
+  })
+
+  it('returns every row, subagent children included, for an explicit all scope', async () => {
+    const { ctx, remote } = await scopeContext(scopeHeaders())
+    addLiveSubagent(ctx)
+
+    const response = await remote.list(request({ scope: 'all' }))
+
+    expect(listedIds(response)).toEqual([
+      'scope-other-root',
+      'scope-root',
+      'scope-fork-child',
+      'scope-live-subagent',
+      'scope-subagent-child',
+      'scope-grandchild',
+    ])
+    if (!response.ok) throw new Error('unreachable')
+    const byId = Object.fromEntries(response.value.items.map(item => [item.sessionId, item]))
+    expect(byId['scope-subagent-child']).toMatchObject({
+      parentSessionId: 'scope-root',
+      origin: 'subagent',
+      blank: false,
+      running: false,
+      updatedAt: 200,
+      cwd: '/proj',
+    })
+  })
+
+  it('returns exactly one Session\'s children for parentSessionId, whatever their origin', async () => {
+    const { ctx, remote } = await scopeContext(scopeHeaders())
+    addLiveSubagent(ctx)
+
+    const response = await remote.list(request({ parentSessionId: sid('scope-root') }))
+
+    expect(listedIds(response)).toEqual([
+      'scope-fork-child',
+      'scope-live-subagent',
+      'scope-subagent-child',
+    ])
+    if (!response.ok) throw new Error('unreachable')
+    const byId = Object.fromEntries(response.value.items.map(item => [item.sessionId, item]))
+    expect(byId['scope-subagent-child']).toMatchObject({
+      parentSessionId: 'scope-root',
+      origin: 'subagent',
+    })
+    expect(byId['scope-live-subagent']).toMatchObject({
+      parentSessionId: 'scope-root',
+      origin: 'subagent',
+    })
+    expect(byId['scope-root']).toBeUndefined()
+    expect(byId['scope-grandchild']).toBeUndefined()
+    expect(byId['scope-other-root']).toBeUndefined()
+  })
+
+  it('asks the query enumeration for the scope instead of filtering after the read', async () => {
+    const { ctx, remote } = await scopeContext(scopeHeaders())
+    const enumerated = vi.spyOn(ctx.sessionQuery, 'listSessions')
+
+    await remote.list(request({}))
+    await remote.list(request({ scope: 'all' }))
+
+    expect(enumerated.mock.calls).toHaveLength(2)
+    expect(enumerated).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      expect.objectContaining({ scope: 'listed' }),
+    )
+    expect(enumerated).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({ scope: 'all' }),
+    )
+  })
 })
 
 describe('attached updatedAt tracks human prompts', () => {
