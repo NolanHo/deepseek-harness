@@ -251,6 +251,8 @@ export function ChatView({
     submissionId: visibleSubmissions.at(-1)?.requestId ?? null,
     loadedTurns: turnNavigationItems,
     mountSignature: mounted.signature,
+    // Fork patch (FORK_SURFACE.md): a settled sample at the window head reveals one step.
+    revealAtHead: mounted.revealAtHead,
   })
   /**
    * Rail target whose jump waits for its row. `awaited` is set when the window

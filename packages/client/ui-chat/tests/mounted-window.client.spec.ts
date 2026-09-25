@@ -4,7 +4,7 @@ import { act, cleanup, renderHook } from '@testing-library/react'
 import type { GroupKey, NodeKey, RenderEntry } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   MOUNTED_ROW_LIMIT, REVEAL_ROW_STEP, orderIndexOfAnchor, planMountedWindow, useMountedWindow,
-  type MountedWindowInput,
+  type HeadSample, type MountedWindowInput,
 } from '../src/client/chat/fork/mounted-window.ts'
 
 afterEach(cleanup)
@@ -372,5 +372,87 @@ describe('mounted window hook', () => {
     expect(result.current.atTail).toBe(false)
     expect(result.current.tailMounted).toBe(true)
     expect(result.current.entries.at(-1)).toEqual(node('k59'))
+  })
+
+  /** A settled sample of the reader's own scrolling, anchored on `anchorKey`. */
+  function headSample(anchorKey: string | null, overrides: Partial<HeadSample> = {}): HeadSample {
+    return {
+      position: anchorKey === null ? null : { anchorKey },
+      movedByReader: true,
+      followingTail: false,
+      ...overrides,
+    }
+  }
+
+  it('reveals one step for a settled sample that reached the head', () => {
+    const order = keys(130)
+    const { result, rerender } = bind(input({ order }))
+    // A jump freezes the window on the row it held; the reader keeps wheeling up.
+    act(() => { expect(result.current.hold('k70')).toBe(true) })
+    expect(result.current.headKey).toBe('k45')
+    // Their settled sample anchors on the head row itself: no mounted row
+    // remains above the reading line.
+    rerender(input({ order, followingTail: false, anchorKey: 'k45' }))
+    expect(result.current.headKey).toBe('k45')
+    act(() => { expect(result.current.revealAtHead(headSample('k45'), false)).toBe(true) })
+    expect(result.current.headKey).toBe('k20')
+    expect(result.current.keys.has('k45')).toBe(true)
+    // The head row moved out from under that anchor, so the same sample, and any
+    // compensation echo of it, can only be a no-op.
+    act(() => { expect(result.current.revealAtHead(headSample('k45'), false)).toBe(false) })
+    expect(result.current.headKey).toBe('k20')
+  })
+
+  it('clamps a sample reveal on the row the sample anchored, not the saved row', () => {
+    const order = keys(200)
+    const { result } = bind(input({ order, followingTail: false, anchorKey: 'k150' }))
+    expect(result.current.headKey).toBe('k125')
+    // The store already holds the sampled row while the hook still renders the
+    // saved row 25 rows below it: the step is the full one reveal, not the
+    // shorter step that stale row would clamp it to.
+    act(() => { expect(result.current.revealAtHead(headSample('k125'), false)).toBe(true) })
+    expect(result.current.headKey).toBe('k100')
+    expect(result.current.keys.has('k125')).toBe(true)
+  })
+
+  it('reveals nothing for a sample the reading policy reports at the tail', () => {
+    const order = keys(130)
+    const { result } = bind(input({ order, followingTail: false, anchorKey: 'k70' }))
+    expect(result.current.headKey).toBe('k45')
+    act(() => {
+      expect(result.current.revealAtHead(headSample('k45', { followingTail: true }), false)).toBe(false)
+    })
+    expect(result.current.headKey).toBe('k45')
+    expect(result.current.atTail).toBe(false)
+  })
+
+  it('reveals nothing when the reader owns no row of their own', () => {
+    const order = keys(130)
+    const { result } = bind(input({ order, followingTail: true, anchorKey: null }))
+    expect(result.current.atTail).toBe(true)
+    expect(result.current.headKey).toBe('k80')
+    // The row at the reading line is the tail window's own head: stepping it
+    // would unmount the newest rows for a reader who saved no row.
+    act(() => { expect(result.current.revealAtHead(headSample('k80'), false)).toBe(false) })
+    expect(result.current.headKey).toBe('k80')
+    expect(result.current.atTail).toBe(true)
+  })
+
+  it('reveals nothing for a programmatic sample, held history, or a mid-window row', () => {
+    const order = keys(130)
+    const { result } = bind(input({ order, followingTail: false, anchorKey: 'k70' }))
+    // The reflow compensation writes the scrollport itself, so only the reader's
+    // own movement may step the head; the write cannot feed itself another step.
+    act(() => {
+      expect(result.current.revealAtHead(headSample('k45', { movedByReader: false }), false)).toBe(false)
+    })
+    // A retained paging anchor or an in-flight page owns the layout.
+    act(() => { expect(result.current.revealAtHead(headSample('k45'), true)).toBe(false) })
+    // A sample with no captured row has no reading line to step from.
+    act(() => { expect(result.current.revealAtHead(headSample(null), false)).toBe(false) })
+    // A row inside the window means mounted rows still sit above the reader.
+    act(() => { expect(result.current.revealAtHead(headSample('k60'), false)).toBe(false) })
+    expect(result.current.headKey).toBe('k45')
+    expect(result.current.revealable).toBe(true)
   })
 })

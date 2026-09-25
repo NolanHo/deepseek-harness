@@ -4311,6 +4311,46 @@ describe('ChatView mounted window', () => {
     expect(scroller.scrollTop).toBe(1_400)
   })
 
+  it('reveals one window step from a settled sample at the head and holds the reader', () => {
+    installReaderGeometry()
+    const rows = Array.from({ length: 260 }, (_, index) => user(101 + index, `row ${index}`))
+    const h = makeHarness({ nodes: rows })
+    h.chatScroll.save({ anchorKey: 'fixture:user:246', anchorTop: 0, scrollTop: 0 })
+    const view = render(<h.ChatView {...h.props} />)
+    const scroller = view.container.querySelector('[data-chat-flow]')!.parentElement as HTMLDivElement
+    installScrollMetrics(scroller, 2_000, 400)
+    // jsdom has no layout: one 40 px row per mounted flow row, measured from the
+    // scroll offset, so rows mounted above push the rows below them down.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const flow = this.dataset.chatFlowKey === undefined ? null : this.closest('[data-chat-flow]')
+      if (flow === null) return { top: 0, bottom: 400 } as DOMRect
+      const top = [...flow.querySelectorAll('[data-chat-flow-key]')].indexOf(this) * 40 - scroller.scrollTop
+      return { top, bottom: top + 40 } as DOMRect
+    })
+    // The explicit control freezes the window one step above the reader's row.
+    fireEvent.click(view.getByText('加载更早'))
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:197"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:171"]')).toBeNull()
+    // The reader wheels up to the head row: their settled sample anchors on it.
+    readerScroll(scroller, 30)
+    // One reveal step mounts the 25 rows above the head, and the window change
+    // re-asserts the sampled row through the reflow hold: the scrollport absorbs
+    // the rows that appeared above it, the reading line stays where it was, and
+    // the old head row is no longer at the port top.
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:172"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:171"]')).toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:197"]')).not.toBeNull()
+    // The sampled row keeps the reading line it held at -30 px.
+    expect(scroller.scrollTop).toBe(1_030)
+    expect((view.container.querySelector('[data-chat-flow-key="fixture:user:197"]') as HTMLElement)
+      .getBoundingClientRect().top).toBe(-30)
+    // A later settled sample with no reader movement cannot step again.
+    fireEvent.scroll(scroller)
+    fireEvent(scroller, new Event('scrollend'))
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:172"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:147"]')).toBeNull()
+  })
+
   it('offers no earlier-rows control to a reader who owns the live tail', () => {
     const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))
     const h = makeHarness({ nodes: rows })
