@@ -21,6 +21,10 @@ import { SessionManager } from './manager.ts'
 import type { SessionRemotes } from './remotes.ts'
 import type { SessionListPhase, SessionSearchResultItem, SessionProjectionSnapshot } from './manager.ts'
 import type { Session } from './session.ts'
+// Fork patch (FORK_SURFACE.md): a list rebuild republishes the store's own
+// state and row objects when nothing observable changed
+// (fork/coalesced-refresh.ts).
+import { reconcileListState } from './fork/coalesced-refresh.ts'
 
 /** Session list row projected from the host list RPC plus live stream increments. */
 export interface SessionSummary {
@@ -609,7 +613,8 @@ export class ClientSessions implements ISessions {
 
   /** Project the manager's list snapshot into the store (title derivation is display-only). */
   private projectList(): void {
-    const previousById = this.list.getSnapshot().byId
+    const published = this.list.getSnapshot()
+    const previousById = published.byId
     const {
       items, phase, projectionsBySession,
     } = this.manager.getListSnapshot()
@@ -678,7 +683,11 @@ export class ClientSessions implements ISessions {
         ...(title === undefined ? {} : { title, displayTitle: title }),
       }
     }
-    this.list.set({ ids, byId, phase, projectionsBySession })
+    // Fork patch (FORK_SURFACE.md): a rebuild that publishes nothing a consumer
+    // can read differently keeps the state, and every row object, the store
+    // already holds (fork/coalesced-refresh.ts).
+    const next = reconcileListState(published, { ids, byId, phase, projectionsBySession })
+    if (next !== published) this.list.set(next)
   }
 
   private startScopeDrop(

@@ -172,6 +172,51 @@ describe('Session projection value semantics', () => {
     expect(anyTicks).toBe(1)
   })
 
+  it('publishes no change for an accepted frame republishing the value a row holds', async () => {
+    const store = new ProjectionValueStore()
+    let keyTicks = 0
+    let anyTicks = 0
+    store.faceOf('test/marks').subscribe(() => { keyTicks += 1 })
+    store.subscribeAny(() => { anyTicks += 1 })
+    const value = { marks: ['a'] }
+    expect(store.apply('test/marks', value, SessionSeq(5))).toBe(true)
+    await Promise.resolve()
+    const published = store.values()
+    // The same value at a higher watermark: nothing a subscriber reads changed.
+    expect(store.apply('test/marks', value, SessionSeq(9))).toBe(false)
+    await Promise.resolve()
+    expect(keyTicks).toBe(1)
+    expect(anyTicks).toBe(1)
+    expect(store.values()).toBe(published)
+    // The watermark still advanced, so the superseded frame keeps losing.
+    expect(store.seqOf('test/marks')).toBe(9)
+    store.apply('test/marks', value, SessionSeq(7))
+    expect(store.seqOf('test/marks')).toBe(9)
+    // A rebuilt object with equal fields is a different reference: the value a
+    // reader receives would differ, so the frame stays a change.
+    expect(store.apply('test/marks', { marks: ['a'] }, SessionSeq(10))).toBe(true)
+    await Promise.resolve()
+    expect(keyTicks).toBe(2)
+  })
+
+  it('publishes no change for a cached block republishing the value it holds', async () => {
+    const store = new ProjectionValueStore()
+    let anyTicks = 0
+    store.subscribeAny(() => { anyTicks += 1 })
+    store.applyCached({ title: 'Cached title' })
+    await Promise.resolve()
+    const published = store.values()
+    store.applyCached({ title: 'Cached title' })
+    await Promise.resolve()
+    expect(anyTicks).toBe(1)
+    expect(store.values()).toBe(published)
+    // A different value is still a change.
+    store.applyCached({ title: 'Cached later' })
+    await Promise.resolve()
+    expect(anyTicks).toBe(2)
+    expect(store.get('title')).toBe('Cached later')
+  })
+
   it('faces are identity-stable per key (the React binding cache premise)', () => {
     const store = new ProjectionValueStore()
     expect(store.faceOf('test/marks')).toBe(store.faceOf('test/marks'))

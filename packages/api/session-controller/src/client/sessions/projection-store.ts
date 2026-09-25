@@ -16,6 +16,9 @@ import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/t
 import type { SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import { Notifier } from './notifier.ts'
+// Fork patch (FORK_SURFACE.md): a write that republishes the value a row holds
+// invalidates nothing and notifies nobody (fork/coalesced-refresh.ts).
+import { sameProjectionValue } from './fork/coalesced-refresh.ts'
 
 // The single projection type table, typed end to end (host unit, wire block,
 // client store, React hook) — the Service Definition package's pure-type outlet
@@ -87,7 +90,9 @@ interface Channel {
  * has never seen reads `undefined` (capability absent). Faces are identity-stable
  * per key (create-on-demand, cached) so the React side binds each exactly
  * once; the store-level channel (`subscribeAny`) serves coarse consumers (the
- * manager's list projection reads the `title` key).
+ * manager's list projection reads the `title` key). An accepted write that
+ * republishes the value its row holds advances the watermark alone: `values()`
+ * and every face keep the references they had, and no subscriber is notified.
  */
 export class ProjectionValueStore {
   private readonly rows = new Map<string, Row>()
@@ -155,14 +160,26 @@ export class ProjectionValueStore {
    * @param key - projection key.
    * @param value - whole value computed by the host unit.
    * @param seq - the unit's watermark at emission.
+   * @returns whether the published value changed. A frame that republishes the
+   *   row's value reports false: the watermark still advances, so a replay of
+   *   the older frame keeps losing, but no face, `values()` snapshot, or coarse
+   *   subscriber is touched.
    */
-  apply(key: string, value: unknown, seq: SessionSeqCursor): void {
+  apply(key: string, value: unknown, seq: SessionSeqCursor): boolean {
     const row = this.rows.get(key)
     // higher seq wins among sequenced rows; replays and stale frames drop. A
     // cached row has no comparable seq and always yields.
-    if (row?.kind === 'sequenced' && seq <= row.seq) return
+    if (row?.kind === 'sequenced' && seq <= row.seq) return false
+    // Fork patch (FORK_SURFACE.md): an equal published value advances the
+    // watermark silently instead of invalidating and notifying. A cached row
+    // still becomes sequenced, so the accepted watermark stays readable.
+    if (sameProjectionValue(row, value)) {
+      this.rows.set(key, { kind: 'sequenced', value, seq })
+      return false
+    }
     this.rows.set(key, { kind: 'sequenced', value, seq })
     this.changed(key)
+    return true
   }
 
   /**
@@ -175,7 +192,11 @@ export class ProjectionValueStore {
    */
   applyCached(values: Readonly<Record<string, unknown>>): void {
     for (const key of Object.keys(values)) {
-      if (this.rows.get(key)?.kind === 'sequenced') continue
+      const row = this.rows.get(key)
+      if (row?.kind === 'sequenced') continue
+      // Fork patch (FORK_SURFACE.md): a re-listed block that republishes the
+      // value its cached row holds invalidates nothing.
+      if (sameProjectionValue(row, values[key])) continue
       this.rows.set(key, { kind: 'cached', value: values[key] })
       this.changed(key)
     }

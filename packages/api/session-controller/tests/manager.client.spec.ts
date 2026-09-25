@@ -613,6 +613,54 @@ describe('list lifecycle', () => {
     }
   })
 
+  it('skips the list rebuild and the notification when a control frame republishes the value', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    manager.handleSessionAdded(summary(S1))
+    await Promise.resolve()
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Stable', seq: 1 })
+    await Promise.resolve()
+    manager.subscribe(() => {})
+    const rebuild = vi.spyOn(manager as unknown as { buildListSnapshot: () => unknown }, 'buildListSnapshot')
+    const notified = vi.fn()
+    onTestFinished(manager.subscribe(notified))
+    // The same value at a higher watermark changes nothing the list publishes.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Stable', seq: 2 })
+    await Promise.resolve()
+    expect(rebuild).not.toHaveBeenCalled()
+    expect(notified).not.toHaveBeenCalled()
+    expect(manager.getListSnapshot().items[0]?.title).toBe('Stable')
+    // A genuinely changed value still rebuilds and notifies.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Moved', seq: 3 })
+    await Promise.resolve()
+    expect(rebuild).toHaveBeenCalled()
+    expect(notified).toHaveBeenCalled()
+    expect(manager.getListSnapshot().items[0]?.title).toBe('Moved')
+  })
+
+  it('coalesces repeated equal control frames inside one window into at most one rebuild', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    manager.handleSessionAdded(summary(S1))
+    await Promise.resolve()
+    manager.subscribe(() => {})
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Stable', seq: 1 })
+    await Promise.resolve()
+    const rebuild = vi.spyOn(manager as unknown as { buildListSnapshot: () => unknown }, 'buildListSnapshot')
+    // One window's worth of stream: every frame carries a higher watermark over
+    // the same value, each flushed on its own microtask.
+    for (let seq = 2; seq <= 12; seq++) {
+      manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Stable', seq })
+      await Promise.resolve()
+    }
+    expect(rebuild.mock.calls.length).toBeLessThanOrEqual(1)
+    const rebuilds = rebuild.mock.calls.length
+    // A changed value still rebuilds once, not once per frame of the window.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Moved', seq: 13 })
+    await Promise.resolve()
+    expect(rebuild.mock.calls.length).toBe(rebuilds + 1)
+  })
+
   it('coalesces ambient activity flushes within a one-second window', async ({ mock, remote }) => {
     vi.useFakeTimers()
     try {
@@ -973,6 +1021,20 @@ describe('subagent catalogs', () => {
     expect(manager.getListSnapshot().projectionsBySession[S1]?.values.subagentCatalog).toEqual([
       { id: S2, createdAt: 1, mode: 'one-shot' },
     ])
+  })
+
+  it('keeps a pushed value when a frame republishes it during a missing projections read', async ({ mock, remote }) => {
+    const response = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.projections>>>()
+    remote.session.projections.mockImplementation(() => response.promise)
+    const manager = makeManager(mock, remote)
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Pushed', seq: 2 })
+    const read = manager.refreshProjections(S1)
+    // The same value at a higher watermark lands in flight: the published
+    // values keep their identity, so only the advanced watermark records it.
+    manager.handleControlFrame({ type: 'projection', sessionId: S1, key: 'title', value: 'Pushed', seq: 5 })
+    response.resolve(ok(null))
+    await read
+    expect(manager.getListSnapshot().projectionsBySession[S1]?.values.title).toBe('Pushed')
   })
 
   it('shares cold initial loading and reuses the loaded catalog when reopened', async ({ mock, remote }) => {

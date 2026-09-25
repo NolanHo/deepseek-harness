@@ -376,6 +376,11 @@ export class SessionManager {
     const controller = new AbortController()
     const store = this.projectionStore(sessionId)
     const initialValues = store.values()
+    // Fork patch (FORK_SURFACE.md): a frame that republishes its row's value
+    // advances the watermark without touching values(), so the existence probe
+    // below reads the watermarks too — an equal-valued landing during this read
+    // must not let the missing answer clear the row it just confirmed.
+    const initialSeqs = Object.keys(initialValues).map(key => store.seqOf(key))
     this.projectionLoads.set(sessionId, { state: 'loading', error: null })
     this.notifier.markDirty()
     const operation = (async () => {
@@ -385,7 +390,8 @@ export class SessionManager {
         if (result.ok) {
           if (result.value !== null) {
             store.seed({ ...result.value, asOfSeq: sessionSeqCursor(result.value.asOfSeq) })
-          } else if (store.values() === initialValues) {
+          } else if (store.values() === initialValues
+            && Object.keys(initialValues).every((key, index) => store.seqOf(key) === initialSeqs[index])) {
             // A later frame proves existence independently of an earlier missing read.
             store.clear()
           }
@@ -808,8 +814,11 @@ export class SessionManager {
       this.replaceControlBaseline(frame.value)
       return
     }
-    this.projectionStore(frame.sessionId).apply(frame.key, frame.value, SessionSeq(frame.seq))
-    this.notifier.markDirty()
+    // Fork patch (FORK_SURFACE.md): a frame that republishes the value its row
+    // already holds leaves the dirty flush with no rebuild to run.
+    if (this.projectionStore(frame.sessionId).apply(frame.key, frame.value, SessionSeq(frame.seq))) {
+      this.notifier.markDirty()
+    }
   }
 
   private replaceControlBaseline(baseline: SessionControlBaseline): void {
