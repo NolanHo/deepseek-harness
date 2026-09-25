@@ -3,6 +3,7 @@
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent, SessionHeader, SessionId , SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type SessionPersistence from '@deepseek-ai/dsh-session-persistence'
+import { matchesListSelection, type SessionPersistenceListOptions } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionListScope, SessionRecord } from './types.ts'
 import { SessionQueryError } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
@@ -64,7 +65,7 @@ export class SessionCorpus {
     const persistence = this._persistence
     const persisted = persistence === undefined
       ? []
-      : await listPersisted(persistence, signal, scope?.scope)
+      : await listPersisted(persistence, signal, scope)
     signal?.throwIfAborted()
     const records = new Map<SessionId, SessionRecord>()
     for (const header of persisted) {
@@ -80,7 +81,7 @@ export class SessionCorpus {
       })
     }
     return [...records.values()]
-      .filter(record => matchesListScope(record, scope))
+      .filter(record => matchesListSelection(record.header, scope))
       .sort(compareSessions)
   }
 
@@ -262,12 +263,13 @@ function orderedResults<Value>(
 async function listPersisted(
   persistence: SessionPersistence,
   signal?: AbortSignal,
-  scope?: 'listed' | 'all',
+  selection?: SessionListScope,
 ): Promise<SessionHeader[]> {
   try {
-    const options = {
+    const options: SessionPersistenceListOptions = {
       ...(signal === undefined ? {} : { signal }),
-      ...(scope === undefined ? {} : { scope }),
+      ...(selection?.scope === undefined ? {} : { scope: selection.scope }),
+      ...(selection?.parentSessionId === undefined ? {} : { parentSessionId: selection.parentSessionId }),
     }
     const snapshots = await persistence.list(options)
     return snapshots.map(snapshot => snapshot.header)
@@ -312,13 +314,6 @@ function snapshotLive(session: Session): LogicalSession {
     // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
     events: session.snapshotEvents().map(event => structuredClone(event)),
   }
-}
-
-/** Row-selection predicate for one listing scope. */
-function matchesListScope(record: SessionRecord, scope?: SessionListScope): boolean {
-  if (scope?.parentSessionId !== undefined) return record.header.parentSession === scope.parentSessionId
-  if (scope?.scope === 'listed') return record.header.origin !== 'subagent'
-  return true
 }
 
 function compareSessions(a: SessionRecord, b: SessionRecord): number {

@@ -23,7 +23,7 @@ import {
   SessionPersistence, SessionPersistenceRevision, SessionFormatUnsupportedError,
   SessionPersistenceCorruptionError,
   SessionAlreadyExistsError, SessionPersistenceNotFoundError,
-  assertStoredId, materializeCreateHeader, sessionFormatVersionRefusal, validateStoredEvents,
+  assertStoredId, materializeCreateHeader, matchesListSelection, sessionFormatVersionRefusal, validateStoredEvents,
   type SessionAccess, type SessionHandle,
   type SessionHandleReadResult,
   type SessionLocation, type SessionPersistenceCreateOptions,
@@ -467,10 +467,16 @@ class JsonlSessionPersistence extends SessionPersistence {
   }
 
   /**
-   * List every stored session visible to this process: materialized artifacts
-   * plus this process's created-but-unmaterialized sessions.
-   * @param options - optional cancellation.
-   * @returns one snapshot per session, in no promised order.
+   * List the stored sessions visible to this process in a row selection:
+   * materialized artifacts, plus this process's created-but-unmaterialized
+   * sessions that belong to the same selection.
+   *
+   * The artifact directory has no index, so every generation header is read
+   * before the selection can be answered; the selection is applied to that
+   * header, which then skips the artifact's metadata `stat` — an excluded
+   * session costs one header read and never enters the result.
+   * @param options - optional cancellation and row selection.
+   * @returns one snapshot per selected session, in no promised order.
    */
   async list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]> {
     const signal = options?.signal
@@ -480,7 +486,8 @@ class JsonlSessionPersistence extends SessionPersistence {
     // append lands mid-scan is then still in this snapshot (its artifact may
     // predate the scan), so create-to-list visibility never has a hole.
     const pending = [...this.tracker.pendingEntries()]
-    const artifacts = await this.listArtifacts(signal)
+    const artifacts = (await this.listArtifacts(signal))
+      .filter(artifact => matchesListSelection(artifact.header, options))
     const corpusRevision = artifacts.some(artifact => artifact.sourceVersion < SESSION_FORMAT_VERSION)
       ? await this.historicalCorpusRevision(signal) : undefined
     for (const artifact of artifacts) {
@@ -502,7 +509,11 @@ class JsonlSessionPersistence extends SessionPersistence {
       }
     }
     for (const [id, entry] of pending) {
-      if (!listed.has(id)) snapshots.push({ header: entry.header, revision: entry.revision })
+      // A pending row never reaches the artifact scan, so the same selection is
+      // applied to its in-memory header.
+      if (!listed.has(id) && matchesListSelection(entry.header, options)) {
+        snapshots.push({ header: entry.header, revision: entry.revision })
+      }
     }
     signal?.throwIfAborted()
     return snapshots

@@ -1995,9 +1995,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>',
-        description: 'List every stored session visible to this process, in no promised order.',
-        parameters: [{ name: 'options', description: 'optional cancellation.' }],
-        returns: 'one snapshot per stored session.',
+        description: 'List every stored session visible to this process, in no promised order.\n\nA backend may push the row selection into its own read so an excluded row is never decoded; one that cannot select in storage returns every row, and the caller applies the same selection to the returned headers.',
+        parameters: [{ name: 'options', description: 'optional cancellation and row selection.' }],
+        returns: 'one snapshot per stored session in the selection.',
       },
     ],
   },
@@ -6369,7 +6369,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionPersistenceListOptions',
-    declaration: 'export interface SessionPersistenceListOptions {\n    readonly signal?: AbortSignal;\n}',
+    declaration: 'export interface SessionPersistenceListOptions extends SessionPersistenceListSelection {\n    readonly signal?: AbortSignal;\n}',
+  },
+  {
+    name: 'SessionPersistenceListSelection',
+    declaration: 'export interface SessionPersistenceListSelection {\n    readonly scope?: \'listed\' | \'all\';\n    readonly parentSessionId?: SessionId;\n}',
   },
   {
     name: 'SessionPersistenceOpenOptions',
