@@ -4143,6 +4143,37 @@ describe('ChatView mounted window', () => {
     expect(member?.closest('[hidden]')?.getAttribute('hidden')).toBe('until-found')
   })
 
+  it('mounts the head Turn control with the folded rows the window holds', () => {
+    // A completed Turn whose final step carries no reply has no answer row, so
+    // the fold's only visible row for the Turn is its control. That control is
+    // the Turn's first key, above the 50-key tail window: the window must mount
+    // it beside the rows it holds, or the reader sees none of them.
+    const steps: ConversationNode[] = Array.from({ length: 59 },
+      (_, index) => assistant(2 + index, `row ${index}`, 1, index + 1))
+    steps.push(reasoningAssistant(61, 'thinking only', 1, 60))
+    const builder = new ChatSnapshotBuilder()
+    const state = new ProcessState()
+    const groups = new ConversationGroupStore<ProcessGroupData>()
+    const snapshot = installGroupedSnapshot(builder, state, groups, chatSnapshotFixture({
+      nodes: [userInTurn(1, 'question', 1), ...steps],
+      turnEnds: new Map([[1, 100]]),
+      turnTimings: new Map([[1, { startTime: 0, endTime: 1_000 }]]),
+    }))
+    const h = makeHarness({ chat: snapshot })
+    h.setGrouped(groups)
+    const view = render(<h.ChatView {...h.props} />)
+    const control = turnProcessControl(view.container)
+    expect(control).not.toBeNull()
+    // The control mounts without dragging the whole Turn into the window.
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:assistant:2"]')).toBeNull()
+    // The member rows the window holds stay folded behind the control.
+    const members = [...view.container.querySelectorAll<HTMLElement>('[data-chat-flow-kind="assistant-step"]')]
+    expect(members.length).toBeGreaterThan(0)
+    expect(members.every(member => member.getAttribute('hidden') !== null)).toBe(true)
+    fireEvent.click(control!)
+    expect(members.some(member => member.getAttribute('hidden') === null)).toBe(true)
+  })
+
   it('reveals resident rows before paging the session', () => {
     installReaderGeometry()
     const rows = Array.from({ length: 160 }, (_, index) => user(101 + index, `row ${index}`))

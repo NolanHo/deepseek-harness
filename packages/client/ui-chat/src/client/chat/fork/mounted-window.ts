@@ -39,6 +39,12 @@ export interface MountedWindowInput {
   readonly entries: readonly RenderEntry[]
   /** Resident Node keys in transcript order. */
   readonly order: readonly string[]
+  /**
+   * Resident indices of the Turn-process control keys, ascending. A completed
+   * Turn's rows fold behind its control, so a window that mounts those rows
+   * must mount the control with them.
+   */
+  readonly controls: readonly number[]
   /** Whether the reader owns the live tail, so no saved row holds the window back. */
   readonly followingTail: boolean
   /** Reader row key from the session's scroll memory, null while at the tail. */
@@ -366,16 +372,38 @@ function frozenMounted(
 }
 
 /**
+ * Resident index of the control row whose Turn owns the window head: the last
+ * control at or above that head. Controls start their Turn's run of rows, so
+ * this is the head's own `turn-process` node.
+ * @param controls - ascending resident indices of the Turn-process controls.
+ * @param head - window head index.
+ * @returns the owning control index, or undefined before the first Turn.
+ */
+function headControl(controls: readonly number[], head: number): number | undefined {
+  let low = 0
+  let high = controls.length
+  while (low < high) {
+    const middle = low + (high - low >> 1)
+    if ((controls[middle] as number) <= head) low = middle + 1
+    else high = middle
+  }
+  return low === 0 ? undefined : controls[low - 1]
+}
+
+/**
  * Plan the mounted slice of the resident order. The window is
  * `MOUNTED_ROW_LIMIT` resident keys from its head, and an entry is mounted when
  * any key it renders is inside that slice: a `group` entry renders its members
  * as rows of its own, so the bound counts keys, not entries. `stub` also holds
  * the newest slice, which keeps a live Turn's rows and the opening echo spliced
- * while the reader is frozen above them.
+ * while the reader is frozen above them. The head Turn's control row mounts
+ * beside the window: the Turn fold hides member rows behind it, so a window
+ * that carries members without it would render none of them.
  * @param entries - root rendering entries over the whole loaded window.
  * @param order - resident Node keys in transcript order.
  * @param window - requested window identity.
  * @param stub - whether the resident tail slice stays mounted beside the window.
+ * @param controls - ascending resident indices of the Turn-process controls.
  * @returns the mounted entries, the keys they may render, and the window's facts.
  */
 export function planMountedWindow(
@@ -383,11 +411,15 @@ export function planMountedWindow(
   order: readonly string[],
   window: MountWindow,
   stub: boolean,
+  controls: readonly number[] = [],
 ): MountedWindowPlan {
   const head = headIndexOf(window, order)
   const windowKeys = order.slice(head, head + MOUNTED_ROW_LIMIT)
   const tailKeys = stub ? order.slice(tailHead(order)) : []
   const keys = new Set(stub ? [...windowKeys, ...tailKeys] : windowKeys)
+  const control = headControl(controls, head)
+  const controlKey = control === undefined ? undefined : order[control]
+  if (controlKey !== undefined) keys.add(controlKey)
   const mounted = new Set<number>()
   for (const key of keys) for (const at of entriesByKey(entries).get(key) ?? []) mounted.add(at)
   if (window.kind === 'tail') {
@@ -420,7 +452,7 @@ export function planMountedWindow(
  * @returns the mounted slice and the transitions the view drives.
  */
 export function useMountedWindow(input: MountedWindowInput): MountedWindowState {
-  const { entries, order, followingTail, anchorKey, running } = input
+  const { entries, order, controls, followingTail, anchorKey, running } = input
   const [requested, setRequested] = useState<MountWindow>({ kind: 'tail' })
   const orderRef = useRef(order)
   const windowRef = useRef<MountWindow>(requested)
@@ -476,8 +508,8 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
   }, [followingTail])
 
   const plan = useMemo(
-    () => planMountedWindow(entries, order, window, running && window.kind === 'frozen'),
-    [entries, order, window, running],
+    () => planMountedWindow(entries, order, window, running && window.kind === 'frozen', controls),
+    [controls, entries, order, window, running],
   )
   // A reveal keeps the reader's own row mounted, so that row clamps how far the
   // head can step up: with no reader row, or one already at the clamp, the

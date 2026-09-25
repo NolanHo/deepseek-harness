@@ -225,9 +225,20 @@ export function ChatView({
   // order; every loaded page stays resident in the snapshot. The session's scroll
   // memory is both the reader's row and the tail signal the window transitions on.
   const readerMemory = chatScroll.read()
+  // Fork patch (FORK_SURFACE.md): resident Turn-process control rows. The Turn
+  // fold hides a completed Turn's rows behind its control, so the window
+  // planner keeps the head Turn's control mounted with the rows it carries.
+  const controls = useMemo(() => {
+    const indices: number[] = []
+    for (let index = 0; index < order.length; index++) {
+      if (nodeStore.get(order[index] as string)?.kind === 'turn-process') indices.push(index)
+    }
+    return indices
+  }, [nodeStore, order])
   const mounted = useMountedWindow({
     entries,
     order,
+    controls,
     followingTail: readerMemory === null,
     anchorKey: readerMemory?.anchorKey ?? null,
     running,

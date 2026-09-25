@@ -31,6 +31,33 @@ describe('mounted window plan', () => {
     expect(plan.signature).toBe(`k10:${MOUNTED_ROW_LIMIT}`)
   })
 
+  it('mounts the head Turn control beside a window that starts below it', () => {
+    const order = keys(60)
+    // k0 is the Turn's control row and the tail window starts at k10.
+    const plan = planMountedWindow(order.map(node), order, { kind: 'tail' }, false, [0])
+    expect(plan.headKey).toBe('k10')
+    expect(plan.entries[0]).toEqual(node('k0'))
+    expect(plan.entries.at(-1)).toEqual(node('k59'))
+    expect(plan.keys.size).toBe(MOUNTED_ROW_LIMIT + 1)
+  })
+
+  it('adds nothing when the head Turn control is inside the window', () => {
+    const order = keys(60)
+    const plan = planMountedWindow(order.map(node), order, { kind: 'tail' }, false, [20])
+    expect(plan.keys.size).toBe(MOUNTED_ROW_LIMIT)
+    expect(plan.entries[0]).toEqual(node('k10'))
+  })
+
+  it('mounts the head Turn control beside a frozen window', () => {
+    const order = keys(80)
+    // The frozen window (k40…) holds the later Turn's control; the head Turn's
+    // own control below it mounts with the rows the frozen window holds.
+    const plan = planMountedWindow(order.map(node), order, { kind: 'frozen', head: 'k40' }, false, [0, 45])
+    expect(plan.headKey).toBe('k40')
+    expect(plan.entries[0]).toEqual(node('k0'))
+    expect(plan.keys.has('k45')).toBe(true)
+  })
+
   it('falls back to the live tail when the frozen head left the order', () => {
     const order = keys(60)
     const plan = planMountedWindow(order.map(node), order, { kind: 'frozen', head: 'gone' }, false)
@@ -196,7 +223,7 @@ describe('mounted window hook', () => {
   function input(overrides: Partial<MountedWindowInput> = {}): MountedWindowInput {
     const order = overrides.order ?? keys(60)
     return {
-      entries: order.map(node), order, followingTail: true, anchorKey: null, running: false,
+      entries: order.map(node), order, controls: [], followingTail: true, anchorKey: null, running: false,
       ...overrides,
     }
   }
@@ -209,6 +236,12 @@ describe('mounted window hook', () => {
     const { result } = bind(input({ entries: [], order: [] }))
     expect(result.current.entries).toEqual([])
     expect(result.current.tailMounted).toBe(true)
+  })
+
+  it('mounts the head Turn control beside the window it governs', () => {
+    const { result } = bind(input({ controls: [0] }))
+    expect(result.current.entries[0]).toEqual(node('k0'))
+    expect(result.current.keys.size).toBe(MOUNTED_ROW_LIMIT + 1)
   })
 
   it('starts at the live tail, which a reveal leaves alone without a reader row', () => {
