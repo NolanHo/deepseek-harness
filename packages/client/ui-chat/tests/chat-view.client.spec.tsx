@@ -4227,6 +4227,26 @@ describe('ChatView mounted window', () => {
     expect(view.getByRole('button', { name: '跳转到第 1 轮' }).getAttribute('aria-current')).toBe('true')
   })
 
+  it('lands a rail jump on a tail-side turn from a reader pinned at the mounted head', async () => {
+    const { nodes, turnEnds } = closedTurns(60)
+    const h = makeHarness({}, {}, chatSnapshotFixture({ nodes, turnEnds }))
+    installReaderGeometry()
+    // The reader owns a row in the middle of the history, so the window in
+    // effect derives one reveal step above it and the resident tail stays
+    // outside the mounted slice: the target turn's row is not mounted.
+    h.chatScroll.save({ anchorKey: 'fixture:user:87', anchorTop: 0, scrollTop: 0 })
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:115"]')).toBeNull()
+    const rail = await view.findByRole('navigation', { name: '轮次导航' })
+    fireEvent.click(await within(rail).findByRole('button', { name: '跳转到第 58 轮' }))
+    // The jump must move the window to the resident tail and land on the target
+    // row it holds, exactly as it does for a reader who owns no row, and the
+    // landing saves that row instead of handing the tail back.
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:115"]')).not.toBeNull()
+    expect(view.getByRole('button', { name: '跳转到第 58 轮' }).getAttribute('aria-current')).toBe('true')
+    expect(h.chatScroll.read()?.anchorKey).toBe('fixture:user:115')
+  })
+
   it('keeps the reader row mounted when a frozen window takes a prepend', () => {
     installReaderGeometry()
     const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))

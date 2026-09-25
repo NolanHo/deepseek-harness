@@ -489,9 +489,13 @@ export function planMountedWindow(
  */
 export function useMountedWindow(input: MountedWindowInput): MountedWindowState {
   const { entries, order, controls, followingTail, anchorKey, running } = input
-  const [requested, setRequested] = useState<MountWindow>({ kind: 'tail' })
+  // The reader's own window; null while they own none, where the window in
+  // effect follows the reading policy instead. A request that resolves to the
+  // live tail is still the reader's own: a jump to a row only the tail mounts
+  // must move the window in effect, and the reader-row adoption below would
+  // otherwise keep the head where it is.
+  const [requested, setRequested] = useState<MountWindow | null>(null)
   const orderRef = useRef(order)
-  const windowRef = useRef<MountWindow>(requested)
   const readerRow = useMemo(() => orderIndexOfAnchor(order, anchorKey), [order, anchorKey])
   const readerRowRef = useRef(readerRow)
 
@@ -501,9 +505,11 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
   // adoption idempotent, where a render-phase setState would be discarded and
   // replayed by a repeated render.
   const window = useMemo((): MountWindow => {
-    if (requested.kind !== 'tail' || followingTail || readerRow < 0) return requested
+    if (requested !== null) return requested
+    if (followingTail || readerRow < 0) return { kind: 'tail' }
     return windowAt(order, headKeepingRow(readerRow - REVEAL_ROW_STEP, readerRow))
   }, [followingTail, order, readerRow, requested])
+  const windowRef = useRef<MountWindow>(window)
   useLayoutEffect(() => {
     orderRef.current = order
     windowRef.current = window
@@ -516,6 +522,9 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     if (index < 0) return false
     const head = headIndexOf(windowRef.current, current)
     if (index >= head && index < head + MOUNTED_ROW_LIMIT) return false
+    // A row near the resident tail resolves to the tail window, which the reader
+    // still has to be given: storing it is what moves the window in effect off
+    // the reader's own row, so the commit that mounts the row follows.
     setRequested(windowAt(current, headKeepingRow(index - REVEAL_ROW_STEP, index)))
     return true
   }, [])
@@ -570,15 +579,16 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     return stepUp(head)
   }, [stepUp, willRevealAtHead])
 
-  const release = useCallback((): void => { setRequested({ kind: 'tail' }) }, [])
+  const release = useCallback((): void => { setRequested(null) }, [])
 
   // The reader owns the live tail again: own input, Back to bottom, or arrival at
   // the mounted floor, which is not the transcript floor while rows remain below.
-  // Only tail ownership releases the window: a window a jump moved is what the
-  // landing below it is aligned against, so releasing on the window kind alone
-  // would unmount that row mid-jump.
+  // Tail ownership drops the reader's own window, so a later departure from the
+  // tail adopts the saved reader row again; a window a jump moved stays while the
+  // reader is away from the tail, because the landing below it is aligned against
+  // that row and releasing it would unmount that row mid-jump.
   useLayoutEffect(() => {
-    if (followingTail && windowRef.current.kind !== 'tail') setRequested({ kind: 'tail' })
+    if (followingTail) setRequested(null)
   }, [followingTail])
 
   const plan = useMemo(
