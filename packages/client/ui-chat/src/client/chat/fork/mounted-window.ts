@@ -47,6 +47,20 @@ export interface MountedWindowInput {
   readonly running: boolean
 }
 
+/**
+ * One settled reader observation, as the head reveal reads it. The reading
+ * policy's sample satisfies this: only the row the position anchors and the two
+ * attribution flags matter.
+ */
+export interface HeadSample {
+  /** Settled reader position; its anchor key names the row at the reading line. */
+  readonly position: { readonly anchorKey: string } | null
+  /** Whether the reader's own scrolling produced this sample. */
+  readonly movedByReader: boolean
+  /** Whether the reading policy owns the live tail. */
+  readonly followingTail: boolean
+}
+
 /** The mounted window, its facts, and the transitions the view drives. */
 export interface MountedWindowState extends MountedWindowPlan {
   /** Whether the mounted entries reach the resident tail entry. */
@@ -68,6 +82,17 @@ export interface MountedWindowState extends MountedWindowPlan {
    * already holds back, makes the gesture a no-op.
    */
   readonly revealable: boolean
+  /**
+   * Reveal one step for a settled reader sample that reached the window head, so
+   * a wheel or touch gesture alone keeps older resident rows coming. The reading
+   * policy calls this once per settled observation: a programmatic scroll, a
+   * jump, or a page request never reveals, and after the step it drives the head
+   * row has moved, so the same reader row no longer anchors on it.
+   * @param sample - settled reader observation from the reading policy.
+   * @param historyBusy - whether history work (a retained paging anchor or a page request) owns the layout.
+   * @returns whether the head moved; false leaves the window where it was.
+   */
+  readonly revealAtHead: (sample: HeadSample, historyBusy: boolean) => boolean
   /** Release the frozen window back to the live tail. */
   readonly release: () => void
 }
@@ -425,6 +450,7 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
   const orderRef = useRef(order)
   const windowRef = useRef<MountWindow>(requested)
   const readerRow = useMemo(() => orderIndexOfAnchor(order, anchorKey), [order, anchorKey])
+  const readerRowRef = useRef(readerRow)
 
   // Opening a session off the floor: the saved reader row sits outside the tail
   // window, so the window in effect is derived from that row while the reader
@@ -438,6 +464,7 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
   useLayoutEffect(() => {
     orderRef.current = order
     windowRef.current = window
+    readerRowRef.current = readerRow
   })
 
   const hold = useCallback((key: string | null): boolean => {
@@ -450,19 +477,42 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     return true
   }, [])
 
-  const reveal = useCallback((): boolean => {
-    // A reveal grows the window upward and keeps the reader's own row mounted;
-    // with no reader row the head would move while the reader's rows unmount, so
-    // the caller pages resident history in instead.
-    if (readerRow < 0) return false
+  /**
+   * Step the head one reveal above the live window while `row` stays mounted.
+   * @param row - resident index the new window must still hold; -1 moves nothing.
+   * @returns whether the head moved.
+   */
+  const stepUp = useCallback((row: number): boolean => {
+    if (row < 0) return false
     const current = orderRef.current
     const head = headIndexOf(windowRef.current, current)
     if (head <= 0) return false
-    const next = windowAt(current, headKeepingRow(head - REVEAL_ROW_STEP, readerRow))
+    const next = windowAt(current, headKeepingRow(head - REVEAL_ROW_STEP, row))
     if (headIndexOf(next, current) >= head) return false
     setRequested(next)
     return true
-  }, [readerRow])
+  }, [])
+
+  // A reveal grows the window upward and keeps the reader's own row mounted;
+  // with no reader row the head would move while the reader's rows unmount, so
+  // the caller pages resident history in instead.
+  const reveal = useCallback((): boolean => stepUp(readerRow), [readerRow, stepUp])
+
+  const revealAtHead = useCallback((sample: HeadSample, historyBusy: boolean): boolean => {
+    if (historyBusy || !sample.movedByReader || sample.followingTail) return false
+    const position = sample.position
+    // A reader who owns no row owns the tail: the newest rows must stay mounted,
+    // so only the explicit gesture pages resident history in.
+    if (position === null || readerRowRef.current < 0) return false
+    const current = orderRef.current
+    // The head row itself holds the reading line, so nothing is mounted above the
+    // reader and the next step back can only come from a reveal. That row clamps
+    // the new head, never the saved row of an earlier render: the reader may have
+    // scrolled away from it since, and the reading policy already saved this one.
+    const row = orderIndexOfAnchor(current, position.anchorKey)
+    if (row !== headIndexOf(windowRef.current, current)) return false
+    return stepUp(row)
+  }, [stepUp])
 
   const release = useCallback((): void => { setRequested({ kind: 'tail' }) }, [])
 
@@ -494,6 +544,7 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     revealable,
     hold,
     reveal,
+    revealAtHead,
     release,
   }
 }

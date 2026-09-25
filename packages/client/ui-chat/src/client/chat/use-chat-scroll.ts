@@ -5,8 +5,9 @@ import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { useChatNavigation, type ChatNavigation, type ChatNavigationInput } from './use-chat-navigation.ts'
 import { useChatReading, type ChatReadingState } from './use-chat-reading.ts'
 import { useChatViewport } from './use-chat-viewport.ts'
-// Fork patch (FORK_SURFACE.md): the mounted window resolves the saved reader row.
-import { orderIndexOfAnchor } from './fork/mounted-window.ts'
+// Fork patch (FORK_SURFACE.md): the mounted window resolves the saved reader row
+// and reveals its next step from a settled sample.
+import { orderIndexOfAnchor, type MountedWindowState } from './fork/mounted-window.ts'
 
 /** Committed content and Session operations used to reconcile scroll ownership. */
 export interface ChatScrollInput extends ChatNavigationInput {
@@ -22,6 +23,8 @@ export interface ChatScrollInput extends ChatNavigationInput {
   // Fork patch (FORK_SURFACE.md): the mounted transcript window's identity, so a
   // moved window re-anchors the reader instead of ResizeObserver timing.
   readonly mountSignature: string
+  // Fork patch (FORK_SURFACE.md): the mounted window's sample-driven reveal.
+  readonly revealAtHead: MountedWindowState['revealAtHead']
 }
 
 interface ChatScrollState extends ChatReadingState {
@@ -46,6 +49,7 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
   const {
     ready, order, firstSeq, lastKey, lastIsUser, steeringId, submissionId, running,
     loadedTurns, chatScroll, hasMore, loadingOlder, loadOlder, loadThrough, mountSignature,
+    revealAtHead,
   } = input
   const { viewport, listRef, columnRef } = useChatViewport()
   const { reading, state } = useChatReading(viewport, chatScroll, loadedTurns.at(-1)?.turn ?? null)
@@ -121,6 +125,12 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     })
     const disconnectReading = reading.connect((sample) => {
       navigation.readerSampled(sample)
+      // Fork patch (FORK_SURFACE.md): a settled sample of the reader's own
+      // scrolling at the mounted head reveals the next window step. The latest
+      // committed input carries the history state, and a retained paging anchor
+      // or an in-flight page request owns the layout while it runs.
+      const latest = content.current.input
+      latest.revealAtHead(sample, viewport.preserving || latest.loadingOlder)
       processContent()
     })
     return () => {
@@ -135,7 +145,7 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     const previous = content.current.input
     content.current.input = {
       ready, order, lastKey, lastIsUser, steeringId, submissionId, running, loadedTurns, chatScroll,
-      mountSignature, ...navigationInput,
+      mountSignature, revealAtHead, ...navigationInput,
     }
     viewport.updateTurns(loadedTurns)
     const layoutChanged = previous.order !== order || previous.ready !== ready
