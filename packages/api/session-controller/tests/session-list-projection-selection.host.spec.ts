@@ -2,11 +2,17 @@
  * The list wire's projection selection: a Session-list row ships only the
  * projection keys the list plane reads — `sessionListMetadata`, `title`,
  * `subagentCatalog`, `schedule`, `subagentTiming`, `tokenUsage`, `subagent`,
- * `agentPreset`, `agentTeam` — while the Session-open snapshot keeps the
- * complete projection set. The heavy keys that only opened-Session surfaces
- * read (`turnOutline` above all, plus `inbox`, `todos`, and the rest) never
- * cross the wire for a listing call, whatever row scope it uses.
+ * `agentPreset`, `agentTeam`, `modelSelection` — while the Session-open
+ * snapshot keeps the complete projection set. The heavy keys that only
+ * opened-Session surfaces read (`turnOutline` above all, plus `inbox`,
+ * `todos`, and the rest) never cross the wire for a listing call, whatever row
+ * scope it uses. The last case derives that reader set from this repository's
+ * sources, so a key a list consumer selects cannot leave the wire unnoticed.
  */
+
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -63,6 +69,7 @@ function fullBlock(asOfSeq: number): { asOfSeq: number; values: Record<string, u
       subagent: { mode: 'continuable', label: 'child A', seq: 5 },
       agentPreset: 'preset-eng',
       agentTeam: { roster: [{ id: 'member-1' }], board: { tasks: [] } },
+      modelSelection: { lastUsed: null, next: { provider: 'p', model: 'member-model' } },
       // Dropped: only opened-Session surfaces read these.
       turnOutline: Array.from({ length: 200 }, (_, turn) => ({
         turn,
@@ -74,7 +81,6 @@ function fullBlock(asOfSeq: number): { asOfSeq: number; values: Record<string, u
         maxImageBytes: 1024, maxImagesPerMessage: 2, maxMessageImageBytes: 2048,
         maxImagePixels: 4096, maxImageDimension: 128, mediaTypes: ['image/png'],
       },
-      modelSelection: { lastUsed: null, next: null },
       goal: null,
       plan: { active: false },
       permissions: { preset: 'p' },
@@ -100,6 +106,7 @@ function keptValues(): Record<string, unknown> {
     subagent: block.values.subagent,
     agentPreset: block.values.agentPreset,
     agentTeam: block.values.agentTeam,
+    modelSelection: block.values.modelSelection,
   }
 }
 
@@ -279,8 +286,8 @@ describe('session/list projection selection', () => {
     expect(values).not.toHaveProperty('test/not-list-plane')
     for (const key of Object.keys(values)) {
       expect([
-        'agentPreset', 'agentTeam', 'schedule', 'sessionListMetadata', 'subagent',
-        'subagentCatalog', 'subagentTiming', 'title', 'tokenUsage',
+        'agentPreset', 'agentTeam', 'modelSelection', 'schedule', 'sessionListMetadata',
+        'subagent', 'subagentCatalog', 'subagentTiming', 'title', 'tokenUsage',
       ]).toContain(key)
     }
     expect(row?.blank).toBe(false)
@@ -291,4 +298,88 @@ describe('session/list projection selection', () => {
     expect(snapshot.projections.values.imageLimits).toBeDefined()
     expect(snapshot.projections.values.sessionListMetadata).toMatchObject({ blank: false })
   })
+
+  it('ships every projection key a list-plane consumer selects from the built sources', async () => {
+    const scan = listPlaneConsumerKeys(fileURLToPath(new URL('../../../..', import.meta.url)))
+    // Guard the scan itself: a broken walk or accessor regex must fail here
+    // rather than pass with an empty reader set. The Team member row is the
+    // reader whose key left the wire once, so it anchors the snapshot map.
+    expect(scan.scannedFiles).toBeGreaterThan(1_000)
+    expect(scan.readingFiles).toContain('packages/experimental/client-ui-agent-team/src/client/TeamAction.tsx')
+    expect(scan.keys).toContain('modelSelection')
+    expect(scan.keys.size).toBeGreaterThanOrEqual(8)
+
+    const block = fullBlock(4)
+    const consumers = Object.fromEntries([...scan.keys].sort().map(key => [
+      key,
+      key in block.values ? block.values[key] : { sourceScan: key },
+    ]))
+    const { remote } = await coldHarness([header('consumer-keys', 100)], {
+      'consumer-keys': { asOfSeq: 4, values: consumers },
+    })
+
+    const response = await remote.list({})
+    if (!response.ok) throw new Error('list failed')
+    const row = response.value.items.find(item => item.sessionId === sid('consumer-keys'))
+    // Subset, not equality: the whitelist's exact set is pinned by the cases
+    // above, while this case only proves no reader key left the wire.
+    expect(Object.keys(row?.projections?.values ?? {}))
+      .toEqual(expect.arrayContaining([...scan.keys].sort()))
+  })
 })
+
+/**
+ * Every projection key a list-plane consumer selects out of the client's list
+ * state. Two accessors reach the plane: a row summary's `projectionValues`
+ * block and the per-session snapshot map's `projectionsBySession[...]?.values`.
+ * The reader set has no runtime registry, so it is read from the sources that
+ * are the readers; a consumer written with an accessor the patterns below do
+ * not match (a snapshot parked in a local variable and read far from
+ * `projectionsBySession`) stays outside this scan.
+ * @param root - repository root to walk.
+ * @returns the selected keys, the matched reader files, and the walk's reach.
+ */
+function listPlaneConsumerKeys(root: string): {
+  readonly keys: ReadonlySet<string>
+  readonly readingFiles: ReadonlySet<string>
+  readonly scannedFiles: number
+} {
+  const accessors = [
+    /projectionValues\s*\??\.\s*([A-Za-z_$][\w$]*)/g,
+    /projectionsBySession[\s\S]{0,200}?\?\.values\s*\??\.\s*([A-Za-z_$][\w$]*)/g,
+  ]
+  const skipped = new Set(['node_modules', 'lib', 'dist', 'tests', '.git', 'coverage'])
+  const keys = new Set<string>()
+  const readingFiles = new Set<string>()
+  let scannedFiles = 0
+
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        if (!skipped.has(entry.name)) visit(path)
+        continue
+      }
+      if (!/\.tsx?$/.test(entry.name) || /\.(?:spec|test)\./.test(entry.name)) continue
+      scannedFiles++
+      const source = readFileSync(path, 'utf8')
+      for (const accessor of accessors) {
+        for (const match of source.matchAll(new RegExp(accessor.source, 'g'))) {
+          const key = match[1] as string
+          keys.add(key)
+          readingFiles.add(relative(root, path))
+        }
+      }
+    }
+  }
+
+  for (const top of ['packages', 'apps']) {
+    try {
+      statSync(join(root, top))
+    } catch {
+      continue
+    }
+    visit(join(root, top))
+  }
+  return { keys, readingFiles, scannedFiles }
+}

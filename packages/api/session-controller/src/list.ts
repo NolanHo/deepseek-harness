@@ -299,14 +299,21 @@ export class ApiSessionList {
  * tree's active-reminder badge; `subagentTiming` and `tokenUsage` supply the
  * lineage metrics of cold children; `subagent` labels the sidebar chat tab;
  * `agentPreset` labels the conversation header; `agentTeam` serves the Team
- * panel for a cold lead Session. Every other projection, `turnOutline`,
- * `inbox`, `todos`, and the rest, is read only by an opened Session's
- * surfaces, which receive the complete baseline on the Session-open path, so
- * a listing never ships those keys.
+ * panel for a cold lead Session; `modelSelection` labels each Team member row,
+ * which reads the child's value off `projectionsBySession[member.id]?.values`
+ * (the child is not an opened Session, so the list plane is its only source).
+ * Every other projection, `turnOutline`, `inbox`, `todos`, and the rest, is
+ * read only by an opened Session's surfaces, which receive the complete
+ * baseline on the Session-open path, so a listing never ships those keys.
+ * A key stays out of this list only while no list-plane reader selects it:
+ * the client's rebuild gate classifies `modelSelection` changes as
+ * list-relevant (`client/sessions/fork/coalesced-refresh.ts`), so dropping it
+ * here rebuilds rows whose readers would still find the value absent.
  */
 const LIST_PROJECTION_KEYS: readonly string[] = [
   'agentPreset',
   'agentTeam',
+  'modelSelection',
   'schedule',
   'sessionListMetadata',
   'subagent',

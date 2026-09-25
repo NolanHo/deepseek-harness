@@ -53,7 +53,8 @@ export interface SessionListMetadata {
  * The list-plane projection values a Session-list row carries as partial,
  * possibly stale hints. The list builder ships only the keys list surfaces
  * read (`sessionListMetadata`, `title`, `subagentCatalog`, `schedule`,
- * `subagentTiming`, `tokenUsage`, `subagent`, `agentPreset`, `agentTeam`);
+ * `subagentTiming`, `tokenUsage`, `subagent`, `agentPreset`, `agentTeam`,
+ * `modelSelection`);
  * Session-open baselines carry the complete projection set. `kind` and
  * `asOfSeq` are independent facts: `kind` says which sequence space `asOfSeq`
  * belongs to, and therefore how a client may merge the block; `asOfSeq` is
