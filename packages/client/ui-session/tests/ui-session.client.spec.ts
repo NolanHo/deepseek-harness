@@ -602,6 +602,45 @@ describe('UiSession status', () => {
     bench.list.update((draft) => { draft.phase = 'ready' })
     expect(service.sessionStatus.getSnapshot().has(id)).toBe(false)
   })
+
+  it('keeps a scoped-out child status while the list carries no row for it', () => {
+    const ctx = new Context()
+    const bench = createSessionsBench(ctx)
+    const id = sessionId('scoped-child')
+    const listed = sessionId('listed-running')
+    const service = createUiSession(ctx, bench)
+
+    bench.emitStatus(id, true)
+    bench.emitStatus(id, false)
+    expect(service.sessionStatus.getSnapshot().get(id)?.completionUnread).toBe(true)
+
+    // The pull carries the listed scope only, so a child absent from the store
+    // is scoped out, not removed.
+    bench.list.update((draft) => { draft.ids = []; draft.byId = {} })
+    expect(service.sessionStatus.getSnapshot().get(id)).toMatchObject({
+      running: false, completionUnread: true,
+    })
+
+    // A listed row that arrives running counts as an observation too.
+    bench.list.update((draft) => {
+      draft.ids = [listed]
+      draft.byId[listed] = {
+        id: listed, displayTitle: listed, running: true, retainedBy: {}, blank: false, updatedAt: 1,
+      }
+    })
+    expect(service.sessionStatus.getSnapshot().get(listed)?.running).toBe(true)
+
+    // A stored row that appears and then disappears IS a removal.
+    bench.list.update((draft) => {
+      draft.ids = [id]
+      draft.byId = {
+        [id]: { id, displayTitle: id, running: false, retainedBy: {}, blank: false, updatedAt: 1 },
+      }
+    })
+    bench.list.update((draft) => { draft.ids = []; draft.byId = {} })
+    expect(service.sessionStatus.getSnapshot().has(id)).toBe(false)
+    expect(service.sessionStatus.getSnapshot().has(listed)).toBe(false)
+  })
 })
 
 describe('UiSession pending interactions', () => {

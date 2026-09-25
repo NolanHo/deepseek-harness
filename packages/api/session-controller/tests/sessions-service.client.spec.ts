@@ -133,6 +133,36 @@ describe('list scope request', () => {
   }, COLD_BOOT_TIMEOUT_MS)
 })
 
+describe('on-demand children', () => {
+  it("reads an opened Session's children into the store and keeps them across a listed pull", async ({ bench }) => {
+    const b = bench()
+    // The listed pull carries the root alone; the child arrives only through
+    // the read the open triggers.
+    b.mock.remote.session.list.mockImplementation((payload) => {
+      const { parentSessionId } = payload as { parentSessionId?: SessionId }
+      return Promise.resolve(ok({ items: parentSessionId === undefined
+        ? [{ agentAvailable: true, sessionId: sid('root'), updatedAt: 1, running: false, blank: false, cwd: '/work' }]
+        : [{
+          agentAvailable: true, sessionId: sid('child'), updatedAt: 2, running: false, blank: false,
+          parentSessionId: sid('root'), origin: 'subagent' as const, cwd: '/work',
+        }] }))
+    })
+    await b.svc.refresh()
+
+    using reference = b.svc.retain(sid('root'), { source: 'controllerOperation' })
+    await reference.ready
+    await vi.waitFor(() => {
+      expect(b.svc.list.getSnapshot().byId[sid('child')]).toMatchObject({
+        parentId: 'root', origin: 'subagent', cwd: '/work',
+      })
+    })
+
+    await b.svc.refresh()
+    expect(b.svc.list.getSnapshot().byId[sid('child')]?.parentId).toBe('root')
+    expect(b.svc.list.getSnapshot().byId[sid('root')]?.id).toBe('root')
+  }, COLD_BOOT_TIMEOUT_MS)
+})
+
 describe('search', () => {
   it('delegates transient content search without changing the list snapshot', async ({ bench }) => {
     const b = bench()

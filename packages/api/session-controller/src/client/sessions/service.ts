@@ -287,6 +287,10 @@ export class ClientSessions implements ISessions {
     const reference = this.retainScope(id, source)
     try {
       reference.attachOpening(this.manager.get(id).open(), signal)
+      // The listed pull omits subagent rows, so an opened Session reads its own
+      // children (and an addressed Session its parent's) for the lineage,
+      // reference-classification, and running surfaces that read child rows.
+      void this.manager.loadChildren(id)
       return reference
     } catch (error) {
       reference.release()

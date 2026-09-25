@@ -194,8 +194,9 @@ describe.skipIf(MODE === 'record')('web e2e: composer interrupt for a running co
       }
       if (body.result.ok) {
         const summary = body.result.value.items.find(session => session.sessionId === parent.id)
-        if (summary === undefined) throw new Error('parent missing from Session list')
-        summary.agentAvailable = false
+        // A scoped child read carries only the opened Session's children, so a
+        // response without the parent row is not a list that lost it.
+        if (summary !== undefined) summary.agentAvailable = false
       }
       await route.fulfill({ response, json: body })
     })

@@ -283,6 +283,13 @@ export class UiSession extends Service {
   private pendingSnapshot: ReadonlyMap<SessionId, SessionPendingInteractionBase> = new Map()
   private readonly running = new Map<SessionId, boolean>()
   private readonly completionUnread = new Set<SessionId>()
+  /**
+   * Ids observed running at least once. The pull is scoped, so a running child
+   * may be absent from the store without having been removed.
+   */
+  private readonly observedRunning = new Set<SessionId>()
+  /** `byId` keys of the previous snapshot: a stored row that disappears was removed. */
+  private presentBefore: ReadonlySet<SessionId> = new Set()
   private statusSnapshot: SessionStatusSnapshot = new Map()
   private readonly statusListeners = new Set<() => void>()
   private mainRetainId: SessionId | undefined
@@ -484,8 +491,10 @@ export class UiSession extends Service {
     const previous = this.running.get(sessionId)
     const beforeBaseline = this.sessions.list.getSnapshot().phase === 'pending'
     this.running.set(sessionId, running)
-    if (running) this.completionUnread.delete(sessionId)
-    else if ((previous === true || (previous === undefined && beforeBaseline))
+    if (running) {
+      this.observedRunning.add(sessionId)
+      this.completionUnread.delete(sessionId)
+    } else if ((previous === true || (previous === undefined && beforeBaseline))
       && !this.isMain(sessionId)) this.completionUnread.add(sessionId)
     this.publishStatus()
   }
@@ -497,8 +506,10 @@ export class UiSession extends Service {
     for (const id of list.ids) {
       const row = list.byId[id] as SessionSummary
       const previous = this.running.get(id)
-      if (previous === undefined) this.running.set(id, row.running)
-      else if (previous !== row.running) this.observeRunning(id, row.running)
+      if (previous === undefined) {
+        this.running.set(id, row.running)
+        if (row.running) this.observedRunning.add(id)
+      } else if (previous !== row.running) this.observeRunning(id, row.running)
     }
     for (const id of present) {
       if (this.isMain(id)) this.completionUnread.delete(id)
@@ -506,10 +517,16 @@ export class UiSession extends Service {
     if (list.phase === 'ready') {
       for (const id of this.running.keys()) {
         if (present.has(id)) continue
+        // The list carries the listed scope only, so absence is not removal: an
+        // id the client watched run keeps its status until its row disappears
+        // from the store, while an id never observed as a session retires.
+        if (this.observedRunning.has(id) && !this.presentBefore.has(id)) continue
         this.running.delete(id)
         this.completionUnread.delete(id)
+        this.observedRunning.delete(id)
       }
     }
+    this.presentBefore = present
     this.publishStatus()
   }
 
