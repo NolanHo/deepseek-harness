@@ -6,7 +6,7 @@ import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionSnapshot } from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import { SessionQueryError, type SessionListScope, type SessionSearchCursor, type SessionSearchLiveObservationBudget, type SessionSearchRankedDocumentBudget } from '@deepseek-ai/dsh-session-query'
+import { SessionQueryError, type SessionListScope, type SessionSearchCursor, type SessionSearchLiveObservationBudget, type SessionSearchRankedDocumentBudget, type SessionSearchReconciliationBudget } from '@deepseek-ai/dsh-session-query'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { z } from 'zod'
 import {
@@ -193,6 +193,12 @@ export class ApiSessionList {
       // live-observation budget, so a continuation cannot make the provider
       // observe the attached logs again.
       const liveObservationBudget: SessionSearchLiveObservationBudget = { spent: 0 }
+      // One request's pages also share one reconciliation: the provider
+      // memoizes the corpus observation against this object and charges its
+      // persisted cold reads against the provider's own event bound, so a
+      // cursor walk cannot re-read the changed or unindexed stored logs per
+      // page, nor read past that bound in one request.
+      const reconciliationBudget: SessionSearchReconciliationBudget = { spent: 0 }
       let cursor: SessionSearchCursor | undefined
       let providerCalls = 0
       let pageLimit = SESSION_SEARCH_RESULT_LIMIT
@@ -214,7 +220,7 @@ export class ApiSessionList {
             ],
             limit: requestedLimit,
             ...(requestedCursor === undefined ? {} : { cursor: requestedCursor }),
-          }, { signal, rankedDocumentBudget, liveObservationBudget })
+          }, { signal, rankedDocumentBudget, liveObservationBudget, reconciliationBudget })
           signal.throwIfAborted()
         } catch (error: unknown) {
           signal.throwIfAborted()

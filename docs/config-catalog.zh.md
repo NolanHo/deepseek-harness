@@ -2689,6 +2689,21 @@ export interface Config extends SessionQueryConfig {
    * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS}.
    */
   maxLiveObservedEvents?: number
+  /**
+   * Largest number of persisted-Session events one search request may cold-read.
+   * Reconciliation reads the whole stored log of every persisted Session whose
+   * revision the index does not hold, then re-indexes that Session's documents;
+   * the pass retries when the corpus changed under it and the controller's page
+   * sequence would otherwise repeat it per page. A request that reaches this
+   * bound stops cold-reading, commits the Sessions it already read, and
+   * completes with the corpus it has; the remaining Sessions are read by later
+   * requests, so a catch-up converges instead of failing every search. The bound
+   * is charged across every attempt of the request, so a retry cannot read past
+   * it, and a request reads at most this many events plus the single log that
+   * crosses the bound. Defaults to
+   * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_PERSISTED_OBSERVED_EVENTS}.
+   */
+  maxPersistedObservedEvents?: number
   /** Maximum concurrent persisted-log reads in one inherited batch read. Defaults to 4. */
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
@@ -2704,7 +2719,7 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 Depends on: [`SessionQueryConfig`](../packages/session-query/session-query/src/index.ts)
 
-来源： [`packages/session-query/session-query-sqlite/src/index.ts:121`](../packages/session-query/session-query-sqlite/src/index.ts)
+来源： [`packages/session-query/session-query-sqlite/src/index.ts:141`](../packages/session-query/session-query-sqlite/src/index.ts)
 
 <a id="deepseek-aidsh-session-reference"></a>
 

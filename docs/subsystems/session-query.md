@@ -152,6 +152,8 @@ One page sequence ranks the corpus once: a continuation cursor slices the ranked
 
 Reconciliation observes only attached Sessions whose log changed since the previous pass, so an unchanged attached Session is never re-read, and `exec.liveObservationBudget` charges every observation against the caller request's shared bound. A request whose live observation would pass the provider's configured `maxLiveObservedEvents` fails with `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` before reading a log.
 
+Reconciliation itself runs once per caller request: the provider memoizes the pass it completed against `exec.reconciliationBudget`, so every page of a cursor sequence observes one corpus and the pages cannot re-list, re-read, or re-index the stored logs between them. That pass cold-reads the stored log of each persisted Session the index does not hold at its current revision and charges it against the same budget; a request that reaches the provider's configured `maxPersistedObservedEvents` stops cold-reading, commits the Sessions it read, and leaves the remainder to later requests, so a catch-up over a large pending set converges across searches instead of failing every search or reading the whole store in one request.
+
 ```ts type-equiv
 /** Provider-owned opaque continuation token returned by session search. */
 type SessionSearchCursor = Branded<'SessionSearchCursor'>

@@ -16,6 +16,7 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 const DERIVED_USER_TABLES = new Set([
   'search_state',
   'persisted_sessions',
+  'persisted_doc_ranges',
   'persisted_docs',
   'persisted_docs_data',
   'persisted_docs_idx',
@@ -123,6 +124,16 @@ function ensurePersistentSchema(db: DatabaseSync): void {
       generation     INTEGER NOT NULL
     ) STRICT
   `)
+  // Fork patch (FORK_SURFACE.md): the rowid range one Session's documents
+  // occupy, so re-indexing that Session deletes its own rows instead of
+  // scanning the whole full-text table.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS persisted_doc_ranges (
+      session_id  TEXT PRIMARY KEY,
+      first_rowid INTEGER NOT NULL,
+      last_rowid  INTEGER NOT NULL
+    ) STRICT
+  `)
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS persisted_docs USING fts5(
       text,
@@ -152,6 +163,15 @@ function ensureTemporarySchema(db: DatabaseSync): void {
       fingerprint    TEXT NOT NULL,
       persisted      INTEGER NOT NULL CHECK (persisted IN (0, 1)),
       generation     INTEGER NOT NULL
+    ) STRICT
+  `)
+  // Fork patch (FORK_SURFACE.md): the attached-Session counterpart of
+  // `persisted_doc_ranges`.
+  db.exec(`
+    CREATE TEMP TABLE IF NOT EXISTS live_doc_ranges (
+      session_id  TEXT PRIMARY KEY,
+      first_rowid INTEGER NOT NULL,
+      last_rowid  INTEGER NOT NULL
     ) STRICT
   `)
   db.exec(`

@@ -289,6 +289,27 @@ export interface SessionSearchLiveObservationBudget {
   spent: number
 }
 
+/**
+ * Reconciliation allowance shared by every call of one caller request.
+ *
+ * Reconciliation lists the stored corpus, cold-reads the log of every persisted
+ * Session the index does not hold at its current revision, and re-indexes its
+ * documents; one cold read decodes a whole log and its re-index reads and writes
+ * the whole document set, so a request over a pending set would otherwise read
+ * without limit and a page sequence would pay that work once per page. A
+ * provider charges every cold read against its own configured event bound, stops
+ * cold-reading once the request has spent it — leaving the remaining Sessions to
+ * the next request — and memoizes the completed reconciliation against this
+ * object's identity, so all pages of one request observe one corpus and read it
+ * once. A caller that drives pages through cursors allocates one budget per
+ * request and passes the same object to every page; a single-call caller may
+ * omit it and carries only the provider's per-call bound.
+ */
+export interface SessionSearchReconciliationBudget {
+  /** Persisted-Session events this request has already cold-read. */
+  spent: number
+}
+
 /** Controls shared by cross-session and within-session search calls. */
 export interface SessionSearchExecContext {
   /** Abort caller waiting and interrupt provider work where supported. */
@@ -306,6 +327,14 @@ export interface SessionSearchExecContext {
    * bound.
    */
   liveObservationBudget?: SessionSearchLiveObservationBudget
+  /**
+   * Request-scoped reconciliation shared by every call of one caller request.
+   * The provider owns the increments, the bound, and the memo keyed by this
+   * object's identity; a page sequence that exceeds the bound stops
+   * cold-reading the remaining persisted Sessions and leaves them to the next
+   * request instead of reading a log past the bound.
+   */
+  reconciliationBudget?: SessionSearchReconciliationBudget
 }
 
 /** Cross-session full-text search request. */

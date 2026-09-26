@@ -152,6 +152,8 @@ interface SessionEventSearchDocument extends SessionEventRecord {
 
 对账只会观测自上趟以来日志发生变化的已挂载会话，因此未变化的已挂载会话不会被重读；`exec.liveObservationBudget` 把每一次观测计入调用方请求的共享额度，超过提供方配置的 `maxLiveObservedEvents` 的请求会在读取日志之前以 `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` 失败。
 
+对账本身每个调用方请求只运行一次：提供方把它完成的这一趟记忆在 `exec.reconciliationBudget` 上，因此一个游标序列的每一页观测的是同一份语料，页与页之间不会重新列出、重读或重建存储日志的索引。这一趟会冷读索引尚未持有其当前修订的每个已持久化会话的存储日志，并计入同一份额度；请求达到提供方配置的 `maxPersistedObservedEvents` 时停止冷读、提交已读的会话，把剩余会话留给后续请求，因此面对大待办集的追赶会跨多次搜索收敛，而不是让每次搜索都失败或在一次请求里读完整库。
+
 ```ts type-equiv
 /** Provider-owned opaque continuation token returned by session search. */
 type SessionSearchCursor = Branded<'SessionSearchCursor'>
