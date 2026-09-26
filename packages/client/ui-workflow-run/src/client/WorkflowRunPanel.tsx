@@ -182,6 +182,9 @@ function phaseStatusSummary(members: readonly WorkflowRunMemberData[], t: Workfl
   return visible.map(status => statusCount(status, count(status), t)).join(' · ')
 }
 
+// Fork patch (FORK_SURFACE.md): resolve workflow-run members through one catalog
+// index instead of one scan per member on every Session-store notification.
+
 /** Direct-child discovery rows one parent Session's projection snapshot carries. */
 type SubagentCatalog = NonNullable<SessionProjectionSnapshot['values']['subagentCatalog']>
 
