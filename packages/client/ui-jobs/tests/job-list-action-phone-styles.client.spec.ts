@@ -115,6 +115,14 @@ describe('JobListAction.module.css phone badge', () => {
       .toBe('none')
   })
 
+  it('keeps the count on one line', () => {
+    // A squeezed badge otherwise stacks a two-digit count into a two-line column
+    // that grows the phone header row. The count is one token and keeps one line.
+    expect(declarationsIn(css, '.countCompact')?.get('white-space'),
+      '.countCompact must declare white-space: nowrap so a squeezed badge cannot break the number')
+      .toBe('nowrap')
+  })
+
   it('lets the badge boxes shrink instead of pushing the row wider', () => {
     expect(isZeroWidth(phoneDeclarations('.root').get('min-width')),
       '.root needs min-width: 0 so the badge shrinks inside the phone header actions')
