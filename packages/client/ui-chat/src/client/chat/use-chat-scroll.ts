@@ -26,6 +26,9 @@ export interface ChatScrollInput extends ChatNavigationInput {
   // Fork patch (FORK_SURFACE.md): the mounted window's sample-driven reveal.
   readonly willRevealAtHead: MountedWindowState['willRevealAtHead']
   readonly revealAtHead: MountedWindowState['revealAtHead']
+  // Fork patch (FORK_SURFACE.md): head steps the reader's own gesture drove, which
+  // move the flow above the reading line with no prepend to compensate.
+  readonly gestureSteps: MountedWindowState['gestureSteps']
 }
 
 interface ChatScrollState extends ChatReadingState {
@@ -52,6 +55,7 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     loadedTurns, chatScroll, hasMore, loadingOlder, loadOlder, loadThrough, mountSignature,
     willRevealAtHead,
     revealAtHead,
+    gestureSteps,
   } = input
   const { viewport, listRef, columnRef } = useChatViewport()
   const { reading, state } = useChatReading(viewport, chatScroll, loadedTurns.at(-1)?.turn ?? null)
@@ -107,26 +111,23 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
   useLayoutEffect(() => {
     /**
      * Step the mounted window's head when the reader's own gesture has reached it.
-     * A pending sample blocks the reflow that compensates the rows a reveal adds
-     * above the reading line, so the step settles this scroll first: the sample
-     * arms the hold on the row the reader has reached and the window move is then
-     * absorbed instead of shifting the page down. The settle costs a layout read,
-     * so it runs only for a gesture the fork module confirms will step.
+     * The step mounts the next rows above the reading line and writes no scrollport
+     * position: the gesture keeps its own travel, and the commit that mounts them
+     * re-reads the reader's position instead of compensating it.
      * @param head - reader scroll geometry and attribution.
      */
     const stepHeadAtReader = (head: { top: number; height: number; movedByReader: boolean }): void => {
       const latest = content.current.input
       const historyBusy = viewport.preserving || latest.loadingOlder
       if (!latest.willRevealAtHead(head, historyBusy)) return
-      reading.onScrollEnd()
       latest.revealAtHead(head, historyBusy)
     }
     const disconnectViewport = viewport.connect({
-      // Fork patch (FORK_SURFACE.md): a reader gesture that comes within one
-      // viewport of the mounted head reveals the next window step, so a wheel or
-      // touch gesture alone keeps older resident rows coming. The latest
-      // committed input carries the history state, and a retained paging anchor
-      // or an in-flight page request owns the layout while it runs.
+      // Fork patch (FORK_SURFACE.md): a reader gesture the mounted head has
+      // stopped reveals the next step, so a wheel or touch gesture alone keeps
+      // older resident rows coming. The latest committed input carries the history
+      // state, and a retained paging anchor or an in-flight page request owns the
+      // layout while it runs.
       scroll: (scroll) => {
         reading.onScroll(scroll)
         stepHeadAtReader({
@@ -140,9 +141,13 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
       interact: () => { navigation.cancel() },
       intent: (event) => {
         // A gesture against the mounted head moves nothing, so it produces no
-        // scroll event; the intent itself reads the geometry and steps. A wheel
-        // arrives before the position it produces, so its direction decides:
-        // only a gesture toward older rows may step the head.
+        // scroll event; the intent itself reads the geometry and steps. Only a
+        // gesture that scrolls may step: a pointer press cancels navigation but
+        // asks for no travel, so stepping on it would move the mount under a
+        // control the reader clicked. A wheel arrives before the position it
+        // produces, so its direction decides: only a gesture toward older rows
+        // may step the head.
+        if (event.type === 'pointerdown' || event.type === 'beforematch') return
         if (event instanceof WheelEvent && event.deltaY >= 0) return
         const scroll = viewport.readScroll()
         if (scroll === null) return
@@ -177,7 +182,7 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     const previous = content.current.input
     content.current.input = {
       ready, order, lastKey, lastIsUser, steeringId, submissionId, running, loadedTurns, chatScroll,
-      mountSignature, willRevealAtHead, revealAtHead, ...navigationInput,
+      mountSignature, willRevealAtHead, revealAtHead, gestureSteps, ...navigationInput,
     }
     viewport.updateTurns(loadedTurns)
     const layoutChanged = previous.order !== order || previous.ready !== ready
@@ -185,13 +190,19 @@ export function useChatScroll(input: ChatScrollInput): ChatScrollState {
     processContent()
     if (layoutChanged) reading.refreshActiveTurn()
     // Fork patch (FORK_SURFACE.md): a moved mounted window changes the flow above
-    // the reading line with no prepend to compensate, so re-assert the held row.
-    // A prepended page moves the head with the paging anchor already holding the
-    // reader's row, and re-asserting it here would compensate the same growth twice.
-    if (previous.order[0] === order[0] && previous.mountSignature !== mountSignature) reading.reflow()
+    // the reading line with no prepend to compensate. A step the reader's own
+    // gesture drove moved the reader's reading line forward, so their position is
+    // re-read; every other move (a jump, or the explicit reveal) holds the row the
+    // reader was reading and compensates the growth. A prepended page moves the
+    // head with the paging anchor already holding the reader's row, and
+    // re-asserting it here would compensate the same growth twice.
+    if (previous.order[0] === order[0] && previous.mountSignature !== mountSignature) {
+      if (previous.gestureSteps !== gestureSteps) reading.settleStep()
+      else reading.reflow()
+    }
   }, [
     viewport, reading, processContent, navigationInput, ready, order, lastKey, lastIsUser,
-    steeringId, submissionId, running, loadedTurns, chatScroll, mountSignature,
+    steeringId, submissionId, running, loadedTurns, chatScroll, mountSignature, gestureSteps,
   ])
 
   const returnToBottom = useCallback(() => {

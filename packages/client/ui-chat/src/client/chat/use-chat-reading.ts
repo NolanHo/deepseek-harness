@@ -168,6 +168,27 @@ export class ChatReading {
   readonly onScrollEnd = (): void => { this.flushSample() }
 
   /**
+   * Re-read the reader's position after their own gesture stepped the window head.
+   *
+   * Fork patch (FORK_SURFACE.md): the step mounts rows above the reading line, so
+   * the held row moved; re-asserting it would write the scrollport back down and
+   * undo the gesture. The row now at the reading line is the reader's position, so
+   * the reflow hold and the saved memory move to it instead.
+   */
+  settleStep(): void {
+    this.cancelPending()
+    const scroll = this.viewport.readScroll()
+    if (scroll === null) return
+    const position = this.viewport.capturePosition()
+    this.viewport.armReflow(position)
+    if (position !== null) this.store.save(position)
+    const activeTurn = this.follow.nearBottom(scroll.metrics)
+      ? this.viewport.latestTurn
+      : this.viewport.readVisibleTurn(scroll.metrics)
+    this.publish({ ...this.state, initialized: true, activeTurn })
+  }
+
+  /**
    * Hold one known reader row for reflows that no prepend compensates.
    *
    * Fork patch (FORK_SURFACE.md): the mounted window re-mounts the session's

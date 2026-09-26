@@ -291,13 +291,26 @@ describe('mounted window hook', () => {
     expect(result.current.atTail).toBe(false)
     expect(result.current.headKey).toBe('k0')
     expect(result.current.keys.has('k20')).toBe(true)
-    // The window keeps its distance above the reader row when older pages
-    // prepend, which shifts every resident index under it.
+    // The adopted window is pinned to its head key, which a prepend above it does
+    // not move: the reader's row stays inside the slice it already mounts, and
+    // only an explicit step, jump, or release moves the head.
     const prepended = [...keys(10).map(key => `old${key}`), ...order]
     rerender(input({ order: prepended, followingTail: false, anchorKey: 'k20' }))
-    expect(result.current.headKey).toBe('oldk5')
+    expect(result.current.headKey).toBe('k0')
     expect(result.current.keys.has('k20')).toBe(true)
     expect(result.current.entries).toHaveLength(MOUNTED_ROW_LIMIT)
+  })
+
+  it('keeps its adopted window when a sample moves the saved reader row', () => {
+    const order = keys(130)
+    const { result, rerender } = bind(input({ order, followingTail: false, anchorKey: 'k70' }))
+    expect(result.current.headKey).toBe('k45')
+    // A settled sample mid-scroll replaces the saved row. Re-deriving the window
+    // around it would slide the whole slice and mount rows above the reading line
+    // that the view then compensates by writing the scrollport back down.
+    rerender(input({ order, followingTail: false, anchorKey: 'k60' }))
+    expect(result.current.headKey).toBe('k45')
+    expect(result.current.keys.has('k60')).toBe(true)
   })
 
   it('freezes on a saved group anchor and keeps the row it names mounted', () => {
@@ -374,32 +387,47 @@ describe('mounted window hook', () => {
     expect(result.current.entries.at(-1)).toEqual(node('k59'))
   })
 
-  /** A reader scroll that came within one viewport of the mounted head. */
+  /** A reader gesture the mounted head has stopped: clamped at the window top. */
   function headScroll(overrides: Partial<HeadScroll> = {}): HeadScroll {
     return { top: 0, height: 800, movedByReader: true, ...overrides }
   }
 
-  it('reveals one step for a reader scroll that reached the head', () => {
+  it('reveals one step for a reader gesture the mounted head stopped', () => {
     const order = keys(130)
     const { result, rerender } = bind(input({ order }))
     // A jump freezes the window on the row it held; the reader keeps wheeling up.
     act(() => { expect(result.current.hold('k70')).toBe(true) })
     expect(result.current.headKey).toBe('k45')
-    // Their scroll arrives within a viewport of the mounted head, so no mounted
-    // row above the headroom remains to scroll into.
+    // Their gesture is clamped at the mounted head, so no mounted row above them
+    // remains to scroll into and the next step must be mounted.
     rerender(input({ order, followingTail: false, anchorKey: 'k45' }))
     expect(result.current.headKey).toBe('k45')
     act(() => { expect(result.current.revealAtHead(headScroll(), false)).toBe(true) })
     expect(result.current.headKey).toBe('k20')
     expect(result.current.keys.has('k45')).toBe(true)
-    // A further step is another viewport of reader travel; at the first resident
-    // row there is nothing left above to reveal.
+    expect(result.current.gestureSteps).toBe(1)
     act(() => { expect(result.current.revealAtHead(headScroll(), false)).toBe(true) })
+    // At the first resident row there is nothing left above to step to; the
+    // "Load earlier" control pages the resident history in instead.
+    expect(result.current.headKey).toBe('k0')
     act(() => { expect(result.current.revealAtHead(headScroll(), false)).toBe(false) })
     expect(result.current.headKey).toBe('k0')
   })
 
-  it('keeps the saved reader row mounted when a scroll steps the head', () => {
+  it('steps the head for a reader gesture with no settled sample behind it', () => {
+    const order = keys(130)
+    // The reading policy still reports the live tail and holds no saved row: the
+    // settle-gated state cannot gate the step, or a reader who never pauses sees
+    // the window stop at its head. Their own gesture is the whole gate, and the
+    // step keeps the head row it reaches because they own no row of their own.
+    const { result } = bind(input({ order, followingTail: true, anchorKey: null }))
+    expect(result.current.headKey).toBe('k80')
+    act(() => { expect(result.current.revealAtHead(headScroll(), false)).toBe(true) })
+    expect(result.current.headKey).toBe('k55')
+    expect(result.current.gestureSteps).toBe(1)
+  })
+
+  it('keeps the saved reader row mounted when a gesture steps the head', () => {
     const order = keys(200)
     const { result } = bind(input({ order, followingTail: false, anchorKey: 'k150' }))
     expect(result.current.headKey).toBe('k125')
@@ -413,41 +441,32 @@ describe('mounted window hook', () => {
     expect(result.current.keys.has('k150')).toBe(true)
   })
 
-  it('reveals nothing while the reader owns the live tail', () => {
+  it('keeps the newest rows mounted for an explicit reveal with no reader row', () => {
     const order = keys(130)
     const { result, rerender } = bind(input({ order, followingTail: false, anchorKey: 'k70' }))
     expect(result.current.headKey).toBe('k45')
     rerender(input({ order, followingTail: true, anchorKey: null }))
-    // The reader handed the tail back: the newest rows must stay mounted.
-    act(() => { expect(result.current.revealAtHead(headScroll(), false)).toBe(false) })
+    // The reader handed the tail back: the explicit reveal refuses, so the newest
+    // rows stay mounted and the click pages resident history in instead.
+    act(() => { expect(result.current.reveal()).toBe(false) })
     expect(result.current.atTail).toBe(true)
     expect(result.current.keys.has('k129')).toBe(true)
   })
 
-  it('reveals nothing when the reader owns no row of their own', () => {
-    const order = keys(130)
-    const { result } = bind(input({ order, followingTail: true, anchorKey: null }))
-    expect(result.current.atTail).toBe(true)
-    expect(result.current.headKey).toBe('k80')
-    // The row at the reading line is the tail window's own head: stepping it
-    // would unmount the newest rows for a reader who saved no row.
-    act(() => { expect(result.current.revealAtHead(headScroll(), false)).toBe(false) })
-    expect(result.current.headKey).toBe('k80')
-    expect(result.current.atTail).toBe(true)
-  })
-
-  it('reveals nothing for a programmatic scroll, held history, or a scroll away from the head', () => {
+  it('reveals nothing for a programmatic scroll, held history, or a scroll the mounted rows serve', () => {
     const order = keys(130)
     const { result } = bind(input({ order, followingTail: false, anchorKey: 'k70' }))
-    // The reflow compensation writes the scrollport itself, so only the reader's
-    // own movement may step the head; the write cannot feed itself another step.
+    // The view writes the scrollport for a jump or an explicit reveal, so only the
+    // reader's own movement may step the head; a write cannot feed itself a step.
     act(() => {
       expect(result.current.revealAtHead(headScroll({ movedByReader: false }), false)).toBe(false)
     })
     // A retained paging anchor or an in-flight page owns the layout.
     act(() => { expect(result.current.revealAtHead(headScroll(), true)).toBe(false) })
-    // A scroll still more than a viewport below the head has rows to consume.
+    // An offset above the mounted head is scrollport the mounted rows still serve:
+    // stepping there would advance the reader twice for one gesture.
     act(() => { expect(result.current.revealAtHead(headScroll({ top: 900 }), false)).toBe(false) })
+    act(() => { expect(result.current.revealAtHead(headScroll({ top: 2 }), false)).toBe(false) })
     expect(result.current.headKey).toBe('k45')
     expect(result.current.revealable).toBe(true)
   })

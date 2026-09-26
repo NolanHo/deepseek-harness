@@ -8,11 +8,17 @@
 // `turn-process` control and its prompt), so the reader sees a Turn fragment
 // whose start is not on screen.
 //
-// This suite pins the rule for the two boundaries the client owns while it
-// grows the window over resident rows — the opening window derived from the
-// saved reader row and each reveal step — and pins the stated trade-off: a Turn
-// start farther above the reader's row than `MOUNTED_ROW_LIMIT` rows cannot
+// This suite pins the rule for the boundaries the client chooses while it grows
+// the window over resident rows — the opening window derived from the saved
+// reader row and each explicit reveal step — and pins the stated trade-off: a
+// Turn start farther above the reader's row than `MOUNTED_ROW_LIMIT` rows cannot
 // mount together with that row, so the step refuses and paging serves instead.
+//
+// The reader's own continuous gesture is one of those boundaries: a gesture the
+// mounted head has stopped reveals the next Turn-aligned step, so the mounted
+// flow never starts inside a Turn whose control row would then have to be mounted
+// above it (that insertion moves the reading line with no scrollport write to
+// absorb it).
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, cleanup, renderHook } from '@testing-library/react'
@@ -149,18 +155,23 @@ describe('reveal boundary', () => {
 
   it('steps to the previous Turn start from the reader scroll at the head', () => {
     const { order, controls } = transcript([30, 30, 5])
-    const { result } = bind({
-      entries: order.map(node), order, controls, followingTail: false, anchorKey: 't2/s30', running: false,
+    const entries = order.map(node)
+    const { result, rerender } = bind({
+      entries, order, controls, followingTail: false, anchorKey: 't3/user', running: false,
     })
+    // The opening window sits on Turn 2's start, with the reader's row inside it.
     expect(result.current.headKey).toBe('t2/control')
-
+    // The reader's reading line has come back to the window head: the row their
+    // sample re-reads is the row the step must keep.
+    rerender({ entries, order, controls, followingTail: false, anchorKey: 't2/control', running: false })
     act(() => { expect(result.current.revealAtHead(atHead, false)).toBe(true) })
 
-    // The scroll owns the head row, so this step may leave the saved row behind;
-    // it still lands on the Turn start that owns the requested step.
+    // The step lands on the Turn start that owns the requested row and keeps the
+    // reader's own row, which the slice it mounts still holds.
     expect(result.current.headKey).toBe('t1/control')
     expect(midTurnHead(result.current, controls, order)).toBe(false)
     expect(result.current.keys.has('t1/user')).toBe(true)
+    expect(result.current.keys.has('t2/control')).toBe(true)
   })
 })
 
@@ -203,51 +214,82 @@ describe('turn-aligned boundary sweep', () => {
 
   it('lands every moving reveal step on a Turn start and keeps the row it steps for', () => {
     let moved = 0
-    // Both gestures drive the same step: the explicit reveal keeps the reader's
-    // own row, the reader scroll at the head keeps the row it reached.
-    for (const viaScroll of [false, true]) {
-      for (const length of [1, 25, 49, 50, 51, 71, 121]) {
-        const order = Array.from({ length }, (_, index) => `k${index}`)
-        const entries = order.map(node)
-        for (const controls of layouts(length)) {
-          for (let readerRow = 0; readerRow < length; readerRow += 7) {
-            const { result } = renderHook(
-              (props: MountedWindowInput) => useMountedWindow(props),
-              {
-                initialProps: {
-                  entries, order, controls, followingTail: false, anchorKey: order[readerRow] as string,
-                  running: false,
-                },
+    for (const length of [1, 25, 49, 50, 51, 71, 121]) {
+      const order = Array.from({ length }, (_, index) => `k${index}`)
+      const entries = order.map(node)
+      for (const controls of layouts(length)) {
+        for (let readerRow = 0; readerRow < length; readerRow += 7) {
+          const { result } = renderHook(
+            (props: MountedWindowInput) => useMountedWindow(props),
+            {
+              initialProps: {
+                entries, order, controls, followingTail: false, anchorKey: order[readerRow] as string,
+                running: false,
               },
-            )
-            const state = `length=${length} controls=[${controls.join(',')}] row=${readerRow} scroll=${String(viaScroll)}`
-            // The opening window may already sit mid-Turn under the stated
-            // trade-off; every step that moves must leave an aligned head and keep
-            // the row the step runs for — the reader's own row for an explicit
-            // reveal, the reached head row falling back from the saved row for a
-            // scroll.
-            for (let guard = 0; guard <= length; guard++) {
-              const before = result.current
-              const head = headIndex(before, order)
-              let stepped = false
-              act(() => {
-                stepped = viaScroll ? before.revealAtHead(atHead, false) : before.reveal()
-              })
-              if (!stepped) break
-              moved += 1
-              const plan = result.current
-              expect(midTurnHead(plan, controls, order), `${state}: step ${guard}`).toBe(false)
-              const kept = viaScroll ? [readerRow, head] : [readerRow]
-              expect(kept.some(row => plan.keys.has(order[row] as string)),
-                `${state}: step ${guard} dropped the row it stepped for`).toBe(true)
-              expect(headIndex(plan, order), `${state}: step ${guard} did not move up`).toBeLessThan(head)
-            }
-            cleanup()
+            },
+          )
+          const state = `length=${length} controls=[${controls.join(',')}] row=${readerRow}`
+          // The opening window may already sit mid-Turn under the stated
+          // trade-off; every step that moves must leave an aligned head and keep
+          // the reader's own row.
+          for (let guard = 0; guard <= length; guard++) {
+            const before = result.current
+            const head = headIndex(before, order)
+            let stepped = false
+            act(() => { stepped = before.reveal() })
+            if (!stepped) break
+            moved += 1
+            const plan = result.current
+            expect(midTurnHead(plan, controls, order), `${state}: step ${guard}`).toBe(false)
+            expect(plan.keys.has(order[readerRow] as string),
+              `${state}: step ${guard} dropped the row it stepped for (head ${head} -> ${headIndex(plan, order)}, key ${plan.headKey})`).toBe(true)
+            expect(headIndex(plan, order), `${state}: step ${guard} did not move up`).toBeLessThan(head)
           }
+          cleanup()
         }
       }
     }
     // Guard against a sweep that proves nothing: reveals must have moved.
+    expect(moved).toBeGreaterThan(0)
+  })
+
+  it('never exposes a Turn fragment from a reader gesture at the head', () => {
+    // The gesture is a boundary too: whatever it steps to, the mounted window
+    // still starts on a Turn start and keeps the row it steps for.
+    let moved = 0
+    for (const length of [25, 50, 71, 121]) {
+      const order = Array.from({ length }, (_, index) => `k${index}`)
+      const entries = order.map(node)
+      for (const controls of layouts(length)) {
+        for (let readerRow = 0; readerRow < length; readerRow += 7) {
+          const { result } = renderHook(
+            (props: MountedWindowInput) => useMountedWindow(props),
+            {
+              initialProps: {
+                entries, order, controls, followingTail: false, anchorKey: order[readerRow] as string,
+                running: false,
+              },
+            },
+          )
+          const state = `length=${length} controls=[${controls.join(',')}] row=${readerRow}`
+          for (let guard = 0; guard <= length; guard++) {
+            const before = result.current
+            const head = headIndex(before, order)
+            let stepped = false
+            act(() => { stepped = before.revealAtHead(atHead, false) })
+            if (!stepped) break
+            moved += 1
+            const plan = result.current
+            const stepped2 = headIndex(plan, order)
+            expect(midTurnHead(plan, controls, order), `${state}: step ${guard}`).toBe(false)
+            expect(plan.keys.has(order[readerRow] as string),
+              `${state}: step ${guard} dropped the row it stepped for (head ${head} -> ${stepped2}, key ${plan.headKey})`).toBe(true)
+            expect(stepped2, `${state}: step ${guard} did not move up`).toBeLessThan(head)
+          }
+          cleanup()
+        }
+      }
+    }
     expect(moved).toBeGreaterThan(0)
   })
 
@@ -281,9 +323,11 @@ describe('turn-aligned boundary sweep', () => {
     expect(result.current.keys.has('t1/s59')).toBe(true)
   })
 
-  it('reveals nothing for a saved row no resident key carries', () => {
-    // The session's scroll memory holds an anchor with no resident row, so the
-    // window keeps the tail kind and the reading line owns no row to step from.
+  it('steps the reader gesture but not the explicit reveal for a row no key carries', () => {
+    // The session's scroll memory holds an anchor with no resident row: the
+    // window keeps the tail kind, the explicit reveal refuses because it would
+    // unmount the newest rows, and the reader's own gesture still steps because it
+    // has no reader row to keep — it lands on the Turn start owning the step.
     const { order, controls } = transcript([30, 30])
     const { result } = bind({
       entries: order.map(node), order, controls, followingTail: false, anchorKey: 'call:missing', running: false,
@@ -291,7 +335,8 @@ describe('turn-aligned boundary sweep', () => {
     expect(result.current.atTail).toBe(true)
     expect(result.current.revealable).toBe(false)
     act(() => { expect(result.current.reveal()).toBe(false) })
-    act(() => { expect(result.current.revealAtHead(atHead, false)).toBe(false) })
-    expect(result.current.atTail).toBe(true)
+    act(() => { expect(result.current.revealAtHead(atHead, false)).toBe(true) })
+    expect(midTurnHead(result.current, controls, order)).toBe(false)
+    expect(headIndex(result.current, order)).toBe(controls[0])
   })
 })
