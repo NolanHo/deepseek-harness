@@ -370,10 +370,13 @@
 /* Fork patch (FORK_SURFACE.md): the count alone, without the localized label.
    The phone block below hides `.count` and renders this instead, so the lineage
    chip keeps its number without spending the session title's width on the
-   words. The trigger's accessible name stays the full localized count, and the
-   `switcher` variant — a subagent session's own title — is untouched. */
+   words. The count is one token: a squeezed chip otherwise stacks a two-digit
+   count into a two-line column and grows the phone header row. The trigger's
+   accessible name stays the full localized count, and the `switcher` variant — a
+   subagent session's own title — is untouched. */
 .countCompact {
   display: none;
+  white-space: nowrap;
 }
 
 @media (max-width: 560px) {

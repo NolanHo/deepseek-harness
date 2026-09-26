@@ -583,35 +583,40 @@ button.crumb:hover {
    (without it the fixed button drops a whole status bar below the title row on
    a device with a top inset, and the title paints under the system bar), and
    hands the title row what is left after the trailing controls: the breadcrumb
-   stays visible and truncates through `.crumb`'s ellipsis, and the actions
-   shrink instead of pushing the corner seat past the viewport — the corner's
-   -16px margin is tuned for the desktop 28px right padding, while this block's
-   padding is 12px, which landed the control 4px off-screen at every phone
-   width. */
+   stays visible and truncates through `.crumb`'s ellipsis, and the count-only
+   chips and the corner seat keep their intrinsic widths instead of pushing the
+   corner seat past the viewport — the corner's -16px margin is tuned for the
+   desktop 28px right padding, while this block's padding is 12px, which landed
+   the control 4px off-screen at every phone width. */
 @media (max-width: 560px) {
   .header {
     padding: calc(8px + env(safe-area-inset-top)) 12px 0 56px;
   }
 
-  /* The metadata chips collapse to their counts in this block (the lineage
-     chip and the job badge), so the title floor is 140px. */
+  /* The breadcrumb is the row's only ellipsizing element, so it absorbs the
+     whole deficit; the zero floor restates the base rule so this block's
+     contract reads on its own. A floor here instead pushes the row's overflow
+     into the chips: the metadata chips collapse to their counts in this block
+     (the lineage chip and the job badge), and a count has no narrower form to
+     give — a squeezed one breaks inside its digits and the chip then paints
+     over the trailing controls. */
   .crumbs {
     display: flex;
-    min-width: 140px;
+    min-width: 0;
   }
 
   /* The lineage chip stays: for a subagent session it carries that session's
      own title, and it is the only phone entry point into the subagent catalog
      (the drawer and the session search filter subagent children out). */
 
-  /* The actions give way by shrinking their own content: the preset label
-     renders nothing this narrow, and the job badge renders its count alone in
-     its own phone block. They must NOT clip: the job badge's menu is absolutely
-     positioned inside this box, so `overflow: hidden` here would remove the
-     popover from every phone header. */
+  /* Fixed at its content width — the base rule's `flex: none`, restated for the
+     same reason: a shrunk box only squeezes the chips it holds (the preset label
+     and the job badge already shed their words in their own phone blocks). The
+     box must NOT clip either: the job badge's menu is absolutely positioned
+     inside it, so `overflow: hidden` here would remove the popover from every
+     phone header. */
   .headerActions {
-    flex: 0 1 auto;
-    min-width: 0;
+    flex: 0 0 auto;
   }
 
   .headerCorner {

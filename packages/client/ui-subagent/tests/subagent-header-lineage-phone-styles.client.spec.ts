@@ -84,6 +84,14 @@ describe('SubagentHeaderLineage.module.css phone chip', () => {
       .toBe('none')
   })
 
+  it('keeps the count on one line', () => {
+    // A squeezed chip otherwise stacks a two-digit count into a two-line column
+    // that grows the phone header row. The count is one token and keeps one line.
+    expect(declarationsIn(css, '.countCompact')?.get('white-space'),
+      '.countCompact must declare white-space: nowrap so a squeezed chip cannot break the number')
+      .toBe('nowrap')
+  })
+
   it('never hides the switcher title, which carries a subagent session’s own title', () => {
     const phone = mediaBody(PHONE_PRELUDE) as string
     expect(declarationsIn(phone, '.switcherTitle')?.get('display') ?? '',

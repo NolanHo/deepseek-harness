@@ -120,22 +120,6 @@ function phoneDeclarations(selector: string): Map<string, string> {
 }
 
 /**
- * Pixels of the first declared length among `properties`.
- * @param declarations - declarations of one selector.
- * @param properties - property names in preference order.
- * @returns the numeric pixels, or NaN when none of them carries a px length.
- */
-function px(declarations: Map<string, string>, ...properties: string[]): number {
-  for (const property of properties) {
-    const value = declarations.get(property)
-    if (value === undefined) continue
-    const match = /([\d.]+)px/.exec(value)
-    if (match?.[1] !== undefined) return Number.parseFloat(match[1])
-  }
-  return Number.NaN
-}
-
-/**
  * Shrink factor of a `flex` shorthand, including the components it omits.
  * @param flex - the shorthand text.
  * @returns the shrink factor as declared, or as defaulted by the shorthand.
@@ -170,15 +154,15 @@ describe('ConversationRoot.module.css phone header', () => {
       .toEqual([])
   })
 
-  it('shows the session title breadcrumbs again with a width floor', () => {
+  it('hands the row deficit to the session title instead of the count chips', () => {
     const crumbs = phoneDeclarations('.crumbs')
     expect(crumbs.get('display'), '.crumbs must not be hidden on phones').not.toBe('none')
-    // The floor is what keeps the title readable while the actions shrink; the
-    // title itself truncates through `.crumb`'s existing ellipsis. The metadata
-    // chips collapse to their counts in this block, so the floor covers the
-    // title rather than sharing the row with two full labels.
-    expect(px(crumbs, 'min-width'), '.crumbs needs a min-width floor so the title survives')
-      .toBeGreaterThanOrEqual(140)
+    // The count-only chips keep their intrinsic width in this block: a count
+    // shrunk below it breaks inside its digits and the chip then paints over the
+    // trailing controls — measured at 411px with the lineage chip, the job badge
+    // and the team action present. The breadcrumb is the row's only ellipsizing
+    // element, so its floor is gone and `.crumb`'s existing ellipsis truncates it.
+    expect(crumbs.get('min-width'), '.crumbs must absorb the row deficit').toBe('0')
   })
 
   it("reserves the drawer opener's top safe-area inset on the phone header", () => {
@@ -197,14 +181,14 @@ describe('ConversationRoot.module.css phone header', () => {
       .toBe('calc(8px + env(safe-area-inset-top)) 12px 0 56px')
   })
 
-  it('lets the header actions shrink instead of overflowing the row', () => {
+  it('keeps the header actions at their content width', () => {
     const actions = phoneDeclarations('.headerActions')
     const flex = actions.get('flex')
     const shrink = actions.get('flex-shrink') ?? (flex === undefined ? undefined : flexShrinkOf(flex))
-    expect(shrink, '.headerActions must be allowed to shrink below its content width').toBe('1')
-    expect(actions.get('min-width') === '0' || actions.get('overflow') === 'hidden'
-      || actions.get('overflow-x') === 'hidden',
-    '.headerActions needs min-width: 0 or overflow: hidden to shrink').toBe(true)
+    // Shrinking this box only squeezes the chips it holds; the chips render
+    // counts alone in this block, and a count cannot narrow. The breadcrumbs
+    // take the deficit instead.
+    expect(shrink, '.headerActions must not shrink below its content width on phones').toBe('0')
   })
 
   it('never clips the actions box that holds the job popover (regression guard, not a RED assertion)', () => {

@@ -40,17 +40,19 @@
 
 /* Fork patch (FORK_SURFACE.md): the count alone, without the localized label.
    The phone block below hides `.count` and renders this instead, so the badge
-   keeps its number without spending the session title's width on the words. */
+   keeps its number without spending the session title's width on the words. The
+   count is one token: a squeezed badge otherwise stacks a two-digit count into a
+   two-line column and grows the phone header row. */
 .countCompact {
   display: none;
   margin: 0 5px;
+  white-space: nowrap;
 }
 
 /* Fork patch (FORK_SURFACE.md): the phone header row spends its width on the
    session title. The full label ("4 background jobs") truncated to "4 bac…"
-   there, so the phone block replaces it with the count and keeps the number on
-   one line. Neither `.root` (the menu's containing block) nor `.trigger` may
-   clip, so both only shrink. */
+   there, so the phone block replaces it with the count. The badge never clips:
+   `.root` is the menu's containing block. */
 @media (max-width: 560px) {
   .root {
     min-width: 0;
