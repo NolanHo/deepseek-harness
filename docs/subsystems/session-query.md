@@ -148,6 +148,8 @@ interface SessionEventSearchDocument extends SessionEventRecord {
 
 The combined `ctx.sessionQuery` seam has two full-text scopes. `searchSessions()` groups the corpus by strongest matching event; `searchEvents()` searches one session. Requests bind an opaque cursor to the normalized query, metadata filters, and limit. The event text scan is intentionally absent from provider metadata filters.
 
+One page sequence ranks the corpus once: a continuation cursor slices the ranked result the first page computed instead of ranking the same match set again, and `exec.rankedDocumentBudget` charges every ranking against the caller request's shared bound. A request that would rank more than the provider's configured `maxRankedDocuments` documents in total fails with `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED`, whatever page size or page count it uses.
+
 ```ts type-equiv
 /** Provider-owned opaque continuation token returned by session search. */
 type SessionSearchCursor = Branded<'SessionSearchCursor'>
@@ -356,6 +358,7 @@ type SessionQueryErrorCode =
   | 'SESSION_QUERY_INVALID_SURFACE'
   | 'SESSION_QUERY_INVALID_WINDOW'
   | 'SESSION_QUERY_PERSISTENCE_FAILED'
+  | 'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED'
   | 'SESSION_QUERY_SEARCH_DISABLED'
   | 'SESSION_QUERY_SEARCH_TOO_BROAD'
   | 'SESSION_QUERY_SESSION_NOT_FOUND'

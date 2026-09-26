@@ -841,6 +841,123 @@ describe('SQLite session search', () => {
     // an index holding ~3.8 MiB of matching document text.
     expect(after - before).toBeLessThan(1024 * 1024)
   })
+
+  it('serves every page of one request from a single ranking of the match set', async () => {
+    const path = await temporaryPath('paged-ranking.db')
+    const maxRankedDocuments = 480
+    const sessionCount = 120
+    const documentsPerSession = 4
+    const documentText = `needle ${'x'.repeat(8180)}`
+    const pageSize = 20
+    // 120 Sessions x 4 matching documents of ~8 KiB each. One ranking reads the
+    // whole match set (measured ~8 MB of index bytes: `highlight()` plus the
+    // `replace()`-based occurrence count per document), so the six pages below
+    // cost ~48 MB when the ranking query re-runs per page and ~8 MB when they
+    // slice one ranking. The ceiling is 2x one ranking.
+    TestPersistence.reset()
+    for (let index = 0; index < sessionCount; index += 1) {
+      TestPersistence.set({
+        meta: header(`paged-${index}`, index + 1),
+        events: breadthEvents(documentText, documentsPerSession),
+      })
+    }
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TestPersistence)
+    await ctx.plugin(SqliteSessionQueryEngine, { path, maxRankedDocuments })
+    // The opening call reconciles the corpus into the index; the measured walk
+    // is the page sequence itself.
+    await ctx.sessionQuery.searchSessions({ query: 'unrelated', limit: pageSize })
+
+    const budget = { spent: 0 }
+    const before = readRchar()
+    let cursor: SessionSearchCursor | undefined
+    const ids = new Set<string>()
+    let pages = 0
+    do {
+      const page = await ctx.sessionQuery.searchSessions({
+        query: 'needle',
+        limit: pageSize,
+        ...cursor === undefined ? {} : { cursor },
+      }, { rankedDocumentBudget: budget })
+      pages += 1
+      for (const hit of page.items) ids.add(hit.header.id)
+      cursor = page.nextCursor
+    } while (cursor !== undefined)
+    const after = readRchar()
+
+    expect(pages).toBe(sessionCount / pageSize)
+    expect(ids.size).toBe(sessionCount)
+    // The read ceiling is measured even when the budget accounting already failed.
+    if (before !== undefined && after !== undefined) {
+      expect.soft(after - before).toBeLessThan(16 * 1024 * 1024)
+    }
+    // One ranking charges the match set once; a per-page re-ranking charges it
+    // once per page and the budget below refuses the second charge.
+    expect(budget.spent).toBe(sessionCount * documentsPerSession)
+  })
+
+  it('refuses a second ranking in one request instead of re-reading the match set', async () => {
+    const path = await temporaryPath('request-budget.db')
+    const maxRankedDocuments = 64
+    const sessionCount = 30
+    const documentsPerSession = 2
+    const documentText = `needle ${'x'.repeat(8180)}`
+    // 30 Sessions x 2 matching documents: 60 documents, one shared ranking for
+    // the request. A live event then advances the corpus generation, so the
+    // continuation cursor goes stale and the same request's retry needs a
+    // second ranking - which the 64-document budget refuses instead of reading
+    // the match set again.
+    TestPersistence.reset()
+    for (let index = 0; index < sessionCount; index += 1) {
+      TestPersistence.set({
+        meta: header(`budget-${index}`, index + 1),
+        events: breadthEvents(documentText, documentsPerSession),
+      })
+    }
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TestPersistence)
+    await ctx.plugin(SqliteSessionQueryEngine, { path, maxRankedDocuments })
+    await ctx.sessionQuery.searchSessions({ query: 'unrelated', limit: 20 })
+    const live = ctx.sessions.create(SessionId('request-budget-live'), {
+      meta: header('request-budget-live', 100),
+    })
+
+    const budget = { spent: 0 }
+    const first = await ctx.sessionQuery.searchSessions(
+      { query: 'needle', limit: 20 },
+      { rankedDocumentBudget: budget },
+    )
+    expect(budget.spent).toBe(sessionCount * documentsPerSession)
+    expect(first.nextCursor).toBeDefined()
+
+    live.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'unrelated text' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    const before = readRchar()
+    await expect(ctx.sessionQuery.searchSessions({
+      query: 'needle',
+      limit: 20,
+      cursor: first.nextCursor as SessionSearchCursor,
+    }, { rankedDocumentBudget: budget })).rejects.toThrow(expectCode('SESSION_QUERY_STALE_CURSOR'))
+    const refusal = await ctx.sessionQuery.searchSessions(
+      { query: 'needle', limit: 20 },
+      { rankedDocumentBudget: budget },
+    ).then(() => undefined, (error: unknown) => error)
+    const after = readRchar()
+
+    expect.soft(refusal).toMatchObject({ code: 'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED' })
+    // The refused call ranks nothing: the budget is unchanged and the reads are
+    // the postings-only probe.
+    if (before !== undefined && after !== undefined) {
+      expect.soft(after - before).toBeLessThan(1024 * 1024)
+    }
+    expect(budget.spent).toBe(sessionCount * documentsPerSession)
+  })
 })
 
 describe('SQLite reconciliation and source lifecycle', () => {

@@ -71,6 +71,10 @@ const SAFE_SESSION_QUERY_FAILURES = {
     code: 'SESSION_QUERY_PERSISTENCE_FAILED',
     message: 'session history storage is unavailable',
   },
+  SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED: {
+    code: 'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED',
+    message: 'one search call already ranked its document budget; retry the search',
+  },
   SESSION_QUERY_SEARCH_DISABLED: {
     code: 'SESSION_QUERY_SEARCH_DISABLED',
     message: 'session search is disabled in this deployment',

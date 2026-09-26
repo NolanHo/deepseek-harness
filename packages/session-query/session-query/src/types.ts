@@ -256,10 +256,31 @@ export interface SessionEventSearchPage extends SessionSearchPage<SessionEventSe
   session: SessionHeader
 }
 
+/**
+ * Ranked-document allowance shared by every call of one caller request.
+ *
+ * A provider charges each call that ranks a document set — a first page and any
+ * re-rank after the relevant corpus changed — and refuses a charge that would
+ * take the request past the provider's own configured document bound. A caller
+ * that drives pages through cursors passes one budget for the whole sequence, so
+ * one request cannot re-rank the same document set once per page; a single-call
+ * caller may omit the budget and carries only the per-call document bound.
+ */
+export interface SessionSearchRankedDocumentBudget {
+  /** Documents this request has already spent on ranking. */
+  spent: number
+}
+
 /** Controls shared by cross-session and within-session search calls. */
 export interface SessionSearchExecContext {
   /** Abort caller waiting and interrupt provider work where supported. */
   signal?: AbortSignal
+  /**
+   * Budget shared by every call of one caller request. The provider owns the
+   * increments and the bound; a page sequence that exceeds it fails with
+   * `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` instead of ranking again.
+   */
+  rankedDocumentBudget?: SessionSearchRankedDocumentBudget
 }
 
 /** Cross-session full-text search request. */

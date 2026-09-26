@@ -260,6 +260,65 @@ describe('session.search', () => {
     await ctx.fiber.dispose()
   })
 
+  it('maps an exhausted per-request document budget onto a caller-visible bad request', async () => {
+    const ctx = await baseContext()
+    ctx.sessions.create(sid('visible'), { meta: header('visible') })
+    installSearchQuery(ctx, () => Promise.reject(new SessionQueryError(
+      'session search request already spent 5000 of its 5000-document budget; narrow the query or repeat the search',
+      'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED',
+    )))
+    const remote = createSessionTestRemote(ctx, defaults)
+
+    const response = await remote.search(request('the'), new AbortController().signal)
+
+    // An exhausted budget is a bounded refusal the caller repeats or narrows,
+    // not a server fault.
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: 'gateway/bad-request' },
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('shares one ranked-document budget across the pages of one search request', async () => {
+    const ctx = await baseContext()
+    const items = Array.from({ length: 22 }, (_, index) => hit(`visible-${index}`, index))
+    for (const item of items) {
+      ctx.sessions.create(item.header.id, { meta: item.header })
+    }
+    const budgets: unknown[] = []
+    const searchSessions = vi.fn()
+      .mockImplementationOnce((
+        _providerRequest: SessionSearchRequest,
+        exec?: { rankedDocumentBudget?: unknown },
+      ) => {
+        budgets.push(exec?.rankedDocumentBudget)
+        return Promise.resolve({ items: items.slice(0, 20), nextCursor: 'page-2' })
+      })
+      .mockImplementationOnce((
+        _providerRequest: SessionSearchRequest,
+        exec?: { rankedDocumentBudget?: unknown },
+      ) => {
+        budgets.push(exec?.rankedDocumentBudget)
+        return Promise.resolve({ items: items.slice(20) })
+      })
+    installSearchQuery(ctx, searchSessions)
+
+    const response = await createSessionTestRemote(ctx, defaults).search(
+      request('match'),
+      new AbortController().signal,
+    )
+
+    expect(response).toMatchObject({ ok: true, value: { hasMore: true } })
+    expect(searchSessions).toHaveBeenCalledTimes(2)
+    // Every page of the request carries the same fresh budget, so the provider
+    // can refuse a second ranking of the same document set.
+    expect(budgets).toHaveLength(2)
+    expect(budgets[0]).toEqual({ spent: 0 })
+    expect(budgets[1]).toBe(budgets[0])
+    await ctx.fiber.dispose()
+  })
+
   it('returns an empty page without invoking the index when no session is visible', async () => {
     const ctx = await baseContext()
     const searchSessions = vi.fn()
@@ -822,7 +881,12 @@ describe('session.search', () => {
     })
     expect(searchSessions).toHaveBeenCalledTimes(2)
     for (const call of searchSessions.mock.calls) {
-      expect(call[1]).toEqual({ signal: controller.signal })
+      // Every page carries the carrier signal plus the request's shared
+      // ranked-document budget, which no mock provider charges.
+      expect(call[1]).toEqual({
+        signal: controller.signal,
+        rankedDocumentBudget: { spent: 0 },
+      })
     }
   })
 

@@ -148,6 +148,8 @@ interface SessionEventSearchDocument extends SessionEventRecord {
 
 整合后的 `ctx.sessionQuery` seam 提供两个全文搜索范围。`searchSessions()` 按匹配度最强的事件对语料库分组；`searchEvents()` 搜索单个会话。请求将不透明游标与规范化后的查询、元数据过滤器和结果数量上限绑定。提供方的元数据过滤器有意不包含事件文本扫描。
 
+一次续页序列只对语料库排序一次：续页游标切分首页算出的排序结果，而不是对同一匹配集重新排序；`exec.rankedDocumentBudget` 把每一次排序计入调用方请求的共享额度。一个请求无论使用何种页大小或页数，只要累计排序的文档超过提供方配置的 `maxRankedDocuments`，就以 `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` 失败。
+
 ```ts type-equiv
 /** Provider-owned opaque continuation token returned by session search. */
 type SessionSearchCursor = Branded<'SessionSearchCursor'>
@@ -356,6 +358,7 @@ type SessionQueryErrorCode =
   | 'SESSION_QUERY_INVALID_SURFACE'
   | 'SESSION_QUERY_INVALID_WINDOW'
   | 'SESSION_QUERY_PERSISTENCE_FAILED'
+  | 'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED'
   | 'SESSION_QUERY_SEARCH_DISABLED'
   | 'SESSION_QUERY_SEARCH_TOO_BROAD'
   | 'SESSION_QUERY_SESSION_NOT_FOUND'

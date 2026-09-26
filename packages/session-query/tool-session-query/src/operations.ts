@@ -14,6 +14,7 @@ import {
   type SessionEventSurface,
   type SessionRecord,
   type SessionSearchCursor,
+  type SessionSearchRankedDocumentBudget,
 } from '@deepseek-ai/dsh-session-query'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { toolInput } from './input.ts'
@@ -88,6 +89,9 @@ async function executeSessionSearch(
     sessionFilters.push({ kind: 'parent', values: parentValues })
   }
   sessionFilters.push({ kind: 'cwd', values: [cwd] })
+  // This tool call's pages share one ranked-document budget, so walking the
+  // result stream cannot make the provider rank the same document set again.
+  const rankedDocumentBudget: SessionSearchRankedDocumentBudget = { spent: 0 }
   const collected = await collectPages(
     maxResults,
     exec.signal,
@@ -97,7 +101,7 @@ async function executeSessionSearch(
         sessionFilters,
         eventFilters,
         ...cursor === undefined ? {} : { cursor },
-      }, { signal: exec.signal })),
+      }, { signal: exec.signal, rankedDocumentBudget })),
     hit => hit.header.id !== caller.id && workspaceAccess.recordAuthorized(hit, caller),
   )
 
@@ -149,6 +153,7 @@ async function executeEventSearch(
     eventTypes: args.event_types,
     surfaces: args.surfaces,
   })
+  const rankedDocumentBudget: SessionSearchRankedDocumentBudget = { spent: 0 }
   const collected = await collectPages(
     maxResults,
     exec.signal,
@@ -159,7 +164,7 @@ async function executeEventSearch(
           query,
           filters,
           ...cursor === undefined ? {} : { cursor },
-        }, { signal: exec.signal }))
+        }, { signal: exec.signal, rankedDocumentBudget }))
       workspaceAccess.assertObservedTargetAuthorized(caller, sessionId, page.session)
       return page
     },
