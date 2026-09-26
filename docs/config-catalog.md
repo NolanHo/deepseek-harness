@@ -2610,7 +2610,7 @@ export interface Config {
 export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 ```
 
-Source: [`packages/session/session-persistence-sqlite/src/index.ts:53`](../packages/session/session-persistence-sqlite/src/index.ts)
+Source: [`packages/session/session-persistence-sqlite/src/index.ts:54`](../packages/session/session-persistence-sqlite/src/index.ts)
 
 <a id="deepseek-aidsh-session-projection-cache"></a>
 
@@ -2667,6 +2667,17 @@ export interface Config extends SessionQueryConfig {
   maxLimit?: number
   /** Maximum snippet length in Unicode code points. Defaults to 240. */
   snippetChars?: number
+  /**
+   * Largest matching-document set one search may rank. Ranking reads each
+   * match's stored text (`highlight` and its occurrence count), so an
+   * unbounded match set makes one call read the whole index: a common term in
+   * a production index reads gigabytes and pins the event loop for minutes.
+   * A query whose match set exceeds this bound fails with
+   * `SESSION_QUERY_SEARCH_TOO_BROAD` after a postings-only probe of this many
+   * matches plus one, before any document text is read. Defaults to
+   * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS}.
+   */
+  maxRankedDocuments?: number
   /** Maximum concurrent persisted-log reads in one inherited batch read. Defaults to 4. */
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
@@ -2682,7 +2693,7 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 Depends on: [`SessionQueryConfig`](../packages/session-query/session-query/src/index.ts)
 
-Source: [`packages/session-query/session-query-sqlite/src/index.ts:95`](../packages/session-query/session-query-sqlite/src/index.ts)
+Source: [`packages/session-query/session-query-sqlite/src/index.ts:104`](../packages/session-query/session-query-sqlite/src/index.ts)
 
 <a id="deepseek-aidsh-session-reference"></a>
 

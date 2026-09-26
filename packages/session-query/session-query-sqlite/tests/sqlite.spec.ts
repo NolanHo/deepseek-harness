@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import { DatabaseSync } from 'node:sqlite'
 import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import SessionStore, { SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
@@ -209,6 +210,34 @@ async function liveContext(config: ConstructorParameters<typeof SqliteSessionQue
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SqliteSessionQueryEngine, config)
   return ctx
+}
+
+/**
+ * Bytes this process has read through read/pread syscalls, or undefined where
+ * the platform exposes no such counter. One search call's read budget is
+ * asserted against this delta: an unbounded ranking reads every matching
+ * document's stored text, a bounded refusal reads postings only.
+ */
+function readRchar(): number | undefined {
+  try {
+    const match = /rchar:\s*(\d+)/.exec(readFileSync('/proc/self/io', 'utf8'))
+    return match === null ? undefined : Number(match[1])
+  } catch {
+    return undefined
+  }
+}
+
+/** One append-origin message event per requested index, so one Session owns `count` searchable documents. */
+function breadthEvents(text: string, count: number): SessionEvent[] {
+  return Array.from({ length: count }, (_, seq) => ({
+    type: 'user/message' as const,
+    seq: SessionSeq(seq),
+    time: seq + 1,
+    data: createUserMessage({
+      content: [{ type: 'text', text }], source: { kind: 'user' },
+    }),
+    surfaceOp: 'append' as const,
+  }))
 }
 
 describe('SQLite session search', () => {
@@ -765,6 +794,52 @@ describe('SQLite session search', () => {
       query: 'needle',
       sessionFilters: [{ kind: 'id', values: ids }],
     })).rejects.toThrow(expectCode('SESSION_QUERY_INVALID_FILTER'))
+  })
+
+  it('refuses a match set above the ranked-document budget before reading document text', async () => {
+    const path = await temporaryPath('breadth.db')
+    const maxRankedDocuments = 64
+    const sessionCount = 40
+    const documentsPerSession = 12
+    const documentText = `needle ${'x'.repeat(8180)}`
+    // Roughly 480 matching documents of ~8 KiB each: an unbounded ranking reads
+    // the whole corpus (about 3.8 MiB) for a 20-result page, while a bounded
+    // refusal reads postings only. The corpus also exceeds the budget by about
+    // an order of magnitude, so the refusal is the bound under test and not an
+    // artifact of the corpus shape.
+    TestPersistence.reset()
+    for (let index = 0; index < sessionCount; index += 1) {
+      TestPersistence.set({
+        meta: header(`breadth-${index}`, index + 1),
+        events: breadthEvents(documentText, documentsPerSession),
+      })
+    }
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TestPersistence)
+    await ctx.plugin(SqliteSessionQueryEngine, { path, maxRankedDocuments })
+    // The opening call reconciles the corpus into the index; the measured call
+    // is the query itself.
+    await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 20 }).catch(() => undefined)
+
+    const before = readRchar()
+    // `soft` so the read budget is measured and reported even when the refusal
+    // assertion already failed (the unbounded engine ranks the corpus instead).
+    const refusal = await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 20 })
+      .then(() => undefined, (error: unknown) => error)
+    expect.soft(refusal).toMatchObject({ code: 'SESSION_QUERY_SEARCH_TOO_BROAD' })
+    const eventRefusal = await ctx.sessionQuery.searchEvents({
+      sessionId: SessionId('breadth-0'),
+      query: 'needle',
+      limit: 20,
+    }).then(() => undefined, (error: unknown) => error)
+    expect.soft(eventRefusal).toMatchObject({ code: 'SESSION_QUERY_SEARCH_TOO_BROAD' })
+    const after = readRchar()
+    if (before === undefined || after === undefined) return
+    // Budget: two postings-only probes of maxRankedDocuments + 1 matches, over
+    // an index holding ~3.8 MiB of matching document text.
+    expect(after - before).toBeLessThan(1024 * 1024)
   })
 })
 
