@@ -51,6 +51,8 @@ kind: "package-reference"
 | `maxLimit` | `100` | 接受的最大请求分页大小 |
 | `snippetChars` | `240` | 按 Unicode 码点计算的最大 snippet 长度 |
 | `readWindowMax` | `50` | 继承的 `readEvent()` 的 `before`/`after` 原始事件数上限 |
+| `maxRankedDocuments` | `5000` | 单次排序可读取的最大匹配文档集；更宽的匹配集以 `SESSION_QUERY_SEARCH_TOO_BROAD` 失败 |
+| `maxLiveObservedEvents` | `100000` | 单次搜索请求可观测的已挂载会话事件数上限；更宽的集合以 `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` 失败 |
 | `persistedReadConcurrency` | `4` | 继承批量读取的并发持久化日志读取数 |
 | `preparedSessionCacheSize` | `5` | 继承的 `observeSession` 读取器为复用保留的冷 prepared-Session 观察数 |
 

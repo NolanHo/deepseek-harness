@@ -2678,6 +2678,17 @@ export interface Config extends SessionQueryConfig {
    * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS}.
    */
   maxRankedDocuments?: number
+  /**
+   * Largest number of attached-Session events one search request may observe.
+   * Reconciliation re-observes every attached Session whose log changed since
+   * the last pass, and observing one Session clones, fingerprints, and extracts
+   * documents from its whole log; a request over a set of large attached logs
+   * otherwise reads without limit. A request whose live observation would pass
+   * this bound fails with `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` before that
+   * read starts. Defaults to
+   * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS}.
+   */
+  maxLiveObservedEvents?: number
   /** Maximum concurrent persisted-log reads in one inherited batch read. Defaults to 4. */
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
@@ -2693,7 +2704,7 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 
 Depends on: [`SessionQueryConfig`](../packages/session-query/session-query/src/index.ts)
 
-来源： [`packages/session-query/session-query-sqlite/src/index.ts:105`](../packages/session-query/session-query-sqlite/src/index.ts)
+来源： [`packages/session-query/session-query-sqlite/src/index.ts:121`](../packages/session-query/session-query-sqlite/src/index.ts)
 
 <a id="deepseek-aidsh-session-reference"></a>
 

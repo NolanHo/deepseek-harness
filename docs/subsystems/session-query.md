@@ -150,6 +150,8 @@ The combined `ctx.sessionQuery` seam has two full-text scopes. `searchSessions()
 
 One page sequence ranks the corpus once: a continuation cursor slices the ranked result the first page computed instead of ranking the same match set again, and `exec.rankedDocumentBudget` charges every ranking against the caller request's shared bound. A request that would rank more than the provider's configured `maxRankedDocuments` documents in total fails with `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED`, whatever page size or page count it uses.
 
+Reconciliation observes only attached Sessions whose log changed since the previous pass, so an unchanged attached Session is never re-read, and `exec.liveObservationBudget` charges every observation against the caller request's shared bound. A request whose live observation would pass the provider's configured `maxLiveObservedEvents` fails with `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` before reading a log.
+
 ```ts type-equiv
 /** Provider-owned opaque continuation token returned by session search. */
 type SessionSearchCursor = Branded<'SessionSearchCursor'>

@@ -150,6 +150,8 @@ interface SessionEventSearchDocument extends SessionEventRecord {
 
 一次续页序列只对语料库排序一次：续页游标切分首页算出的排序结果，而不是对同一匹配集重新排序；`exec.rankedDocumentBudget` 把每一次排序计入调用方请求的共享额度。一个请求无论使用何种页大小或页数，只要累计排序的文档超过提供方配置的 `maxRankedDocuments`，就以 `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` 失败。
 
+对账只会观测自上趟以来日志发生变化的已挂载会话，因此未变化的已挂载会话不会被重读；`exec.liveObservationBudget` 把每一次观测计入调用方请求的共享额度，超过提供方配置的 `maxLiveObservedEvents` 的请求会在读取日志之前以 `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` 失败。
+
 ```ts type-equiv
 /** Provider-owned opaque continuation token returned by session search. */
 type SessionSearchCursor = Branded<'SessionSearchCursor'>

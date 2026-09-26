@@ -14,6 +14,7 @@ import {
   type SessionEventSurface,
   type SessionRecord,
   type SessionSearchCursor,
+  type SessionSearchLiveObservationBudget,
   type SessionSearchRankedDocumentBudget,
 } from '@deepseek-ai/dsh-session-query'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
@@ -92,6 +93,10 @@ async function executeSessionSearch(
   // This tool call's pages share one ranked-document budget, so walking the
   // result stream cannot make the provider rank the same document set again.
   const rankedDocumentBudget: SessionSearchRankedDocumentBudget = { spent: 0 }
+  // Fork patch (FORK_SURFACE.md): this tool call's pages share one
+  // live-observation budget, so walking the result stream cannot make the
+  // provider observe the attached logs again.
+  const liveObservationBudget: SessionSearchLiveObservationBudget = { spent: 0 }
   const collected = await collectPages(
     maxResults,
     exec.signal,
@@ -101,7 +106,7 @@ async function executeSessionSearch(
         sessionFilters,
         eventFilters,
         ...cursor === undefined ? {} : { cursor },
-      }, { signal: exec.signal, rankedDocumentBudget })),
+      }, { signal: exec.signal, rankedDocumentBudget, liveObservationBudget })),
     hit => hit.header.id !== caller.id && workspaceAccess.recordAuthorized(hit, caller),
   )
 
@@ -154,6 +159,10 @@ async function executeEventSearch(
     surfaces: args.surfaces,
   })
   const rankedDocumentBudget: SessionSearchRankedDocumentBudget = { spent: 0 }
+  // Fork patch (FORK_SURFACE.md): this event search's pages share one
+  // live-observation budget, so a continuation cannot make the provider
+  // observe the attached logs again.
+  const liveObservationBudget: SessionSearchLiveObservationBudget = { spent: 0 }
   const collected = await collectPages(
     maxResults,
     exec.signal,
@@ -164,7 +173,7 @@ async function executeEventSearch(
           query,
           filters,
           ...cursor === undefined ? {} : { cursor },
-        }, { signal: exec.signal, rankedDocumentBudget }))
+        }, { signal: exec.signal, rankedDocumentBudget, liveObservationBudget }))
       workspaceAccess.assertObservedTargetAuthorized(caller, sessionId, page.session)
       return page
     },

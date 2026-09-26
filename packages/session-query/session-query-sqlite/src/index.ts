@@ -33,6 +33,7 @@ import type {
   SessionEventSearchRequest,
   SessionSearchExecContext,
   SessionSearchHit,
+  SessionSearchLiveObservationBudget,
   SessionSearchCursor as SessionSearchCursorValue,
   SessionSearchPage,
   SessionSearchRankedDocumentBudget,
@@ -94,6 +95,21 @@ export const SESSION_QUERY_SQLITE_SNIPPET_CHARS = 240
  * raise this in their own configuration.
  */
 export const SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS = 5000
+/**
+ * Default largest number of attached-Session events one search request may
+ * observe. Observing one Session clones, fingerprints, and extracts documents
+ * from its whole log, so a request over a set of large attached logs pays that
+ * cost per Session: this deployment's two largest stored Sessions (102,044
+ * events) measured 8.6 CPU·s and 208 MB of index reads for one pass over both.
+ * The default admits one Session at this deployment's largest scale (about
+ * 70,000 events) with headroom and refuses a wider set with
+ * `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` before reading a log past the bound. A
+ * refused request keeps the observations it already made memoized, so repeating
+ * the search observes the remaining Sessions instead of starting over.
+ * Deployments whose attached logs justify a wider set raise this in their own
+ * configuration.
+ */
+export const SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS = 100_000
 
 // One transient source change gets a retry; repeated churn fails rather than monopolizing the queue.
 const STABLE_OBSERVATION_ATTEMPTS = 2
@@ -136,6 +152,17 @@ export interface Config extends SessionQueryConfig {
    * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS}.
    */
   maxRankedDocuments?: number
+  /**
+   * Largest number of attached-Session events one search request may observe.
+   * Reconciliation re-observes every attached Session whose log changed since
+   * the last pass, and observing one Session clones, fingerprints, and extracts
+   * documents from its whole log; a request over a set of large attached logs
+   * otherwise reads without limit. A request whose live observation would pass
+   * this bound fails with `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` before that
+   * read starts. Defaults to
+   * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS}.
+   */
+  maxLiveObservedEvents?: number
   /** Maximum concurrent persisted-log reads in one inherited batch read. Defaults to 4. */
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
@@ -151,6 +178,7 @@ interface ResolvedConfig {
   snippetChars: number
   readWindowMax: number
   maxRankedDocuments: number
+  maxLiveObservedEvents: number
   persistedReadConcurrency: number
   preparedSessionCacheSize: number
 }
@@ -253,6 +281,11 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     maxLimit: z.number().step(1).min(1).max(SQLITE_MAX_PAGE_LIMIT).default(SESSION_QUERY_SQLITE_MAX_LIMIT),
     snippetChars: z.number().step(1).min(1).default(SESSION_QUERY_SQLITE_SNIPPET_CHARS),
     readWindowMax: z.number().step(1).min(0).default(SESSION_QUERY_READ_WINDOW_MAX),
+    maxLiveObservedEvents: z.number()
+      .step(1)
+      .min(1)
+      .max(Number.MAX_SAFE_INTEGER)
+      .default(SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS),
     persistedReadConcurrency: z.number()
       .step(1)
       .min(1)
@@ -323,7 +356,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       await this._ensureReady(signal)
       assertNotAborted(signal)
       this._assertRankableBreadth(normalized.query)
-      const persistenceBinding = await this._reconcile(signal)
+      const persistenceBinding = await this._reconcile(signal, this._liveObservationBudget(exec))
       assertNotAborted(signal)
       const generation = String(this._globalGeneration)
       const fingerprint = requestFingerprint(normalized)
@@ -370,7 +403,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       await this._ensureReady(signal)
       assertNotAborted(signal)
       this._assertRankableBreadth(normalized.query)
-      const persistenceBinding = await this._reconcile(signal)
+      const persistenceBinding = await this._reconcile(signal, this._liveObservationBudget(exec))
       assertNotAborted(signal)
       const target = this._targetObservation(normalized.sessionId, persistenceBinding)
       const fingerprint = requestFingerprint(normalized)
@@ -476,6 +509,42 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     budget.spent = spent
   }
 
+  /**
+   * Resolve the live-observation allowance of one search call. A caller that
+   * drives pages through cursors passes one budget for the whole request; a
+   * single-call caller carries only the per-call bound.
+   * @param exec - the caller's exec context, when it keeps budgets.
+   * @returns the request's shared live-observation budget.
+   */
+  private _liveObservationBudget(
+    exec: SessionSearchExecContext | undefined,
+  ): SessionSearchLiveObservationBudget {
+    return exec?.liveObservationBudget ?? { spent: 0 }
+  }
+
+  /**
+   * Charge one live-Session observation against the request's shared allowance
+   * and refuse a charge past the configured bound, so one request cannot
+   * re-observe the attached logs without limit. The charge happens before the
+   * observation that would read the log, and a refused charge leaves the
+   * allowance untouched for a caller that retries a narrower request.
+   * @param budget - the request's shared budget, when the caller keeps one.
+   * @param events - the observed Session's log length, its observation's size.
+   */
+  private _chargeLiveObservation(
+    budget: SessionSearchLiveObservationBudget,
+    events: number,
+  ): void {
+    const spent = budget.spent + events
+    if (spent > this.config.maxLiveObservedEvents) {
+      throw new SessionQueryError(
+        `session search request would observe ${String(spent)} live-Session events, above its ${String(this.config.maxLiveObservedEvents)}-event budget; close attached Sessions, repeat the search, or raise maxLiveObservedEvents`,
+        'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED',
+      )
+    }
+    budget.spent = spent
+  }
+
   private async _close(): Promise<void> {
     this._closed = true
     await this._tail
@@ -537,7 +606,10 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     }
   }
 
-  private async _reconcile(signal: AbortSignal | undefined): Promise<PersistenceBinding> {
+  private async _reconcile(
+    signal: AbortSignal | undefined,
+    liveObservationBudget: SessionSearchLiveObservationBudget,
+  ): Promise<PersistenceBinding> {
     assertNotAborted(signal)
     const db = this._requireDb()
     const persistedRows = db.prepare(
@@ -548,7 +620,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     ).all() as unknown as IndexedLiveRow[]
     const persistedById = new Map(persistedRows.map(row => [row.id as SessionId, row]))
     const liveById = new Map(liveRows.map(row => [row.id as SessionId, row]))
-    const observation = await this._observeStable(persistedById, signal)
+    const observation = await this._observeStable(persistedById, signal, liveObservationBudget)
     assertNotAborted(signal)
     const persistentChanges = observation.persistenceBinding.service === undefined
       ? []
@@ -628,6 +700,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   private async _observeStable(
     indexed: ReadonlyMap<SessionId, IndexedPersistedRow>,
     signal: AbortSignal | undefined,
+    liveObservationBudget: SessionSearchLiveObservationBudget,
   ): Promise<Observation> {
     for (let attempt = 0; attempt < STABLE_OBSERVATION_ATTEMPTS; attempt += 1) {
       assertNotAborted(signal)
@@ -680,7 +753,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       }
       const live = new Map<SessionId, ObservedSession>()
       for (const session of this.ctx.sessions.list()) {
-        const observed = this._observeLiveCached(session)
+        const observed = this._observeLiveCached(session, liveObservationBudget)
         const durable = persisted.get(session.id)
         if (durable !== undefined) assertSessionHeadersCompatible(observed.header, durable.header)
         live.set(session.id, observed)
@@ -696,14 +769,18 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     )
   }
 
-  private _observeLiveCached(session: Session): ObservedSession {
-    // Fork patch (FORK_SURFACE.md): memo lookup, recompute, and eviction are owned by the fork memo.
-    return this._liveObservationMemo.observe(
-      session.id,
-      // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-      session.snapshotEvents(),
-      () => observeLive(session),
-    )
+  private _observeLiveCached(
+    session: Session,
+    budget: SessionSearchLiveObservationBudget,
+  ): ObservedSession {
+    // Fork patch (FORK_SURFACE.md): the fork memo owns the cheap change signal
+    // and the recompute, so an unchanged Session is reused without
+    // materializing its events; the charge covers only the observations that
+    // actually read a log, and it happens before that read starts.
+    return this._liveObservationMemo.observe(session, () => {
+      this._chargeLiveObservation(budget, session.seq)
+      return observeLive(session)
+    })
   }
 
   private _mainGeneration(): number {
@@ -1241,6 +1318,8 @@ function resolveConfig(config: Config): ResolvedConfig {
     readWindowMax: config.readWindowMax ?? SESSION_QUERY_READ_WINDOW_MAX,
     maxRankedDocuments: config.maxRankedDocuments
       ?? SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS,
+    maxLiveObservedEvents: config.maxLiveObservedEvents
+      ?? SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS,
     persistedReadConcurrency: config.persistedReadConcurrency
       ?? SESSION_QUERY_DEFAULT_PERSISTED_INSPECT_CONCURRENCY,
     preparedSessionCacheSize: config.preparedSessionCacheSize
@@ -1255,6 +1334,7 @@ function resolveConfig(config: Config): ResolvedConfig {
   assertPageLimit('maxLimit', resolved.maxLimit)
   assertPositiveInteger('snippetChars', resolved.snippetChars)
   assertPositiveInteger('maxRankedDocuments', resolved.maxRankedDocuments)
+  assertPositiveInteger('maxLiveObservedEvents', resolved.maxLiveObservedEvents)
   if (!Number.isInteger(resolved.readWindowMax) || resolved.readWindowMax < 0) {
     throw invalidConfig('readWindowMax must be a non-negative integer')
   }
