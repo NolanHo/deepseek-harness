@@ -73,7 +73,7 @@ const SAFE_SESSION_QUERY_FAILURES = {
   },
   SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED: {
     code: 'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED',
-    message: 'one search call already ranked its document budget; retry the search',
+    message: 'one search request already spent its corpus budget; retry the search',
   },
   SESSION_QUERY_SEARCH_DISABLED: {
     code: 'SESSION_QUERY_SEARCH_DISABLED',

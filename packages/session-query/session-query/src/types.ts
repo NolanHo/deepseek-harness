@@ -271,6 +271,24 @@ export interface SessionSearchRankedDocumentBudget {
   spent: number
 }
 
+/**
+ * Live-Session observation allowance shared by every call of one caller
+ * request.
+ *
+ * Reconciliation observes each attached Session that changed since the last
+ * pass; observing one materializes and fingerprints its whole log, so a
+ * request over a set of large attached logs would otherwise read without
+ * limit. A provider charges every observation against its own configured
+ * event bound and refuses a charge past it with
+ * `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED`. A caller that drives pages through
+ * cursors passes one budget for the whole sequence; a single-call caller may
+ * omit the budget and carries only the provider's per-call bound.
+ */
+export interface SessionSearchLiveObservationBudget {
+  /** Live-Session events this request has already observed. */
+  spent: number
+}
+
 /** Controls shared by cross-session and within-session search calls. */
 export interface SessionSearchExecContext {
   /** Abort caller waiting and interrupt provider work where supported. */
@@ -281,6 +299,13 @@ export interface SessionSearchExecContext {
    * `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` instead of ranking again.
    */
   rankedDocumentBudget?: SessionSearchRankedDocumentBudget
+  /**
+   * Budget shared by every call of one caller request. The provider owns the
+   * increments and the bound; a page sequence that exceeds it fails with
+   * `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` before observing a log past the
+   * bound.
+   */
+  liveObservationBudget?: SessionSearchLiveObservationBudget
 }
 
 /** Cross-session full-text search request. */

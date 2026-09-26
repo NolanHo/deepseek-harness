@@ -51,6 +51,8 @@ Choose it when you want full-text recall over prior sessions with ranking and pa
 | `maxLimit` | `100` | Largest accepted request page size |
 | `snippetChars` | `240` | Maximum snippet length in Unicode code points |
 | `readWindowMax` | `50` | Maximum `before`/`after` raw events for the inherited `readEvent()` |
+| `maxRankedDocuments` | `5000` | Largest matching-document set one ranking may read; a broader match set fails with `SESSION_QUERY_SEARCH_TOO_BROAD` |
+| `maxLiveObservedEvents` | `100000` | Largest number of attached-Session events one search request may observe; a wider set fails with `SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED` |
 | `persistedReadConcurrency` | `4` | Concurrent persisted-log reads for inherited batch reads |
 | `preparedSessionCacheSize` | `5` | Cold prepared-Session observations the inherited `observeSession` reader retains for reuse |
 

@@ -6,7 +6,7 @@ import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionSnapshot } from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import { SessionQueryError, type SessionListScope, type SessionSearchCursor, type SessionSearchRankedDocumentBudget } from '@deepseek-ai/dsh-session-query'
+import { SessionQueryError, type SessionListScope, type SessionSearchCursor, type SessionSearchLiveObservationBudget, type SessionSearchRankedDocumentBudget } from '@deepseek-ai/dsh-session-query'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { z } from 'zod'
 import {
@@ -189,6 +189,10 @@ export class ApiSessionList {
       // One request's pages share one ranked-document budget, so a continuation
       // cannot make the provider rank the same document set again.
       const rankedDocumentBudget: SessionSearchRankedDocumentBudget = { spent: 0 }
+      // Fork patch (FORK_SURFACE.md): one request's pages share one
+      // live-observation budget, so a continuation cannot make the provider
+      // observe the attached logs again.
+      const liveObservationBudget: SessionSearchLiveObservationBudget = { spent: 0 }
       let cursor: SessionSearchCursor | undefined
       let providerCalls = 0
       let pageLimit = SESSION_SEARCH_RESULT_LIMIT
@@ -210,7 +214,7 @@ export class ApiSessionList {
             ],
             limit: requestedLimit,
             ...(requestedCursor === undefined ? {} : { cursor: requestedCursor }),
-          }, { signal, rankedDocumentBudget })
+          }, { signal, rankedDocumentBudget, liveObservationBudget })
           signal.throwIfAborted()
         } catch (error: unknown) {
           signal.throwIfAborted()

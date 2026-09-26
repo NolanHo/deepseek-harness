@@ -394,6 +394,95 @@ describe('SQLite session search', () => {
       .resolves.toMatchObject({ items: [{ header: session.header, live: true, persisted: false }] })
   })
 
+  it('reuses an unchanged live Session observation and re-observes a changed one', async () => {
+    const ctx = await liveContext()
+    const session = ctx.sessions.create(SessionId('memo-live'), {
+      seed: messageEvents('needle in the inherited seed'),
+    })
+    await expect(ctx.sessionQuery.searchSessions({ query: 'needle' }))
+      .resolves.toMatchObject({ items: [{ header: session.header, live: true }] })
+
+    const snapshot = vi.spyOn(session, 'snapshotEvents')
+    await expect(ctx.sessionQuery.searchSessions({ query: 'needle' }))
+      .resolves.toMatchObject({ items: [{ header: session.header, live: true }] })
+    // The second request reconciles the same unchanged Session, so its memoized
+    // observation is reused and its log is never materialized again.
+    expect(snapshot).not.toHaveBeenCalled()
+
+    session.append(
+      'user/message',
+      createUserMessage({
+        content: [{ type: 'text', text: 'appended-needle' }], source: { kind: 'user' },
+      }),
+      { surfaceOp: 'append' },
+    )
+    await expect(ctx.sessionQuery.searchSessions({ query: 'appended-needle' }))
+      .resolves.toMatchObject({ items: [{ header: session.header, live: true }] })
+    // A changed Session is observed again, so its new event is searchable.
+    expect(snapshot).toHaveBeenCalled()
+  })
+
+  it('refuses a live observation set above the budget before materializing any log', async () => {
+    const ctx = await liveContext({ path: ':memory:', maxLiveObservedEvents: 1 })
+    const session = ctx.sessions.create(SessionId('over-budget-live'), {
+      seed: messageEvents('needle'),
+    })
+    expect(session.seq).toBeGreaterThan(1)
+    const snapshot = vi.spyOn(session, 'snapshotEvents')
+    const budget = { spent: 0 }
+
+    const refusal = await ctx.sessionQuery.searchSessions(
+      { query: 'needle' },
+      { liveObservationBudget: budget },
+    ).then(() => undefined, (error: unknown) => error)
+
+    expect(refusal).toMatchObject({ code: 'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED' })
+    expect(snapshot).not.toHaveBeenCalled()
+    // A refused charge leaves the shared allowance for a retry.
+    expect(budget.spent).toBe(0)
+  })
+
+  it('charges one live observation per request and reuses the memo across its calls', async () => {
+    const ctx = await liveContext()
+    const session = ctx.sessions.create(SessionId('budget-live'), {
+      seed: messageEvents('needle'),
+    })
+    const budget = { spent: 0 }
+
+    await expect(ctx.sessionQuery.searchSessions(
+      { query: 'needle' },
+      { liveObservationBudget: budget },
+    )).resolves.toMatchObject({ items: [{ header: session.header, live: true }] })
+    expect(budget.spent).toBe(session.seq)
+
+    await expect(ctx.sessionQuery.searchSessions(
+      { query: 'needle' },
+      { liveObservationBudget: budget },
+    )).resolves.toMatchObject({ items: [{ header: session.header, live: true }] })
+    // The unchanged Session is reused, so the request is charged once.
+    expect(budget.spent).toBe(session.seq)
+  })
+
+  it('refuses the over-budget pass and converges on the next request', async () => {
+    // Two two-event logs against a three-event bound: the first pass observes
+    // the first Session only and refuses the second before reading it.
+    const ctx = await liveContext({ path: ':memory:', maxLiveObservedEvents: 3 })
+    const first = ctx.sessions.create(SessionId('retry-first'), {
+      seed: messageEvents('needle first'),
+    })
+    const second = ctx.sessions.create(SessionId('retry-second'), {
+      seed: messageEvents('needle second'),
+    })
+
+    await expect(ctx.sessionQuery.searchSessions({ query: 'needle' }))
+      .rejects.toThrow(expectCode('SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED'))
+
+    // The retry is a new request with its own allowance: the memoized first
+    // Session is free, so the second one fits and the search completes.
+    const page = await ctx.sessionQuery.searchSessions({ query: 'needle' })
+    expect(page.items.map(hit => hit.header.id).sort()).toEqual([first.id, second.id].sort())
+  })
+
   it('excludes assistant reasoning while indexing visible answer text', async () => {
     const ctx = await liveContext()
     const session = ctx.sessions.create(SessionId('reasoning'))

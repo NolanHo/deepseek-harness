@@ -1,41 +1,53 @@
-// Fork-owned live-observation memo module (see FORK_SURFACE.md): the event
-// fingerprint that tells whether one attached session's observation changed.
+// Fork-owned live-observation memo module (see FORK_SURFACE.md): the change
+// signal that tells whether one attached session's observation can be reused.
 // Upstream's SqliteSessionQueryEngine delegates memo lookup, recompute, and
 // eviction to this one file, keeping its index.ts at a minimal injection
 // surface for future syncs.
 
-import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+
+/** One memoized observation and the Session state it was built from. */
+interface MemoEntry<TObservation> {
+  /** The Session instance observed; a replacement under the same id recomputes. */
+  session: Session
+  /** The Session's log length when the observation was built. */
+  seq: SessionLogOffset
+  observation: TObservation
+}
 
 /**
- * Live observations memoized per session: recomputation clones and fingerprints
- * every event (tens of millions of JSON bytes for large attached logs), so each
- * attached session would otherwise be recomputed on every search. Attached logs
- * mutate by append only (replacements and edits append too), so the event count
- * plus the tail seq/time identifies the observation content.
+ * Live observations memoized per attached Session, keyed by the Session's own
+ * log length and by the Session instance that produced the observation.
+ *
+ * The change signal must be cheap: materializing the log is the expensive half
+ * of an observation (clone, fingerprint, and document extraction over the whole
+ * log — tens of megabytes for a large attached Session), so the memo decides
+ * reuse before any event read. `session.seq` is an O(1) getter for the log
+ * length. Attached logs mutate by append only (replacements and edits append
+ * too), so an unchanged length means unchanged content; a Session object
+ * replaced under the same id (rewrite, restore) recomputes because the
+ * instance differs.
  */
 export class LiveObservationMemo<TObservation> {
-  private readonly memo = new Map<SessionId, { key: string; observation: TObservation }>()
+  private readonly memo = new Map<SessionId, MemoEntry<TObservation>>()
 
   /**
-   * Return the memoized observation while the session's event tail fingerprint
-   * (event count plus tail seq/time) is unchanged; otherwise recompute,
-   * memoize, and return the fresh observation.
-   * @param sessionId - the attached session being observed.
-   * @param events - the session's current events, in seq order.
-   * @param recompute - builds the observation when the fingerprint moved.
-   * @returns the cached observation for an unchanged fingerprint, else the recomputed one.
+   * Return the memoized observation while the Session's log length and instance
+   * are unchanged; otherwise recompute, memoize, and return the fresh
+   * observation. `recompute` is the only caller of the Session's event read, so
+   * an unchanged Session never materializes its log.
+   * @param session - the attached session being observed.
+   * @param recompute - builds the observation when the change signal moved.
+   * @returns the cached observation for an unchanged Session, else the recomputed one.
    */
-  observe(
-    sessionId: SessionId,
-    events: readonly SessionEvent[],
-    recompute: () => TObservation,
-  ): TObservation {
-    const tail = events.at(-1)
-    const key = `${events.length}:${tail?.seq ?? 'none'}:${tail?.time ?? 'none'}`
-    const cached = this.memo.get(sessionId)
-    if (cached !== undefined && cached.key === key) return cached.observation
+  observe(session: Session, recompute: () => TObservation): TObservation {
+    const seq = session.seq
+    const cached = this.memo.get(session.id)
+    if (cached !== undefined && cached.session === session && cached.seq === seq) {
+      return cached.observation
+    }
     const observation = recompute()
-    this.memo.set(sessionId, { key, observation })
+    this.memo.set(session.id, { session, seq, observation })
     return observation
   }
 
