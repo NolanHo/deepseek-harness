@@ -147,6 +147,23 @@ describe('web e2e: assistant IconActions wait for the turn to end', () => {
     expect(await runningProcess.count()).toBe(1)
     expect(await runningProcess.isDisabled()).toBe(true)
     expect(await runningProcess.getAttribute('aria-expanded')).toBe('true')
+    // The parked control is inert, so it paints the status as text — at rest
+    // and under the pointer — while keeping the box a press would have used.
+    const inertChrome = {
+      border: 'rgba(0, 0, 0, 0)', background: 'rgba(0, 0, 0, 0)', borderWidth: '1px', padding: '10px',
+    }
+    const readChrome = () => runningProcess.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        border: style.borderTopColor,
+        background: style.backgroundColor,
+        borderWidth: style.borderTopWidth,
+        padding: style.paddingLeft,
+      }
+    })
+    expect(await readChrome()).toEqual(inertChrome)
+    await runningProcess.hover()
+    expect(await readChrome()).toEqual(inertChrome)
     await expect.poll(
       () => page.getByRole('status').filter({ hasText: 'Deep diving...' }).isVisible(),
       { timeout: 10_000 },

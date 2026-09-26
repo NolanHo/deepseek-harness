@@ -1,7 +1,10 @@
-/* Fork patch (FORK_SURFACE.md): the disclosure renders as a rounded pill that
-   hugs its label, with a hover surface and the chevron set off from it;
-   upstream renders a full-width divider row with a trailing chevron. The
-   class names are upstream's, so a wholesale upstream stylesheet adoption
+/* Fork patch (FORK_SURFACE.md): a disclosure that can act renders as a rounded
+   pill that hugs its label, with a hover surface and the chevron set off from
+   it; an inert one drops the border and background and reads as status text,
+   because a Turn that stays open (running, stopped, or failed), a Turn with
+   nothing to fold, and a fold-disabled presentation all leave the control
+   disabled. Upstream renders a full-width divider row with a trailing chevron.
+   The class names are upstream's, so a wholesale upstream stylesheet adoption
    would silently restore the divider. */
 .root {
   box-sizing: border-box;
@@ -22,20 +25,21 @@
 }
 
 .root:disabled {
+  /* An inert control keeps the box — same padding, same hairline width — so the
+     switch between states moves no text; only the paint goes. */
+  border-color: transparent;
+  background: none;
   cursor: default;
 }
 
 .root:not(:disabled):hover {
+  border-color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-bg-layer-3);
   color: var(--dsw-alias-label-primary);
 }
 
 .root:not([data-open]) {
   margin-bottom: 8px;
-}
-
-.root:hover {
-  border-color: var(--dsw-alias-label-tertiary);
-  background: var(--dsw-alias-bg-layer-3);
 }
 
 .chevron {
