@@ -367,8 +367,14 @@
     - id: ui-model-selection
       name: '@deepseek-ai/dsh-client-ui-model-selection'
 
+    # Fork patch (FORK_SURFACE.md): the base bundle disables the
+    # dsh-permission-presets host row with the sandbox rows (it rejects a
+    # non-confining executor at load), so this client half has no
+    # /api/permissionPresets/catalog route to read and every boot logs a 404 for
+    # it. Re-enable this row together with that host row, never on its own.
     - id: ui-permission
       name: '@deepseek-ai/dsh-client-ui-permission-presets'
+      disabled: true
 
     # The agent-preset row in General settings: the default preset for
     # sessions created later. Absent a roster it renders nothing.
