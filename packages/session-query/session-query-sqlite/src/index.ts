@@ -84,6 +84,15 @@ export const SESSION_QUERY_SQLITE_DEFAULT_LIMIT = 20
 export const SESSION_QUERY_SQLITE_MAX_LIMIT = 100
 /** Default maximum snippet length in Unicode code points. */
 export const SESSION_QUERY_SQLITE_SNIPPET_CHARS = 240
+/**
+ * Default largest matching-document set one search ranks. Sized so one call's
+ * document-text reads stay in the tens of megabytes: a production index holds
+ * roughly 4.4 KB of searchable text per document, and the deployment that
+ * motivated this bound ranked 318,335 documents (about 1.4 GB of reads) in a
+ * single call. Deployments whose corpora or query shapes justify a wider set
+ * raise this in their own configuration.
+ */
+export const SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS = 5000
 
 // One transient source change gets a retry; repeated churn fails rather than monopolizing the queue.
 const STABLE_OBSERVATION_ATTEMPTS = 2
@@ -115,6 +124,17 @@ export interface Config extends SessionQueryConfig {
   maxLimit?: number
   /** Maximum snippet length in Unicode code points. Defaults to 240. */
   snippetChars?: number
+  /**
+   * Largest matching-document set one search may rank. Ranking reads each
+   * match's stored text (`highlight` and its occurrence count), so an
+   * unbounded match set makes one call read the whole index: a common term in
+   * a production index reads gigabytes and pins the event loop for minutes.
+   * A query whose match set exceeds this bound fails with
+   * `SESSION_QUERY_SEARCH_TOO_BROAD` after a postings-only probe of this many
+   * matches plus one, before any document text is read. Defaults to
+   * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS}.
+   */
+  maxRankedDocuments?: number
   /** Maximum concurrent persisted-log reads in one inherited batch read. Defaults to 4. */
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
@@ -129,6 +149,7 @@ interface ResolvedConfig {
   maxLimit: number
   snippetChars: number
   readWindowMax: number
+  maxRankedDocuments: number
   persistedReadConcurrency: number
   preparedSessionCacheSize: number
 }
@@ -280,6 +301,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const signal = exec?.signal
     return this._serialized(signal, async () => {
       await this._ensureReady(signal)
+      assertNotAborted(signal)
+      this._assertRankableBreadth(normalized.query)
       const persistenceBinding = await this._reconcile(signal)
       assertNotAborted(signal)
       const generation = String(this._globalGeneration)
@@ -308,6 +331,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const signal = exec?.signal
     return this._serialized(signal, async () => {
       await this._ensureReady(signal)
+      assertNotAborted(signal)
+      this._assertRankableBreadth(normalized.query)
       const persistenceBinding = await this._reconcile(signal)
       assertNotAborted(signal)
       const target = this._targetObservation(normalized.sessionId, persistenceBinding)
@@ -346,6 +371,33 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     throw new SessionQueryError(
       'session search is disabled: this deployment configures the session-query index with openAt "never"',
       'SESSION_QUERY_SEARCH_DISABLED',
+    )
+  }
+
+  /**
+   * Refuse a search whose matching-document set exceeds the ranked-document
+   * budget. The probe streams at most `maxRankedDocuments + 1` matches from the
+   * full-text index — rowids only, no document text — so a query that would
+   * make the ranking query read every match's stored text fails before that
+   * read starts. The probe counts matches across the whole index, including
+   * live Sessions: a query this broad is refused even when one Session holds
+   * fewer of them.
+   * @param query - the normalized caller query.
+   */
+  private _assertRankableBreadth(query: string): void {
+    const bound = this.config.maxRankedDocuments
+    const row = this._requireDb().prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM (
+          SELECT rowid FROM persisted_docs WHERE persisted_docs MATCH ? LIMIT ?
+        )) + (SELECT COUNT(*) FROM (
+          SELECT rowid FROM temp.live_docs WHERE live_docs MATCH ? LIMIT ?
+        )) AS matched
+    `).get(quoteFtsData(query), bound + 1, quoteFtsData(query), bound + 1) as { matched: number }
+    if (row.matched <= bound) return
+    throw new SessionQueryError(
+      `session search query matches more than ${String(bound)} documents; narrow the query`,
+      'SESSION_QUERY_SEARCH_TOO_BROAD',
     )
   }
 
@@ -1044,6 +1096,8 @@ function resolveConfig(config: Config): ResolvedConfig {
     maxLimit: config.maxLimit ?? SESSION_QUERY_SQLITE_MAX_LIMIT,
     snippetChars: config.snippetChars ?? SESSION_QUERY_SQLITE_SNIPPET_CHARS,
     readWindowMax: config.readWindowMax ?? SESSION_QUERY_READ_WINDOW_MAX,
+    maxRankedDocuments: config.maxRankedDocuments
+      ?? SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS,
     persistedReadConcurrency: config.persistedReadConcurrency
       ?? SESSION_QUERY_DEFAULT_PERSISTED_INSPECT_CONCURRENCY,
     preparedSessionCacheSize: config.preparedSessionCacheSize
@@ -1057,6 +1111,7 @@ function resolveConfig(config: Config): ResolvedConfig {
   assertPageLimit('defaultLimit', resolved.defaultLimit)
   assertPageLimit('maxLimit', resolved.maxLimit)
   assertPositiveInteger('snippetChars', resolved.snippetChars)
+  assertPositiveInteger('maxRankedDocuments', resolved.maxRankedDocuments)
   if (!Number.isInteger(resolved.readWindowMax) || resolved.readWindowMax < 0) {
     throw invalidConfig('readWindowMax must be a non-negative integer')
   }

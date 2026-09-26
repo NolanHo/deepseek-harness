@@ -75,6 +75,10 @@ const SAFE_SESSION_QUERY_FAILURES = {
     code: 'SESSION_QUERY_SEARCH_DISABLED',
     message: 'session search is disabled in this deployment',
   },
+  SESSION_QUERY_SEARCH_TOO_BROAD: {
+    code: 'SESSION_QUERY_SEARCH_TOO_BROAD',
+    message: 'session query matches too many events to rank; narrow the query',
+  },
   SESSION_QUERY_SESSION_NOT_FOUND: {
     code: 'SESSION_QUERY_SESSION_NOT_FOUND',
     message: 'session was not found',

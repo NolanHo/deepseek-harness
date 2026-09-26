@@ -240,6 +240,26 @@ describe('session.search', () => {
     await ctx.fiber.dispose()
   })
 
+  it('maps an over-broad provider refusal onto a caller-visible bad request', async () => {
+    const ctx = await baseContext()
+    ctx.sessions.create(sid('visible'), { meta: header('visible') })
+    installSearchQuery(ctx, () => Promise.reject(new SessionQueryError(
+      'session search query matches more than 5000 documents; narrow the query',
+      'SESSION_QUERY_SEARCH_TOO_BROAD',
+    )))
+    const remote = createSessionTestRemote(ctx, defaults)
+
+    const response = await remote.search(request('the'), new AbortController().signal)
+
+    // The refusal is the caller's to narrow and stays out of gateway/internal,
+    // so a bounded index refusal never reads as a server fault.
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: 'gateway/bad-request' },
+    })
+    await ctx.fiber.dispose()
+  })
+
   it('returns an empty page without invoking the index when no session is visible', async () => {
     const ctx = await baseContext()
     const searchSessions = vi.fn()

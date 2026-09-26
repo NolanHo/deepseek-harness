@@ -263,6 +263,11 @@ export class ApiSessionList {
       if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_ABORTED') {
         throw new RemoteError('gateway/cancelled', 'session search was aborted', {})
       }
+      // A refused query is the caller's to narrow; it is not a server fault, and
+      // the refusal is what keeps one search from reading the whole index.
+      if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SEARCH_TOO_BROAD') {
+        throw new RemoteError('gateway/bad-request', error.message, {})
+      }
       throw new RemoteError('gateway/internal', `session search failed: ${String(error)}`, {})
     }
   }
