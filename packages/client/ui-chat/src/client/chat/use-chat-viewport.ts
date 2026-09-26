@@ -42,7 +42,7 @@ interface PagingPosition {
   readonly group: { readonly body: HTMLElement; readonly content: HTMLElement; readonly top: number } | null
 }
 
-const READING_INTENTS = ['wheel', 'touchstart', 'pointerdown', 'keydown', 'beforematch'] as const
+const READING_INTENTS = ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown', 'beforematch'] as const
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '])
 
 /** Owns one Chat scrollport's DOM operations, event listeners, and size observer. */

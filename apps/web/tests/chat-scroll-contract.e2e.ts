@@ -1300,4 +1300,126 @@ describe('web e2e: long Chat scroll contract', () => {
       assertClean(world)
     })
   }, 180_000)
+
+  it.skipIf(MODE === 'record')('walks resident history on consecutive upward gestures from the tail', async () => {
+    await withScrollWorld({
+      failureShot: 'web-e2e-chat-scroll-continuous',
+      seeds: [{ fixture: HISTORY_FIXTURE, id: HISTORY_SESSION_ID }],
+    }, async (world) => {
+      const page = world.page
+      await openSeed(page, HISTORY_FIXTURE, HISTORY_FIXTURE.markers.assistant(HISTORY_FIXTURE.turns))
+      await expectBottom(page)
+
+      // The traversal needs resident rows above the mounted window: with the whole
+      // resident order inside it, the window head is already the resident head and
+      // only the explicit control can page older history in. The fork pages eight
+      // messages at a time and a click that only reveals the resident rows asks the
+      // server for nothing, so the world clicks until six pages have landed.
+      const pages = world.historyPages
+      for (let gesture = 0; gesture < 40 && pages() < 6; gesture += 1) {
+        if (await historyHeadReached(page)) break
+        await loadEarlierStep(page, pages)
+      }
+      expect(pages()).toBeGreaterThanOrEqual(6)
+      expect(await mountedKeyRows(page)).toBeGreaterThanOrEqual(MOUNTED_ROW_LIMIT)
+
+      // Hand the live tail back through the view's own control, so the reader owns
+      // the tail and the mounted window is the tail slice they start on.
+      const backToBottom = page.getByRole('button', { name: 'Back to bottom', exact: true })
+      if (await backToBottom.count() > 0) await backToBottom.first().click()
+      await expectBottom(page)
+
+      // Record every scrollport position the app itself writes: the reader's own
+      // gestures are native scrolling, so a write is the view re-calculating where
+      // the reader stands.
+      await page.evaluate(() => {
+        const scroller = document.querySelector('[data-conversation-scroll]')
+        if (!(scroller instanceof HTMLElement)) throw new Error('conversation scrollport is missing')
+        const ledger = window as unknown as { __scrollWrites: number[] }
+        ledger.__scrollWrites = []
+        const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')
+        if (descriptor?.set === undefined || descriptor.get === undefined) {
+          throw new Error('Element.prototype.scrollTop has no accessor to observe')
+        }
+        Object.defineProperty(Element.prototype, 'scrollTop', {
+          configurable: true,
+          get(this: Element): number { return descriptor.get!.call(this) as number },
+          set(this: Element, value: number): void {
+            if (this === scroller) ledger.__scrollWrites.push(value)
+            descriptor.set!.call(this, value)
+          },
+        })
+      })
+
+      interface TraversalStep {
+        readonly headKey: string | null
+        readonly headTurn: number | null
+        readonly rows: number
+        readonly top: number
+        readonly writes: readonly number[]
+      }
+      const step = (): Promise<TraversalStep> => page.evaluate(() => {
+        const scroller = document.querySelector('[data-conversation-scroll]')
+        if (!(scroller instanceof HTMLElement)) throw new Error('conversation scrollport is missing')
+        const rows = [...scroller.querySelectorAll<HTMLElement>('[data-chat-flow-key]')]
+        const head = rows[0]
+        const turn = head?.dataset.chatTurn
+        const ledger = window as unknown as { __scrollWrites: number[] }
+        return {
+          headKey: head?.dataset.chatAnchorKey ?? null,
+          headTurn: turn === undefined ? null : Number(turn),
+          rows: rows.length - scroller.querySelectorAll('[data-chat-group-key]').length,
+          top: scroller.scrollTop,
+          writes: [...ledger.__scrollWrites],
+        }
+      })
+
+      const box = await page.locator('[data-conversation-scroll]').boundingBox()
+      if (box === null) throw new Error('conversation scrollport has no layout box')
+      await page.mouse.move(box.x + box.width / 2, box.y + Math.min(140, box.height / 3))
+      const trace: TraversalStep[] = [await step()]
+      for (let gesture = 0; gesture < 56; gesture += 1) {
+        await page.mouse.wheel(0, -220)
+        // Continuous reader input: the gap stays well inside the reading policy's
+        // 500 ms sample interval, so no settled sample can gate the traversal.
+        await page.waitForTimeout(120)
+        trace.push(await step())
+      }
+      const evidence = JSON.stringify(trace)
+
+      // The reader's own upward gestures never move the position back down.
+      const increases = trace.slice(1)
+        .filter((entry, index) => entry.top > (trace[index] as TraversalStep).top + 0.5)
+      expect(increases, `scrollTop rose during an upward gesture: ${evidence}`).toEqual([])
+
+      // The oldest mounted row walks toward the transcript head: its Turn number
+      // steps strictly downward over the traversal.
+      const turns = trace.map(entry => entry.headTurn)
+        .filter((turn): turn is number => turn !== null && Number.isSafeInteger(turn))
+      const walked = turns.slice(1).filter((turn, index) => turn < (turns[index] as number)).length
+      expect(walked, `the mounted head never walked back: ${evidence}`).toBeGreaterThanOrEqual(3)
+      expect((turns[0] as number) - (turns.at(-1) as number),
+        `the mounted head did not reach older Turns: ${evidence}`).toBeGreaterThanOrEqual(10)
+
+      // The mount stays bounded however far the reader walks.
+      expect(Math.max(...trace.map(entry => entry.rows))).toBeLessThanOrEqual(MOUNTED_ROW_CEILING)
+
+      // Every write the view made during the traversal moved the reader up or left
+      // them where they were: a write that sets an offset above the one the reader
+      // held is the re-calculated position that pushed them back down the flow.
+      const downWrites = trace.slice(1).flatMap((entry, index) => {
+        const previous = trace[index] as TraversalStep
+        return entry.writes.slice(previous.writes.length)
+          .filter(value => value > previous.top + 0.5)
+      })
+      expect(downWrites, `the view re-positioned the scrollport downward: ${evidence}`).toEqual([])
+
+      // A pause mid-traversal settles the reading policy without moving the reader:
+      // the row at their reading line holds the geometry it had while they scrolled.
+      const readingLine = await visibleFlowAnchor(page)
+      await page.waitForTimeout(900)
+      await expectSameFlowTop(page, readingLine)
+      assertClean(world)
+    })
+  }, 300_000)
 })

@@ -251,9 +251,11 @@ export function ChatView({
     submissionId: visibleSubmissions.at(-1)?.requestId ?? null,
     loadedTurns: turnNavigationItems,
     mountSignature: mounted.signature,
-    // Fork patch (FORK_SURFACE.md): a settled sample at the window head reveals one step.
+    // Fork patch (FORK_SURFACE.md): a reader gesture the mounted head stopped
+    // reveals the next step, and that step re-reads the reading position.
     willRevealAtHead: mounted.willRevealAtHead,
     revealAtHead: mounted.revealAtHead,
+    gestureSteps: mounted.gestureSteps,
   })
   /**
    * Rail target whose jump waits for its row. `awaited` is set when the window

@@ -4323,7 +4323,7 @@ describe('ChatView mounted window', () => {
     expect(h.chatScroll.read()).toBeNull()
   })
 
-  it('keeps a reader one step above the tail window where they are', () => {
+  it('keeps its adopted window across a mid-scroll sample and returns to the tail at the floor', () => {
     installReaderGeometry()
     const rows = Array.from({ length: 60 }, (_, index) => user(101 + index, `row ${index}`))
     const h = makeHarness({ nodes: rows })
@@ -4342,15 +4342,22 @@ describe('ChatView mounted window', () => {
     // the newest resident rows stay unmounted, and the reader still owns a row.
     expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).toBeNull()
     expect(h.chatScroll.read()?.anchorKey).toBe('fixture:user:135')
-    // The reader scrolls one row down: their settled sample saves that row, which
-    // mounts the window on the tail slice while the reader keeps their place.
+    // Their settled sample mid-scroll saves the row they reached. The window stays
+    // where it was adopted: re-deriving it around the sample would slide the slice
+    // and mount rows above the reading line, which the view then compensates by
+    // writing the scrollport back down under the reader's gesture.
     readerScroll(scroller, 1_400)
     expect(h.chatScroll.read()?.anchorKey).toBe('fixture:user:136')
-    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).toBeNull()
     expect(scroller.scrollTop).toBe(1_400)
+    // The reader's own scroll reaches the mounted floor: the reading policy takes
+    // the live tail back, which is the only arrival that hands the window over.
+    readerScroll(scroller, 2_000)
+    expect(h.chatScroll.read()).toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:160"]')).not.toBeNull()
   })
 
-  it('reveals one window step from a settled sample at the head and holds the reader', () => {
+  it('steps one resident row for a gesture the mounted head stopped and re-reads the reader', () => {
     installReaderGeometry()
     const rows = Array.from({ length: 260 }, (_, index) => user(101 + index, `row ${index}`))
     const h = makeHarness({ nodes: rows })
@@ -4370,24 +4377,25 @@ describe('ChatView mounted window', () => {
     fireEvent.click(view.getByText('加载更早'))
     expect(view.container.querySelector('[data-chat-flow-key="fixture:user:197"]')).not.toBeNull()
     expect(view.container.querySelector('[data-chat-flow-key="fixture:user:171"]')).toBeNull()
-    // The reader wheels up to the head row: their settled sample anchors on it.
-    readerScroll(scroller, 30)
-    // One reveal step mounts the 25 rows above the head, and the window change
-    // re-asserts the sampled row through the reflow hold: the scrollport absorbs
-    // the rows that appeared above it, the reading line stays where it was, and
-    // the old head row is no longer at the port top.
+    // The reader scrolls down into the mounted rows and then wheels back up until
+    // the mounted head stops them at offset zero.
+    readerScroll(scroller, 200)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:197"]')).not.toBeNull()
+    readerScroll(scroller, 0)
+    // One reveal step mounts the rows above the head and the reading position
+    // re-reads onto the row that step put at the reading line. The step writes no
+    // scrollport offset, so the reader's own gesture keeps its travel instead of
+    // being compensated back down the flow.
     expect(view.container.querySelector('[data-chat-flow-key="fixture:user:172"]')).not.toBeNull()
     expect(view.container.querySelector('[data-chat-flow-key="fixture:user:171"]')).toBeNull()
     expect(view.container.querySelector('[data-chat-flow-key="fixture:user:197"]')).not.toBeNull()
-    // The sampled row keeps the reading line it held at -30 px.
-    expect(scroller.scrollTop).toBe(1_030)
-    expect((view.container.querySelector('[data-chat-flow-key="fixture:user:197"]') as HTMLElement)
-      .getBoundingClientRect().top).toBe(-30)
-    // A later settled sample with no reader movement cannot step again.
-    fireEvent.scroll(scroller)
-    fireEvent(scroller, new Event('scrollend'))
-    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:172"]')).not.toBeNull()
-    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:147"]')).toBeNull()
+    expect(scroller.scrollTop).toBe(0)
+    // A gesture the mounted rows still serve is not a step: the offset it produced
+    // is its own, and no row mounts above the head.
+    readerScroll(scroller, 30)
+    expect(scroller.scrollTop).toBe(30)
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:171"]')).toBeNull()
+    expect(view.container.querySelector('[data-chat-flow-key="fixture:user:197"]')).not.toBeNull()
   })
 
   it('offers no earlier-rows control to a reader who owns the live tail', () => {

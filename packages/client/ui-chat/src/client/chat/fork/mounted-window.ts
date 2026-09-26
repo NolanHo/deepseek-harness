@@ -11,6 +11,13 @@ export const MOUNTED_ROW_LIMIT = 50
 /** Resident rows one reveal gesture adds above the window. */
 export const REVEAL_ROW_STEP = 25
 
+/**
+ * Scrollport offset at or below which the reader's own gesture has reached the
+ * mounted head. The reader keeps gesturing while the scrollport is clamped at its
+ * floor, so the offset — not a settled reading sample — is what says the mounted
+ * window is the obstacle. One pixel absorbs a sub-pixel clamped offset.
+ */
+const REVEAL_AT_HEAD_PX = 1
 
 /**
  * Window identity. `tail` follows the newest resident rows; `frozen` pins the
@@ -103,18 +110,25 @@ export interface MountedWindowState extends MountedWindowPlan {
    */
   readonly willRevealAtHead: (scroll: HeadScroll, historyBusy: boolean) => boolean
   /**
-   * Reveal one step for a reader scroll that came within one viewport of the
-   * mounted head, so a wheel or touch gesture alone keeps older resident rows
-   * coming instead of stopping at the window edge. Called from the viewport's
-   * scroll event: a programmatic write, a jump, a page request, the live tail,
-   * a reader who owns no row, and a Turn-aligned landing that cannot keep the
-   * row it steps for never reveal, and the interval throttle bounds how fast one
-   * fling can grow the window.
+   * Reveal one Turn-aligned step for a reader gesture the mounted head has
+   * stopped, so a wheel, touch, or key gesture alone keeps older resident rows
+   * coming instead of stopping at the window edge. The step writes no scrollport
+   * position: the rows it mounts enter above the reading line, so the reader's own
+   * gesture keeps its full travel and the scrollport never moves back down. Called
+   * from the viewport's scroll and gesture events: a programmatic write, a jump, a
+   * page request, and a scroll the mounted rows still serve never reveal.
    * @param scroll - reader scroll geometry and attribution from the viewport.
    * @param historyBusy - whether history work (a retained paging anchor or a page request) owns the layout.
    * @returns whether the head moved; false leaves the window where it was.
    */
   readonly revealAtHead: (scroll: HeadScroll, historyBusy: boolean) => boolean
+  /**
+   * Count of head steps the reader's own gesture drove. The view re-reads the
+   * reading position after one instead of holding a row across a layout change:
+   * the step moved the flow above the reading line, and compensating it would
+   * write the scrollport back down under the reader's gesture.
+   */
+  readonly gestureSteps: number
   /** Release the frozen window back to the live tail. */
   readonly release: () => void
 }
@@ -549,30 +563,25 @@ export function planMountedWindow(
  */
 export function useMountedWindow(input: MountedWindowInput): MountedWindowState {
   const { entries, order, controls, followingTail, anchorKey, running } = input
-  // The reader's own window; null while they own none, where the window in
-  // effect follows the reading policy instead. A request that resolves to the
-  // live tail is still the reader's own: a jump to a row only the tail mounts
-  // must move the window in effect, and the reader-row adoption below would
-  // otherwise keep the head where it is.
+  // The reader's own window; null until the window below is adopted. A request
+  // that resolves to the live tail is still the reader's own: a jump to a row
+  // only the tail mounts must move the window in effect.
   const [requested, setRequested] = useState<MountWindow | null>(null)
+  const [gestureSteps, setGestureSteps] = useState(0)
   const orderRef = useRef(order)
   const controlsRef = useRef(controls)
   const readerRow = useMemo(() => orderIndexOfAnchor(order, anchorKey), [order, anchorKey])
   const readerRowRef = useRef(readerRow)
 
   // Opening a session off the floor: the saved reader row sits outside the tail
-  // window, so the window in effect is derived from that row while the reader
-  // owns no window of their own. Deriving it instead of storing it keeps the
-  // adoption idempotent, where a render-phase setState would be discarded and
-  // replayed by a repeated render. The derived head snaps to the Turn start that
-  // owns its row, so the opening boundary never exposes a Turn from its middle;
-  // a Turn start farther above the reader's row than the window holds keeps that
-  // row instead, because the session must open where the reader left it. An
-  // aligned head is frozen even when its window still reaches the newest rows:
-  // the tail window follows the newest resident rows and can only start at
-  // `tailHead`, which is no Turn boundary.
-  const window = useMemo((): MountWindow => {
-    if (requested !== null) return requested
+  // window, so the window in effect is derived from that row. The derived head
+  // snaps to the Turn start that owns its row, so the opening boundary never
+  // exposes a Turn from its middle; a Turn start farther above the reader's row
+  // than the window holds keeps that row instead, because the session must open
+  // where the reader left it. An aligned head is frozen even when its window
+  // still reaches the newest rows: the tail window follows the newest resident
+  // rows and can only start at `tailHead`, which is no Turn boundary.
+  const derived = useMemo((): MountWindow => {
     if (followingTail || readerRow < 0) return { kind: 'tail' }
     const raw = headKeepingRow(readerRow - REVEAL_ROW_STEP, readerRow)
     const aligned = turnAlignedHead(controls, raw)
@@ -580,7 +589,8 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     // it mounts; otherwise the reader's row wins and the window keeps the start
     // the clamp gave it (`revealHead` refuses the same trade-off for a step).
     return headKeepingRow(aligned, readerRow) === aligned ? frozenAt(order, aligned) : windowAt(order, raw)
-  }, [controls, followingTail, order, readerRow, requested])
+  }, [controls, followingTail, order, readerRow])
+  const window = requested ?? derived
   const windowRef = useRef<MountWindow>(window)
   useLayoutEffect(() => {
     orderRef.current = order
@@ -588,6 +598,15 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     windowRef.current = window
     readerRowRef.current = readerRow
   })
+
+  // Adopt the derived window once, then let it move only by explicit steps, jumps,
+  // and the tail release. Re-deriving it on every render would slide the slice
+  // with the reader's saved row, and each slide mounts rows above the reading line
+  // that a reflow then compensates by writing the scrollport back down.
+  useLayoutEffect(() => {
+    if (followingTail || requested !== null || readerRow < 0) return
+    setRequested(derived)
+  }, [derived, followingTail, readerRow, requested])
 
   const hold = useCallback((key: string | null): boolean => {
     const current = orderRef.current
@@ -624,40 +643,39 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
   const reveal = useCallback((): boolean => stepUp(readerRow), [readerRow, stepUp])
 
   const willRevealAtHead = useCallback((scroll: HeadScroll, historyBusy: boolean): boolean => {
-    if (historyBusy || !scroll.movedByReader || followingTail) return false
-    // A reader who owns no row owns the tail: the newest rows must stay mounted,
-    // so only the explicit gesture pages resident history in.
-    if (readerRowRef.current < 0) return false
-    // One viewport of headroom is what keeps the next gesture continuous; past it
-    // the window is not what the reader is approaching, so nothing moves.
-    if (scroll.top > scroll.height || scroll.height <= 0) return false
-    // A head at the first resident row has nothing left to reveal, and this is the
-    // check that keeps the view from settling a sample for a scroll it cannot step.
-    // The step keeps the reader's own row while the window holds it and the head
-    // row otherwise, and it refuses when the Turn-aligned landing cannot keep that
-    // row: those scrolls are served by paging older resident history in. No timer
-    // paces the steps: a reveal makes the scrollport absorb the rows it added,
-    // which moves the reader more than a viewport from the new head, so the next
-    // step waits for the next viewport of reader travel.
+    if (historyBusy || !scroll.movedByReader) return false
+    // The mounted head is the obstacle only once the reader's gesture has run out
+    // of scrollport: while rows above remain they consume the gesture themselves,
+    // and stepping early would advance the reader twice for one gesture.
+    if (scroll.height <= 0 || scroll.top > REVEAL_AT_HEAD_PX) return false
+    // A head at the first resident row has nothing left above it, and this is the
+    // check that keeps the view from settling a sample for a scroll it cannot step;
+    // the "Load earlier" control pages the resident history in instead. A reader row
+    // the window holds is the row the step must keep, so a step that cannot move
+    // under it refuses rather than unmount the row the reader is reading; a reader
+    // the window does not hold leaves the head row to keep instead.
     const current = orderRef.current
     const head = headIndexOf(windowRef.current, current)
     const saved = readerRowRef.current
     const holdsSaved = saved >= head && saved < head + MOUNTED_ROW_LIMIT
-    return (holdsSaved && revealHead(controlsRef.current, head, saved) !== null)
-      || revealHead(controlsRef.current, head, head) !== null
-  }, [followingTail])
+    return holdsSaved
+      ? revealHead(controlsRef.current, head, saved) !== null
+      : revealHead(controlsRef.current, head, head) !== null
+  }, [])
 
   const revealAtHead = useCallback((scroll: HeadScroll, historyBusy: boolean): boolean => {
     if (!willRevealAtHead(scroll, historyBusy)) return false
     const current = orderRef.current
     const head = headIndexOf(windowRef.current, current)
-    // The step keeps the head row the reader has scrolled to, and the saved row
-    // while the window still holds it and the step can move with it. A saved row
-    // the step cannot move under is the row the reading policy is about to replace
-    // with this scroll's sample, so the head row is what the step must keep then.
+    // The step keeps the head row the reader has reached, and the saved row while
+    // the window still holds it and the step can move with it. A saved row the step
+    // cannot move under is the row the reading policy is about to replace with this
+    // sample, so the head row is what the step must keep then.
     const saved = readerRowRef.current
-    if (saved >= head && saved < head + MOUNTED_ROW_LIMIT && stepUp(saved)) return true
-    return stepUp(head)
+    const holdsSaved = saved >= head && saved < head + MOUNTED_ROW_LIMIT
+    if (!(holdsSaved ? stepUp(saved) : stepUp(head))) return false
+    setGestureSteps(steps => steps + 1)
+    return true
   }, [stepUp, willRevealAtHead])
 
   const release = useCallback((): void => { setRequested(null) }, [])
@@ -693,6 +711,7 @@ export function useMountedWindow(input: MountedWindowInput): MountedWindowState 
     reveal,
     willRevealAtHead,
     revealAtHead,
+    gestureSteps,
     release,
   }
 }
