@@ -288,21 +288,24 @@ describe('session.search', () => {
     }
     const budgets: unknown[] = []
     const liveBudgets: unknown[] = []
+    const reconciliationBudgets: unknown[] = []
     const searchSessions = vi.fn()
       .mockImplementationOnce((
         _providerRequest: SessionSearchRequest,
-        exec?: { rankedDocumentBudget?: unknown; liveObservationBudget?: unknown },
+        exec?: { rankedDocumentBudget?: unknown; liveObservationBudget?: unknown; reconciliationBudget?: unknown },
       ) => {
         budgets.push(exec?.rankedDocumentBudget)
         liveBudgets.push(exec?.liveObservationBudget)
+        reconciliationBudgets.push(exec?.reconciliationBudget)
         return Promise.resolve({ items: items.slice(0, 20), nextCursor: 'page-2' })
       })
       .mockImplementationOnce((
         _providerRequest: SessionSearchRequest,
-        exec?: { rankedDocumentBudget?: unknown; liveObservationBudget?: unknown },
+        exec?: { rankedDocumentBudget?: unknown; liveObservationBudget?: unknown; reconciliationBudget?: unknown },
       ) => {
         budgets.push(exec?.rankedDocumentBudget)
         liveBudgets.push(exec?.liveObservationBudget)
+        reconciliationBudgets.push(exec?.reconciliationBudget)
         return Promise.resolve({ items: items.slice(20) })
       })
     installSearchQuery(ctx, searchSessions)
@@ -322,6 +325,12 @@ describe('session.search', () => {
     expect(liveBudgets).toHaveLength(2)
     expect(liveBudgets[0]).toEqual({ spent: 0 })
     expect(liveBudgets[1]).toBe(liveBudgets[0])
+    // One reconciliation budget per request too: the provider memoizes the
+    // corpus observation against it, so the second page neither re-lists nor
+    // re-reads the stored logs the first page paid for.
+    expect(reconciliationBudgets).toHaveLength(2)
+    expect(reconciliationBudgets[0]).toEqual({ spent: 0 })
+    expect(reconciliationBudgets[1]).toBe(reconciliationBudgets[0])
     await ctx.fiber.dispose()
   })
 
@@ -893,6 +902,7 @@ describe('session.search', () => {
         signal: controller.signal,
         rankedDocumentBudget: { spent: 0 },
         liveObservationBudget: { spent: 0 },
+        reconciliationBudget: { spent: 0 },
       })
     }
   })

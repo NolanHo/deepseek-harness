@@ -38,6 +38,7 @@ import type {
   SessionSearchPage,
   SessionSearchRankedDocumentBudget,
   SessionSearchRequest,
+  SessionSearchReconciliationBudget,
 } from '@deepseek-ai/dsh-session-query'
 import {
   type JournalMode,
@@ -110,6 +111,25 @@ export const SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS = 5000
  * configuration.
  */
 export const SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS = 100_000
+/**
+ * Default largest number of persisted-Session events one search request may
+ * cold-read. Reconciliation reads the whole stored log of every persisted
+ * Session the index does not hold at its current revision and re-indexes its
+ * documents; a re-indexed Session used to cost a full scan of the full-text
+ * table per Session, so one request over a pending set read without limit
+ * (measured: 10.3 GB in 34.7 s, then 29.9 GB in 37.3 s, for the first two
+ * requests against a copy of this deployment's 2,010,364-event store) and a
+ * page sequence paid it once per page. With the per-Session delete proportional
+ * to its own documents, one request measured about 7 KB of process reads per
+ * cold-read event on this deployment (692 MB for the 100,000 events it
+ * admitted), so this default bounds one request at a few tens of MB plus the
+ * single log that crosses the bound. A request that reaches the bound stops
+ * cold-reading and commits what it read, so the remaining Sessions are indexed
+ * by later requests instead of refusing every search during a catch-up;
+ * deployments that prefer a faster catch-up raise this in their own
+ * configuration.
+ */
+export const SESSION_QUERY_SQLITE_DEFAULT_MAX_PERSISTED_OBSERVED_EVENTS = 5_000
 
 // One transient source change gets a retry; repeated churn fails rather than monopolizing the queue.
 const STABLE_OBSERVATION_ATTEMPTS = 2
@@ -163,6 +183,21 @@ export interface Config extends SessionQueryConfig {
    * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS}.
    */
   maxLiveObservedEvents?: number
+  /**
+   * Largest number of persisted-Session events one search request may cold-read.
+   * Reconciliation reads the whole stored log of every persisted Session whose
+   * revision the index does not hold, then re-indexes that Session's documents;
+   * the pass retries when the corpus changed under it and the controller's page
+   * sequence would otherwise repeat it per page. A request that reaches this
+   * bound stops cold-reading, commits the Sessions it already read, and
+   * completes with the corpus it has; the remaining Sessions are read by later
+   * requests, so a catch-up converges instead of failing every search. The bound
+   * is charged across every attempt of the request, so a retry cannot read past
+   * it, and a request reads at most this many events plus the single log that
+   * crosses the bound. Defaults to
+   * {@link SESSION_QUERY_SQLITE_DEFAULT_MAX_PERSISTED_OBSERVED_EVENTS}.
+   */
+  maxPersistedObservedEvents?: number
   /** Maximum concurrent persisted-log reads in one inherited batch read. Defaults to 4. */
   persistedReadConcurrency?: number
   /** Maximum cold prepared-Session observations the inherited reader retains for reuse. Defaults to 5. */
@@ -179,6 +214,7 @@ interface ResolvedConfig {
   readWindowMax: number
   maxRankedDocuments: number
   maxLiveObservedEvents: number
+  maxPersistedObservedEvents: number
   persistedReadConcurrency: number
   preparedSessionCacheSize: number
 }
@@ -205,6 +241,17 @@ interface Observation {
   persistenceBinding: PersistenceBinding
   persisted: Map<SessionId, ObservedPersistedSession>
   live: Map<SessionId, ObservedSession>
+  /** Persisted Sessions left unread because the request spent its cold-read bound. */
+  truncated: number
+}
+
+/** One completed reconciliation memoized for the request that paid for it. */
+interface Reconciliation {
+  binding: PersistenceBinding
+  /** Index generation the reconciled corpus produced for this request. */
+  globalGeneration: string
+  /** Within-session generation pinned by the first event page, when the request reads one Session. */
+  sessionGeneration?: string
 }
 
 interface IndexedPersistedRow {
@@ -286,6 +333,11 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       .min(1)
       .max(Number.MAX_SAFE_INTEGER)
       .default(SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS),
+    maxPersistedObservedEvents: z.number()
+      .step(1)
+      .min(1)
+      .max(Number.MAX_SAFE_INTEGER)
+      .default(SESSION_QUERY_SQLITE_DEFAULT_MAX_PERSISTED_OBSERVED_EVENTS),
     persistedReadConcurrency: z.number()
       .step(1)
       .min(1)
@@ -312,6 +364,10 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   // Fork patch (FORK_SURFACE.md): the memoized live observations live in the fork-owned
   // live-observation-memo module; the engine keeps only this owned instance.
   private readonly _liveObservationMemo = new LiveObservationMemo<ObservedSession>()
+  // Fork patch (FORK_SURFACE.md): one reconciliation per caller request, keyed
+  // by the caller's reconciliation budget so a page sequence cannot re-observe
+  // the corpus per page. A failed reconciliation is removed, not memoized.
+  private readonly _reconciliations = new WeakMap<SessionSearchReconciliationBudget, Promise<Reconciliation>>()
   private _rankedSessions: RankedSearch | undefined
   private _rankedEvents: RankedSearch | undefined
   private _tail: Promise<void> = Promise.resolve()
@@ -356,9 +412,10 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       await this._ensureReady(signal)
       assertNotAborted(signal)
       this._assertRankableBreadth(normalized.query)
-      const persistenceBinding = await this._reconcile(signal, this._liveObservationBudget(exec))
+      const reconciled = await this._reconcileOnce(exec, signal)
       assertNotAborted(signal)
-      const generation = String(this._globalGeneration)
+      const persistenceBinding = reconciled.binding
+      const generation = reconciled.globalGeneration
       const fingerprint = requestFingerprint(normalized)
       const offset = normalized.cursor === undefined
         ? 0
@@ -403,11 +460,16 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       await this._ensureReady(signal)
       assertNotAborted(signal)
       this._assertRankableBreadth(normalized.query)
-      const persistenceBinding = await this._reconcile(signal, this._liveObservationBudget(exec))
+      const reconciled = await this._reconcileOnce(exec, signal)
       assertNotAborted(signal)
+      const persistenceBinding = reconciled.binding
       const target = this._targetObservation(normalized.sessionId, persistenceBinding)
       const fingerprint = requestFingerprint(normalized)
-      const generation = target.generation
+      // One request observes one corpus: pin the first page's target generation
+      // so a concurrent request's rewrite of this Session cannot invalidate the
+      // pages already served.
+      reconciled.sessionGeneration ??= target.generation
+      const generation = reconciled.sessionGeneration
       const offset = normalized.cursor === undefined
         ? 0
         : decodeCursor(normalized.cursor, this._instance, 'events', fingerprint, generation)
@@ -523,6 +585,19 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   }
 
   /**
+   * Resolve the persisted cold-read allowance of one search call. A caller that
+   * drives pages through cursors passes one budget for the whole request; a
+   * single-call caller carries only the per-call bound.
+   * @param exec - the caller's exec context, when it keeps budgets.
+   * @returns the request's shared persisted-observation budget.
+   */
+  private _persistedObservationBudget(
+    exec: SessionSearchExecContext | undefined,
+  ): SessionSearchReconciliationBudget {
+    return exec?.reconciliationBudget ?? { spent: 0 }
+  }
+
+  /**
    * Charge one live-Session observation against the request's shared allowance
    * and refuse a charge past the configured bound, so one request cannot
    * re-observe the attached logs without limit. The charge happens before the
@@ -606,9 +681,36 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     }
   }
 
+  private async _reconcileOnce(
+    exec: SessionSearchExecContext | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<Reconciliation> {
+    const budget = exec?.reconciliationBudget
+    const settled = budget === undefined ? undefined : this._reconciliations.get(budget)
+    if (settled !== undefined) return await settled
+    const pending = this._reconcile(
+      signal,
+      this._liveObservationBudget(exec),
+      this._persistedObservationBudget(exec),
+    ).then(binding => ({
+      binding,
+      globalGeneration: String(this._globalGeneration),
+    }))
+    if (budget !== undefined) {
+      this._reconciliations.set(budget, pending)
+      // A failed reconciliation is the request's failure to report, not a
+      // result later pages should inherit.
+      pending.catch(() => {
+        if (this._reconciliations.get(budget) === pending) this._reconciliations.delete(budget)
+      })
+    }
+    return await pending
+  }
+
   private async _reconcile(
     signal: AbortSignal | undefined,
     liveObservationBudget: SessionSearchLiveObservationBudget,
+    persistedObservationBudget: SessionSearchReconciliationBudget,
   ): Promise<PersistenceBinding> {
     assertNotAborted(signal)
     const db = this._requireDb()
@@ -620,8 +722,19 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     ).all() as unknown as IndexedLiveRow[]
     const persistedById = new Map(persistedRows.map(row => [row.id as SessionId, row]))
     const liveById = new Map(liveRows.map(row => [row.id as SessionId, row]))
-    const observation = await this._observeStable(persistedById, signal, liveObservationBudget)
+    const observation = await this._observeStable(
+      persistedById,
+      signal,
+      liveObservationBudget,
+      persistedObservationBudget,
+    )
     assertNotAborted(signal)
+    if (observation.truncated > 0) {
+      this.ctx.logger.warn(
+        `session-query: one search request spent its ${String(this.config.maxPersistedObservedEvents)}-event persisted-observation budget; `
+        + `${String(observation.truncated)} changed or unindexed Sessions stay unindexed until the next request`,
+      )
+    }
     const persistentChanges = observation.persistenceBinding.service === undefined
       ? []
       : [...observation.persisted.values()].filter(entry => entry.loaded !== undefined)
@@ -701,13 +814,23 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     indexed: ReadonlyMap<SessionId, IndexedPersistedRow>,
     signal: AbortSignal | undefined,
     liveObservationBudget: SessionSearchLiveObservationBudget,
+    persistedObservationBudget: SessionSearchReconciliationBudget,
   ): Promise<Observation> {
+    // Cold reads already paid for by this request, keyed by the revision and
+    // persistence binding they were read at: the stability retry reuses them
+    // instead of decoding the same logs again, which is also what makes progress
+    // survive a retry. A replacement persistence binding makes its opaque
+    // revision tokens incomparable, so it never reuses across bindings.
+    const read = new Map<SessionId, { identity: symbol; revision: SessionPersistenceRevision; loaded: ObservedSession }>()
+    const bound = this.config.maxPersistedObservedEvents
+    let truncated = 0
     for (let attempt = 0; attempt < STABLE_OBSERVATION_ATTEMPTS; attempt += 1) {
       assertNotAborted(signal)
       const persistenceBinding = this._persistenceBinding
       const persistence = persistenceBinding.service
       const initiallyLive = new Set(this.ctx.sessions.list().map(session => session.id))
       let persisted = new Map<SessionId, ObservedPersistedSession>()
+      truncated = 0
       if (persistence !== undefined) {
         try {
           const canReuseIndexed = this._lastPersistenceIdentity === undefined
@@ -717,25 +840,54 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
           assertNotAborted(signal)
           persisted = materializePersistenceSnapshots(before)
           for (const entry of persisted.values()) {
-            if (canReuseIndexed && indexed.get(entry.header.id)?.revision === entry.revision) continue
+            const retained = read.get(entry.header.id)
+            if (retained !== undefined
+              && retained.identity === persistenceBinding.identity
+              && retained.revision === entry.revision) entry.loaded = retained.loaded
+          }
+          // Newest first: a truncated pass indexes the Sessions a reader is
+          // most likely to search for before the older backlog.
+          const candidates = [...persisted.values()]
+            .filter((entry) => {
+              if (entry.loaded !== undefined) return false
+              return !(canReuseIndexed && indexed.get(entry.header.id)?.revision === entry.revision)
+            })
+            .sort((left, right) => right.header.createdAt - left.header.createdAt)
+          for (const entry of candidates) {
             // Skip work already shadowed by a live owner. The cold read is
             // non-mutating (interrupted turns are balanced in memory only), so
             // an owner attaching after this check cannot cause side effects;
             // the live-membership retry below makes the returned observation
             // live-preferred.
             if (initiallyLive.has(entry.header.id) || this.ctx.sessions.get(entry.header.id) !== undefined) continue
+            // The bound is charged before the read starts, so a request reads at
+            // most the configured events plus the one log that crosses it, and
+            // the remainder is left to the next request instead of being read
+            // now (a refusal would leave a catch-up with no way to progress).
+            if (persistedObservationBudget.spent >= bound) {
+              truncated += 1
+              continue
+            }
             assertNotAborted(signal)
             const loaded = await readColdSessionLog(persistence, entry.header.id, signal)
             assertNotAborted(signal)
             assertSessionHeadersCompatible(entry.header, loaded.header)
             entry.loaded = observeSession(loaded.header, loaded.inheritedEventCount, loaded.events)
+            read.set(entry.header.id, {
+              identity: persistenceBinding.identity,
+              revision: entry.revision,
+              loaded: entry.loaded,
+            })
+            persistedObservationBudget.spent += loaded.events.length
           }
           assertNotAborted(signal)
-          const afterSnapshots = await persistence.list(listOptions)
-          assertNotAborted(signal)
-          const after = materializePersistenceSnapshots(afterSnapshots)
-          if (!samePersistenceSnapshots(persisted, after)) continue
-          if (this._persistenceBinding !== persistenceBinding) continue
+          if (truncated === 0) {
+            const afterSnapshots = await persistence.list(listOptions)
+            assertNotAborted(signal)
+            const after = materializePersistenceSnapshots(afterSnapshots)
+            if (!samePersistenceSnapshots(persisted, after)) continue
+            if (this._persistenceBinding !== persistenceBinding) continue
+          }
         } catch (error: unknown) {
           if (isAbort(error) || signal?.aborted) {
             throw new SessionQueryError('session-search aborted', 'SESSION_QUERY_ABORTED', {
@@ -760,8 +912,11 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       }
       // Fork patch (FORK_SURFACE.md): the fork memo bounds itself to the attached sessions.
       this._liveObservationMemo.evictDetached(live)
-      if (!sameSessionIds(initiallyLive, live)) continue
-      return { persistenceBinding, persisted, live }
+      // A truncated pass has no budget left to retry with, so it returns what it
+      // read instead of failing: the committed entries are the progress the next
+      // request resumes from.
+      if (truncated === 0 && !sameSessionIds(initiallyLive, live)) continue
+      return { persistenceBinding, persisted, live, truncated }
     }
     throw new SessionQueryError(
       'session-search persistence observation did not stabilize after one retry',
@@ -793,12 +948,70 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   private _deleteSession(source: 'persisted' | 'live', id: SessionId): void {
     const db = this._requireDb()
     if (source === 'persisted') {
-      db.prepare('DELETE FROM persisted_docs WHERE session_id = ?').run(id)
+      // A Session indexed before the range table existed has no recorded range
+      // and pays one full scan; a Session that was never indexed has no
+      // `persisted_sessions` row and skips the delete entirely.
+      const wasIndexed = db.prepare('SELECT 1 AS indexed FROM persisted_sessions WHERE id = ?').get(id) !== undefined
+      this._deleteSessionDocuments('persisted_docs', 'persisted_doc_ranges', id, wasIndexed)
       db.prepare('DELETE FROM persisted_sessions WHERE id = ?').run(id)
     } else {
-      db.prepare('DELETE FROM temp.live_docs WHERE session_id = ?').run(id)
+      this._deleteSessionDocuments('temp.live_docs', 'temp.live_doc_ranges', id, false)
       db.prepare('DELETE FROM temp.live_sessions WHERE id = ?').run(id)
     }
+  }
+
+  /**
+   * Remove one Session's indexed documents through the rowid range recorded at
+   * insert time. `DELETE FROM <docs> WHERE session_id = ?` is a full scan of
+   * the full-text table — this deployment's derived index measured 213-374 MB
+   * of reads to delete one Session's 3,440 documents, and a range constraint
+   * scans too — while a rowid equality is a docid lookup (measured 18.8 MB and
+   * 101 ms for the same Session). The re-index of one stored log therefore
+   * costs that log's own size instead of the whole index, which is what makes a
+   * per-request read bound meaningful.
+   * @param docs - the full-text table whose rows are removed.
+   * @param ranges - the rowid-range table for `docs`.
+   * @param id - the Session whose documents are removed.
+   * @param legacyFallback - whether an absent range may mean pre-range documents, which one scan must remove.
+   */
+  private _deleteSessionDocuments(
+    docs: 'persisted_docs' | 'temp.live_docs',
+    ranges: 'persisted_doc_ranges' | 'temp.live_doc_ranges',
+    id: SessionId,
+    legacyFallback: boolean,
+  ): void {
+    const db = this._requireDb()
+    const range = db.prepare(
+      `SELECT first_rowid, last_rowid FROM ${ranges} WHERE session_id = ?`,
+    ).get(id) as { first_rowid: number; last_rowid: number } | undefined
+    if (range === undefined) {
+      if (legacyFallback) db.prepare('DELETE FROM persisted_docs WHERE session_id = ?').run(id)
+      return
+    }
+    const drop = db.prepare(`DELETE FROM ${docs} WHERE rowid = ?`)
+    for (let rowid = range.first_rowid; rowid <= range.last_rowid; rowid += 1) drop.run(rowid)
+    db.prepare(`DELETE FROM ${ranges} WHERE session_id = ?`).run(id)
+  }
+
+  /**
+   * Record the rowid range one Session's documents occupy. Rows inserted in one
+   * synchronous pass are contiguous, so the range is exactly that Session's
+   * documents; an empty document set records the empty range, so the next
+   * delete can tell it apart from pre-range documents.
+   * @param ranges - the rowid-range table for the written full-text table.
+   * @param id - the Session whose documents were written.
+   * @param first - the first inserted document rowid, absent for no documents.
+   * @param last - the last inserted document rowid, absent for no documents.
+   */
+  private _recordDocumentRange(
+    ranges: 'persisted_doc_ranges' | 'temp.live_doc_ranges',
+    id: SessionId,
+    first: number | undefined,
+    last: number | undefined,
+  ): void {
+    this._requireDb().prepare(
+      `INSERT INTO ${ranges} (session_id, first_rowid, last_rowid) VALUES (?, ?, ?)`,
+    ).run(id, first ?? 0, last ?? -1)
   }
 
   private _replacePersistedSession(
@@ -821,9 +1034,11 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       INSERT INTO persisted_docs (text, session_id, seq, type, time, surface, codepoint_length)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `)
+    let first: number | undefined
+    let last: number | undefined
     for (const document of entry.documents) {
       const text = sanitizeFtsText(document.text)
-      insert.run(
+      const written = insert.run(
         text,
         document.sessionId,
         document.seq,
@@ -832,7 +1047,10 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         document.surface,
         Array.from(text).length,
       )
+      first ??= Number(written.lastInsertRowid)
+      last = Number(written.lastInsertRowid)
     }
+    this._recordDocumentRange('persisted_doc_ranges', entry.header.id, first, last)
   }
 
   private _replaceLiveSession(entry: ObservedSession, generation: number, persisted: boolean): void {
@@ -852,9 +1070,11 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       INSERT INTO temp.live_docs (text, session_id, seq, type, time, surface, codepoint_length)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `)
+    let first: number | undefined
+    let last: number | undefined
     for (const document of entry.documents) {
       const text = sanitizeFtsText(document.text)
-      insert.run(
+      const written = insert.run(
         text,
         document.sessionId,
         document.seq,
@@ -863,7 +1083,10 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         document.surface,
         Array.from(text).length,
       )
+      first ??= Number(written.lastInsertRowid)
+      last = Number(written.lastInsertRowid)
     }
+    this._recordDocumentRange('temp.live_doc_ranges', entry.header.id, first, last)
   }
 
   private _querySessions(
@@ -1320,6 +1543,8 @@ function resolveConfig(config: Config): ResolvedConfig {
       ?? SESSION_QUERY_SQLITE_DEFAULT_MAX_RANKED_DOCUMENTS,
     maxLiveObservedEvents: config.maxLiveObservedEvents
       ?? SESSION_QUERY_SQLITE_DEFAULT_MAX_LIVE_OBSERVED_EVENTS,
+    maxPersistedObservedEvents: config.maxPersistedObservedEvents
+      ?? SESSION_QUERY_SQLITE_DEFAULT_MAX_PERSISTED_OBSERVED_EVENTS,
     persistedReadConcurrency: config.persistedReadConcurrency
       ?? SESSION_QUERY_DEFAULT_PERSISTED_INSPECT_CONCURRENCY,
     preparedSessionCacheSize: config.preparedSessionCacheSize
@@ -1335,6 +1560,7 @@ function resolveConfig(config: Config): ResolvedConfig {
   assertPositiveInteger('snippetChars', resolved.snippetChars)
   assertPositiveInteger('maxRankedDocuments', resolved.maxRankedDocuments)
   assertPositiveInteger('maxLiveObservedEvents', resolved.maxLiveObservedEvents)
+  assertPositiveInteger('maxPersistedObservedEvents', resolved.maxPersistedObservedEvents)
   if (!Number.isInteger(resolved.readWindowMax) || resolved.readWindowMax < 0) {
     throw invalidConfig('readWindowMax must be a non-negative integer')
   }

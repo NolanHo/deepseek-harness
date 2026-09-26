@@ -33,6 +33,8 @@ import {
   SessionSearchCursor,
   type SessionAvailability,
   type SessionQueryErrorCode,
+  type SessionSearchLiveObservationBudget,
+  type SessionSearchReconciliationBudget,
   type SessionSearchRequest,
 } from '@deepseek-ai/dsh-session-query'
 
@@ -1047,8 +1049,259 @@ describe('SQLite session search', () => {
     }
     expect(budget.spent).toBe(sessionCount * documentsPerSession)
   })
+
+  it('serves every page of one request from one reconciliation', async () => {
+    const path = await temporaryPath('request-reconcile.db')
+    const sessionCount = 40
+    // 40 Sessions with one matching message each: the first page holds 20 and
+    // continues, so the walk below calls the provider twice.
+    TestPersistence.reset(Array.from({ length: sessionCount }, (_, index) => ({
+      meta: header(`reconcile-${index}`, index + 1),
+      events: messageEvents(`needle ${index}`),
+    })))
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(TestPersistence)
+    await ctx.plugin(SqliteSessionQueryEngine, { path })
+    await ctx.sessionQuery.searchSessions({ query: 'unrelated', limit: 20 })
+    const changed = SessionId('reconcile-0')
+    const listCalls = vi.spyOn(TestPersistence.prototype, 'list')
+    const readsBefore = TestPersistence.reads.get(changed) ?? 0
+    const reconciliation = { spent: 0 }
+    const first = await ctx.sessionQuery.searchSessions(
+      { query: 'needle', limit: 20 },
+      { reconciliationBudget: reconciliation },
+    )
+    expect(first.items).toHaveLength(20)
+    expect(first.nextCursor).toBeDefined()
+    // An external writer advances one indexed Session between the pages, which
+    // is the shape a live append produces on a deployment's store.
+    TestPersistence.revisions.set(changed, ++TestPersistence.nextRevision)
+    const before = readRchar()
+    const second = await ctx.sessionQuery.searchSessions({
+      query: 'needle',
+      limit: 20,
+      cursor: first.nextCursor as SessionSearchCursor,
+    }, { reconciliationBudget: reconciliation })
+    const after = readRchar()
+
+    // Every page of the request observes the corpus the first page reconciled:
+    // the second page neither re-lists nor re-reads the changed Session, and the
+    // continuation the first page issued stays valid across the change.
+    expect(second.items).toHaveLength(20)
+    expect(second.nextCursor).toBeUndefined()
+    // The request's two pages paid exactly one pair of snapshot lists between
+    // them, and neither re-read the Session that changed after the first page:
+    // the second page serves the corpus the first page reconciled, and the
+    // change is picked up by the next request.
+    expect(listCalls.mock.calls.length).toBe(2)
+    expect((TestPersistence.reads.get(changed) ?? 0) - readsBefore).toBe(0)
+    if (before !== undefined && after !== undefined) {
+      expect.soft(after - before).toBeLessThan(1024 * 1024)
+    }
+  })
 })
 
+describe('persisted cold-read budget', () => {
+  it('bounds one request\'s cold persisted reads and resumes the remainder on the next request', { timeout: 30_000 }, async () => {
+    const persistenceRoot = await temporaryPath('cold-sessions')
+    const searchPath = await temporaryPath('cold-index.db')
+    const sessionCount = 8
+    const eventsPerSession = 300
+    const bound = 600
+    const documentText = `needle ${'x'.repeat(180)}`
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(JsonlSessionPersistence, { root: persistenceRoot, compression: 'none' })
+    for (let index = 0; index < sessionCount; index += 1) {
+      const writer = await ctx.sessionPersistence.create(header(`cold-${index}`, index + 1, { cwd: '/cold' }))
+      await writer.append(breadthEvents(documentText, eventsPerSession))
+      await writer.close()
+    }
+    await ctx.plugin(SqliteSessionQueryEngine, { path: searchPath, maxPersistedObservedEvents: bound })
+    const indexed = (): number => {
+      const db = new DatabaseSync(searchPath, { readOnly: true })
+      try {
+        return (db.prepare('SELECT COUNT(*) AS count FROM persisted_sessions').get() as { count: number }).count
+      } finally {
+        db.close()
+      }
+    }
+
+    const walk = readRchar()
+    // The first request admits two logs (bound / eventsPerSession) and leaves
+    // the other six to later requests instead of reading the whole corpus.
+    const first = await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 20 })
+    const read = (readRchar() ?? 0) - (walk ?? 0)
+
+    expect(first.items).toHaveLength(2)
+    expect(indexed()).toBe(2)
+    // Eight logs of 300 events (~0.5 MiB of stored text) cost megabytes of
+    // file reads when one request cold-reads the whole corpus; the bounded
+    // request reads two logs.
+    if (walk !== undefined) {
+      expect.soft(read).toBeLessThan(512 * 1024)
+    }
+    // A refused-then-repeated request converges: each request indexes the next
+    // slice of the pending set until the corpus is complete.
+    await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 20 })
+    expect(indexed()).toBe(4)
+    await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 20 })
+    await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 20 })
+    expect(indexed()).toBe(sessionCount)
+    await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 20 })
+    expect(indexed()).toBe(sessionCount)
+  })
+
+  it('re-indexes one changed Session without reading the rest of the index', { timeout: 30_000 }, async () => {
+    // Deleting a Session's old documents with `WHERE session_id = ?` scans the
+    // whole full-text table (the column is UNINDEXED): this corpus' index is a
+    // few MB, so a per-session rebuild that scans it reads that whole few MB
+    // where the recorded rowid range reads only the Session's own documents.
+    const persistenceRoot = await temporaryPath('range-delete-sessions')
+    const searchPath = await temporaryPath('range-delete-index.db')
+    const sessionCount = 32
+    const eventsPerSession = 200
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(JsonlSessionPersistence, { root: persistenceRoot, compression: 'none' })
+    for (let index = 0; index < sessionCount; index += 1) {
+      const writer = await ctx.sessionPersistence.create(header(`range-${index}`, index + 1, { cwd: '/range' }))
+      await writer.append(breadthEvents(`needle ${'z'.repeat(1_200)}`, eventsPerSession))
+      await writer.close()
+    }
+    // The whole corpus must be indexed before the measurement, so this engine's
+    // persisted-read bound is not the subject here.
+    await ctx.plugin(SqliteSessionQueryEngine, { path: searchPath, maxPersistedObservedEvents: 1_000_000 })
+    await ctx.sessionQuery.searchSessions({ query: 'unrelated', limit: 20 })
+
+    // One external writer advances one indexed Session after the corpus is
+    // indexed, so the next search rebuilds exactly that Session's documents.
+    const changed = SessionId('range-0')
+    const writer = await ctx.sessionPersistence.open(changed, 'write')
+    await writer.append(breadthEvents('needle appended', 1).map(event => ({
+      ...event,
+      seq: SessionSeq(eventsPerSession),
+      time: eventsPerSession + 1,
+    })))
+    await writer.close()
+
+    const before = readRchar()
+    // A query with no matches keeps the ranking out of the measured window, so
+    // the reads are the rebuild the changed revision triggered.
+    await ctx.sessionQuery.searchSessions({ query: 'zzzznomatch', limit: 20 })
+    const after = readRchar()
+
+    if (before !== undefined && after !== undefined) {
+      expect.soft(after - before).toBeLessThan(2 * 1024 * 1024)
+    }
+  })
+
+  it('re-indexes a Session whose rowid range predates the range table', { timeout: 30_000 }, async () => {
+    const persistenceRoot = await temporaryPath('legacy-range-sessions')
+    const searchPath = await temporaryPath('legacy-range-index.db')
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(JsonlSessionPersistence, { root: persistenceRoot, compression: 'none' })
+    for (let index = 0; index < 4; index += 1) {
+      const writer = await ctx.sessionPersistence.create(header(`legacy-${index}`, index + 1, { cwd: '/legacy' }))
+      await writer.append(breadthEvents(`needle ${'w'.repeat(200)}`, 50))
+      await writer.close()
+    }
+    await ctx.plugin(SqliteSessionQueryEngine, { path: searchPath, maxPersistedObservedEvents: 1_000_000 })
+    await ctx.sessionQuery.searchSessions({ query: 'unrelated', limit: 20 })
+
+    // An index built before the range table existed holds documents whose range
+    // was never recorded: the next re-index must still remove them.
+    const indexDb = new DatabaseSync(searchPath)
+    indexDb.exec('DELETE FROM persisted_doc_ranges')
+    indexDb.close()
+    const changed = SessionId('legacy-0')
+    const writer = await ctx.sessionPersistence.open(changed, 'write')
+    await writer.append(breadthEvents('needle appended', 1).map(event => ({
+      ...event,
+      seq: SessionSeq(50),
+      time: 51,
+    })))
+    await writer.close()
+
+    await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 20 })
+
+    const verify = new DatabaseSync(searchPath, { readOnly: true })
+    const documents = verify.prepare('SELECT COUNT(*) AS n FROM persisted_docs WHERE session_id = ?').get(changed)
+    const ranges = verify.prepare('SELECT COUNT(*) AS n FROM persisted_doc_ranges WHERE session_id = ?').get(changed)
+    verify.close()
+    // No stale duplicate survived the fallback scan, and the Session is back on
+    // the recorded-range path.
+    expect(documents).toEqual({ n: 51 })
+    expect(ranges).toEqual({ n: 1 })
+  })
+
+  it('returns the Sessions it read instead of retrying when an appender keeps the corpus moving', { timeout: 30_000 }, async () => {
+    const persistenceRoot = await temporaryPath('appending-sessions')
+    const searchPath = await temporaryPath('appending-index.db')
+    const sessionCount = 4
+    const eventsPerSession = 200
+    const bound = 300
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(JsonlSessionPersistence, { root: persistenceRoot, compression: 'none' })
+    for (let index = 0; index < sessionCount; index += 1) {
+      const writer = await ctx.sessionPersistence.create(header(`appending-${index}`, index + 1, { cwd: '/appending' }))
+      await writer.append(breadthEvents(`needle ${'y'.repeat(180)}`, eventsPerSession))
+      await writer.close()
+    }
+    await ctx.plugin(SqliteSessionQueryEngine, { path: searchPath, maxPersistedObservedEvents: bound })
+    // One external writer appends between every pair of snapshot lists, so the
+    // attempt's before/after populations never match.
+    let appends = 0
+    const originalList = ctx.sessionPersistence.list.bind(ctx.sessionPersistence)
+    vi.spyOn(ctx.sessionPersistence, 'list').mockImplementation(async (options) => {
+      const snapshots = await originalList(options)
+      appends += 1
+      const writer = await ctx.sessionPersistence.open(SessionId('appending-0'), 'write')
+      const [appended] = breadthEvents(`needle appended ${appends}`, 1)
+      await writer.append([{
+        ...appended as SessionEvent,
+        seq: SessionSeq(eventsPerSession + appends - 1),
+        time: eventsPerSession + appends,
+      }])
+      await writer.close()
+      return snapshots
+    })
+    const coldReads: number[] = []
+    const originalOpen = ctx.sessionPersistence.open.bind(ctx.sessionPersistence)
+    vi.spyOn(ctx.sessionPersistence, 'open').mockImplementation(async (id, access, options) => {
+      const handle = await originalOpen(id, access, options)
+      if (access !== 'write') {
+        const originalRead = handle.read.bind(handle)
+        handle.read = async (...args) => {
+          const result = await originalRead(...args)
+          coldReads.push(result.events.length)
+          return result
+        }
+      }
+      return handle
+    })
+
+    const before = readRchar()
+    const page = await ctx.sessionQuery.searchSessions({ query: 'needle', limit: 20 })
+    const after = readRchar()
+
+    // The request spent its bound and returns the corpus it read; it neither
+    // fails the retry nor decodes the same logs twice.
+    expect(page.items.length).toBeLessThanOrEqual(2)
+    expect(Math.max(...coldReads)).toBeGreaterThanOrEqual(eventsPerSession)
+    if (before !== undefined && after !== undefined) {
+      expect.soft(after - before).toBeLessThan(1024 * 1024)
+    }
+  })
+})
 describe('SQLite reconciliation and source lifecycle', () => {
   it('owns queued request and filter values before waiting for the serializer', async () => {
     const durable = header('owned')
@@ -1199,14 +1452,18 @@ describe('SQLite reconciliation and source lifecycle', () => {
     const ctx = await liveContext({ path: ':memory:', defaultLimit: 1, maxLimit: 2 })
     const persistence = await ctx.plugin(TestPersistence)
     const internals = ctx.sessionQuery as unknown as {
-      _reconcile(signal: AbortSignal | undefined): Promise<{
+      _reconcile(
+        signal: AbortSignal | undefined,
+        liveObservationBudget: SessionSearchLiveObservationBudget,
+        persistedObservationBudget: SessionSearchReconciliationBudget,
+      ): Promise<{
         identity: symbol
         service?: SessionPersistence
       }>
     }
     const reconcile = internals._reconcile.bind(internals)
-    const boundary = vi.spyOn(internals, '_reconcile').mockImplementation(async (signal) => {
-      const binding = await reconcile(signal)
+    const boundary = vi.spyOn(internals, '_reconcile').mockImplementation(async (signal, live, persisted) => {
+      const binding = await reconcile(signal, live, persisted)
       await persistence.dispose()
       return binding
     })
@@ -1318,7 +1575,10 @@ describe('SQLite reconciliation and source lifecycle', () => {
 
     const page = await ctx.sessionQuery.searchSessions({ query: 'needle' })
     expect(page.items.map(item => item.header.id).sort()).toEqual([added.id, first.id].sort())
-    expect(TestPersistence.reads.get(first.id)).toBe(2)
+    // The retry re-lists, but it does not decode the log it already read at an
+    // unchanged revision: only the Session that appeared during the first list
+    // is read.
+    expect(TestPersistence.reads.get(first.id)).toBe(1)
     expect(TestPersistence.reads.get(added.id)).toBe(1)
   })
 

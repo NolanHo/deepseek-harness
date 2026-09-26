@@ -16,6 +16,7 @@ import {
   type SessionSearchCursor,
   type SessionSearchLiveObservationBudget,
   type SessionSearchRankedDocumentBudget,
+  type SessionSearchReconciliationBudget,
 } from '@deepseek-ai/dsh-session-query'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { toolInput } from './input.ts'
@@ -97,6 +98,11 @@ async function executeSessionSearch(
   // live-observation budget, so walking the result stream cannot make the
   // provider observe the attached logs again.
   const liveObservationBudget: SessionSearchLiveObservationBudget = { spent: 0 }
+  // This tool call's pages also share one reconciliation: the provider
+  // memoizes the corpus observation against this object and bounds its
+  // persisted cold reads, so walking the result stream cannot re-read the
+  // changed or unindexed stored logs per page.
+  const reconciliationBudget: SessionSearchReconciliationBudget = { spent: 0 }
   const collected = await collectPages(
     maxResults,
     exec.signal,
@@ -106,7 +112,7 @@ async function executeSessionSearch(
         sessionFilters,
         eventFilters,
         ...cursor === undefined ? {} : { cursor },
-      }, { signal: exec.signal, rankedDocumentBudget, liveObservationBudget })),
+      }, { signal: exec.signal, rankedDocumentBudget, liveObservationBudget, reconciliationBudget })),
     hit => hit.header.id !== caller.id && workspaceAccess.recordAuthorized(hit, caller),
   )
 
@@ -163,6 +169,9 @@ async function executeEventSearch(
   // live-observation budget, so a continuation cannot make the provider
   // observe the attached logs again.
   const liveObservationBudget: SessionSearchLiveObservationBudget = { spent: 0 }
+  // This event search's pages share one reconciliation, so a continuation
+  // cannot make the provider re-read the changed or unindexed stored logs.
+  const reconciliationBudget: SessionSearchReconciliationBudget = { spent: 0 }
   const collected = await collectPages(
     maxResults,
     exec.signal,
@@ -173,7 +182,7 @@ async function executeEventSearch(
           query,
           filters,
           ...cursor === undefined ? {} : { cursor },
-        }, { signal: exec.signal, rankedDocumentBudget, liveObservationBudget }))
+        }, { signal: exec.signal, rankedDocumentBudget, liveObservationBudget, reconciliationBudget }))
       workspaceAccess.assertObservedTargetAuthorized(caller, sessionId, page.session)
       return page
     },
