@@ -35,6 +35,7 @@ import type {
   SessionSearchHit,
   SessionSearchCursor as SessionSearchCursorValue,
   SessionSearchPage,
+  SessionSearchRankedDocumentBudget,
   SessionSearchRequest,
 } from '@deepseek-ai/dsh-session-query'
 import {
@@ -203,13 +204,13 @@ interface SessionHeaderRow {
 }
 
 interface SearchRow extends SessionHeaderRow {
+  doc_rowid: number
   live: number
   persisted: number
   seq: number
   type: string
   time: number
   surface: string
-  marked_text: string
   match_count: number
   document_length: number
 }
@@ -222,6 +223,23 @@ interface CursorPayload {
   generation: string
   offset: number
 }
+
+/** One ranked result set retained for the cursor pages of one request. */
+interface RankedSearch {
+  /** Normalized request identity plus corpus generation this ranking belongs to. */
+  key: string
+  /** Ranked rows in contract order; a page is an offset slice of this list. */
+  rows: readonly SearchRow[]
+}
+
+/**
+ * Ranked row columns without any document text: the ranking itself reads each
+ * match's text to score it, while only the rows a page returns re-read it for
+ * the snippet.
+ */
+const RANKED_ROW_COLUMNS = 'doc_rowid, session_id, version, created_at, cwd, parent_session,'
+  + ' seed_length, delegation_depth, agent_preset, live, persisted, seq, type, time, surface,'
+  + ' document_length, match_count'
 
 /** Concrete SQLite owner of the combined `ctx.sessionQuery` service. */
 export class SqliteSessionQueryEngine extends SessionQueryEngine {
@@ -261,6 +279,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   // Fork patch (FORK_SURFACE.md): the memoized live observations live in the fork-owned
   // live-observation-memo module; the engine keeps only this owned instance.
   private readonly _liveObservationMemo = new LiveObservationMemo<ObservedSession>()
+  private _rankedSessions: RankedSearch | undefined
+  private _rankedEvents: RankedSearch | undefined
   private _tail: Promise<void> = Promise.resolve()
   private _closed = false
   private _closePromise: Promise<void> | undefined
@@ -310,15 +330,32 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       const offset = normalized.cursor === undefined
         ? 0
         : decodeCursor(normalized.cursor, this._instance, 'sessions', fingerprint, generation)
-      const rows = this._querySessions(normalized, offset, persistenceBinding)
-      return page(rows, normalized.limit, row => this._sessionHit(row), cursorOffset => encodeCursor({
-        version: 1,
-        instance: this._instance,
-        scope: 'sessions',
-        fingerprint,
-        generation,
-        offset: cursorOffset,
-      }), offset)
+      const key = rankingKey(fingerprint, generation)
+      let ranked = this._rankedSessions
+      if (ranked?.key !== key) {
+        // One ranking serves every page of the request: a continuation cursor
+        // slices this ranked list instead of re-running the ranking query over
+        // the whole match set, and only the rows a page returns re-read stored
+        // document text.
+        this._chargeRankedDocuments(exec?.rankedDocumentBudget, this._assertRankableBreadth(normalized.query))
+        ranked = { key, rows: this._querySessions(normalized, persistenceBinding) }
+        this._rankedSessions = ranked
+      }
+      return this._slicePage(
+        normalized.query,
+        ranked.rows,
+        normalized.limit,
+        offset,
+        (row, markedText) => this._sessionHit(row, markedText),
+        cursorOffset => encodeCursor({
+          version: 1,
+          instance: this._instance,
+          scope: 'sessions',
+          fingerprint,
+          generation,
+          offset: cursorOffset,
+        }),
+      )
     })
   }
 
@@ -337,20 +374,34 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       assertNotAborted(signal)
       const target = this._targetObservation(normalized.sessionId, persistenceBinding)
       const fingerprint = requestFingerprint(normalized)
+      const generation = target.generation
       const offset = normalized.cursor === undefined
         ? 0
-        : decodeCursor(normalized.cursor, this._instance, 'events', fingerprint, target.generation)
-      const rows = this._queryEvents(normalized, offset, persistenceBinding)
+        : decodeCursor(normalized.cursor, this._instance, 'events', fingerprint, generation)
+      const key = rankingKey(fingerprint, generation)
+      let ranked = this._rankedEvents
+      if (ranked?.key !== key) {
+        this._chargeRankedDocuments(exec?.rankedDocumentBudget, this._assertRankableBreadth(normalized.query))
+        ranked = { key, rows: this._queryEvents(normalized, persistenceBinding) }
+        this._rankedEvents = ranked
+      }
       return {
         session: target.header,
-        ...page(rows, normalized.limit, row => this._eventHit(row), cursorOffset => encodeCursor({
-          version: 1,
-          instance: this._instance,
-          scope: 'events',
-          fingerprint,
-          generation: target.generation,
-          offset: cursorOffset,
-        }), offset),
+        ...this._slicePage(
+          normalized.query,
+          ranked.rows,
+          normalized.limit,
+          offset,
+          (row, markedText) => this._eventHit(row, markedText),
+          cursorOffset => encodeCursor({
+            version: 1,
+            instance: this._instance,
+            scope: 'events',
+            fingerprint,
+            generation,
+            offset: cursorOffset,
+          }),
+        ),
       }
     })
   }
@@ -383,8 +434,9 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
    * live Sessions: a query this broad is refused even when one Session holds
    * fewer of them.
    * @param query - the normalized caller query.
+   * @returns the matching-document count the pending ranking would read.
    */
-  private _assertRankableBreadth(query: string): void {
+  private _assertRankableBreadth(query: string): number {
     const bound = this.config.maxRankedDocuments
     const row = this._requireDb().prepare(`
       SELECT
@@ -394,11 +446,34 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
           SELECT rowid FROM temp.live_docs WHERE live_docs MATCH ? LIMIT ?
         )) AS matched
     `).get(quoteFtsData(query), bound + 1, quoteFtsData(query), bound + 1) as { matched: number }
-    if (row.matched <= bound) return
+    if (row.matched <= bound) return row.matched
     throw new SessionQueryError(
       `session search query matches more than ${String(bound)} documents; narrow the query`,
       'SESSION_QUERY_SEARCH_TOO_BROAD',
     )
+  }
+
+  /**
+   * Charge one ranking against the caller request's shared document budget and
+   * refuse a charge past the configured bound, so a page sequence cannot
+   * re-rank the same document set once per page. A caller that supplies no
+   * budget carries only the per-call bound of {@link Config.maxRankedDocuments}.
+   * @param budget - the request's shared budget, when the caller keeps one.
+   * @param matched - documents the ranking about to run would read.
+   */
+  private _chargeRankedDocuments(
+    budget: SessionSearchRankedDocumentBudget | undefined,
+    matched: number,
+  ): void {
+    if (budget === undefined) return
+    const spent = budget.spent + matched
+    if (spent > this.config.maxRankedDocuments) {
+      throw new SessionQueryError(
+        `session search request already spent ${String(budget.spent)} of its ${String(this.config.maxRankedDocuments)}-document budget; narrow the query or repeat the search`,
+        'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED',
+      )
+    }
+    budget.spent = spent
   }
 
   private async _close(): Promise<void> {
@@ -716,7 +791,6 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
 
   private _querySessions(
     request: NormalizedSessionRequest,
-    offset: number,
     persistenceBinding: PersistenceBinding,
   ): SearchRow[] {
     const selected = selectedDocumentsSql()
@@ -728,8 +802,9 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       ...selectedDocumentsParams(request.query, persistenceBinding.service !== undefined),
       ...sessionWhere.params,
       ...eventWhere.params,
-      request.limit + 1,
-      offset,
+      // One ranking row per matching Session, so the matched-document bound of
+      // the breadth probe also bounds this result set.
+      this.config.maxRankedDocuments,
     ]
     assertPortableBindingCount(bindings.length)
     return this._requireDb().prepare(`
@@ -744,16 +819,15 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         ) AS event_rank
         FROM filtered
       )
-      SELECT * FROM ranked
+      SELECT ${RANKED_ROW_COLUMNS} FROM ranked
       WHERE event_rank = 1
       ORDER BY match_count DESC, document_length ASC, time DESC, session_id ASC, seq DESC
-      LIMIT ? OFFSET ?
+      LIMIT ?
     `).all(...bindings) as unknown as SearchRow[]
   }
 
   private _queryEvents(
     request: NormalizedEventRequest,
-    offset: number,
     persistenceBinding: PersistenceBinding,
   ): SearchRow[] {
     const selected = selectedDocumentsSql()
@@ -764,17 +838,88 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       ...selectedDocumentsParams(request.query, persistenceBinding.service !== undefined),
       request.sessionId,
       ...eventWhere.params,
-      request.limit + 1,
-      offset,
+      this.config.maxRankedDocuments,
     ]
     assertPortableBindingCount(bindings.length)
     return this._requireDb().prepare(`
       ${selected.sql}
-      SELECT * FROM matched
+      SELECT ${RANKED_ROW_COLUMNS} FROM matched
       WHERE ${where}
       ORDER BY match_count DESC, document_length ASC, time DESC, seq DESC
-      LIMIT ? OFFSET ?
+      LIMIT ?
     `).all(...bindings) as unknown as SearchRow[]
+  }
+
+  /**
+   * Serve one page from the request's ranked rows, reading stored text only for
+   * the rows this page returns.
+   * @param query - the normalized caller query, which marks the page's matches.
+   * @param rows - the complete ranked list in contract order.
+   * @param limit - maximum items this page returns.
+   * @param offset - first ranked row this page returns.
+   * @param convert - builds one item from its ranked row and matched text.
+   * @param nextCursor - builds the continuation cursor past this page.
+   * @returns the page and, when the ranking continues, its cursor.
+   */
+  private _slicePage<Item>(
+    query: string,
+    rows: readonly SearchRow[],
+    limit: number,
+    offset: number,
+    convert: (row: SearchRow, markedText: string) => Item,
+    nextCursor: (offset: number) => SessionSearchCursorValue,
+  ): SessionSearchPage<Item> {
+    const window = rows.slice(offset, offset + limit + 1)
+    const markedTextOf = this._markedTextOf(query, window)
+    const hasMore = window.length > limit
+    return {
+      items: window.slice(0, limit).map(row => convert(row, markedTextOf(row))),
+      ...hasMore ? { nextCursor: nextCursor(offset + limit) } : {},
+    }
+  }
+
+  /**
+   * Re-read the scored documents of the rows about to be served. The ranking
+   * query scores every match from its stored text but returns identity columns
+   * only, so one page's own rows are the only text a page transfers.
+   * @param query - the normalized caller query, which marks the matches.
+   * @param rows - the page's ranked rows, including its lookahead row.
+   * @returns a lookup that fails when a ranked row has no stored document.
+   */
+  private _markedTextOf(query: string, rows: readonly SearchRow[]): (row: SearchRow) => string {
+    const db = this._requireDb()
+    const expression = quoteFtsData(query)
+    const persisted = new Map<number, string>()
+    const live = new Map<number, string>()
+    const mark = (source: 'persisted' | 'live', ids: readonly number[], target: Map<number, string>): void => {
+      if (ids.length === 0) return
+      const table = source === 'persisted' ? 'persisted_docs' : 'temp.live_docs'
+      // The FTS5 auxiliary function takes the unqualified table name, and it
+      // marks the matches of a MATCH constraint in this same query.
+      const fts = source === 'persisted' ? 'persisted_docs' : 'live_docs'
+      const placeholders = ids.map(() => '?').join(', ')
+      const statement = db.prepare(`
+        SELECT rowid AS doc_rowid, highlight(${fts}, 0, ?, ?) AS marked_text
+        FROM ${table} WHERE ${fts} MATCH ? AND rowid IN (${placeholders})
+      `)
+      for (const row of statement.all(
+        FTS_HIGHLIGHT_START,
+        FTS_HIGHLIGHT_END,
+        expression,
+        ...ids,
+      ) as unknown as { doc_rowid: number; marked_text: string }[]) {
+        target.set(row.doc_rowid, row.marked_text)
+      }
+    }
+    mark('persisted', rows.filter(row => row.live === 0).map(row => row.doc_rowid), persisted)
+    mark('live', rows.filter(row => row.live === 1).map(row => row.doc_rowid), live)
+    return (row) => {
+      const markedText = (row.live === 1 ? live : persisted).get(row.doc_rowid)
+      if (markedText === undefined) {
+        throw new Error(`session search ranked a document that no source holds: ${String(row.doc_rowid)}`)
+      }
+      return markedText
+    }
   }
 
   private _targetObservation(
@@ -811,23 +956,23 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     )
   }
 
-  private _sessionHit(row: SearchRow): SessionSearchHit {
+  private _sessionHit(row: SearchRow, markedText: string): SessionSearchHit {
     return {
       header: rowHeader(row),
       live: row.live === 1,
       persisted: row.persisted === 1,
-      bestMatch: this._eventHit(row),
+      bestMatch: this._eventHit(row, markedText),
     }
   }
 
-  private _eventHit(row: SearchRow): SessionEventSearchHit {
+  private _eventHit(row: SearchRow, markedText: string): SessionEventSearchHit {
     return {
       sessionId: row.session_id as SessionId,
       seq: SessionSeq(row.seq),
       type: row.type as SessionEventSearchHit['type'],
       time: row.time,
       surface: row.surface as SessionEventSearchHit['surface'],
-      snippet: makeSnippet(row.marked_text, this.config.snippetChars),
+      snippet: makeSnippet(markedText, this.config.snippetChars),
     }
   }
 
@@ -868,6 +1013,7 @@ function selectedDocumentsSql(): { sql: string } {
   return {
     sql: `WITH candidates AS (
       SELECT
+        pd.rowid AS doc_rowid,
         pd.session_id AS session_id,
         ps.version AS version,
         ps.created_at AS created_at,
@@ -891,6 +1037,7 @@ function selectedDocumentsSql(): { sql: string } {
         AND NOT EXISTS (SELECT 1 FROM temp.live_sessions AS ls WHERE ls.id = pd.session_id)
       UNION ALL
       SELECT
+        ld.rowid AS doc_rowid,
         ld.session_id AS session_id,
         ls.version AS version,
         ls.created_at AS created_at,
@@ -1028,20 +1175,16 @@ function rowHeader(row: SessionHeaderRow): SessionHeader {
   }
 }
 
-function page<Row, Item>(
-  rows: readonly Row[],
-  limit: number,
-  convert: (row: Row) => Item,
-  nextCursor: (offset: number) => SessionSearchCursorValue,
-  offset: number,
-): SessionSearchPage<Item> {
-  const hasMore = rows.length > limit
-  return {
-    items: rows.slice(0, limit).map(convert),
-    ...hasMore ? { nextCursor: nextCursor(offset + limit) } : {},
-  }
+/**
+ * Build the ranking identity one cached ranked list belongs to: the normalized
+ * request plus the corpus generation its cursor is bound to.
+ * @param fingerprint - normalized request identity stored in cursors.
+ * @param generation - corpus generation stored in cursors.
+ * @returns the cache key for one ranked result set.
+ */
+function rankingKey(fingerprint: string, generation: string): string {
+  return `${fingerprint}\u0000${generation}`
 }
-
 function encodeCursor(payload: CursorPayload): SessionSearchCursorValue {
   return SessionSearchCursor(Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url'))
 }

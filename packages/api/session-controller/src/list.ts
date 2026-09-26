@@ -6,7 +6,7 @@ import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionSnapshot } from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import { SessionQueryError, type SessionListScope, type SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
+import { SessionQueryError, type SessionListScope, type SessionSearchCursor, type SessionSearchRankedDocumentBudget } from '@deepseek-ai/dsh-session-query'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { z } from 'zod'
 import {
@@ -186,6 +186,9 @@ export class ApiSessionList {
       const authorized: SessionSearchItem[] = []
       const acceptedIds = new Set<SessionId>()
       const seenCursors = new Set<SessionSearchCursor>()
+      // One request's pages share one ranked-document budget, so a continuation
+      // cannot make the provider rank the same document set again.
+      const rankedDocumentBudget: SessionSearchRankedDocumentBudget = { spent: 0 }
       let cursor: SessionSearchCursor | undefined
       let providerCalls = 0
       let pageLimit = SESSION_SEARCH_RESULT_LIMIT
@@ -207,7 +210,7 @@ export class ApiSessionList {
             ],
             limit: requestedLimit,
             ...(requestedCursor === undefined ? {} : { cursor: requestedCursor }),
-          }, { signal })
+          }, { signal, rankedDocumentBudget })
           signal.throwIfAborted()
         } catch (error: unknown) {
           signal.throwIfAborted()
@@ -263,9 +266,12 @@ export class ApiSessionList {
       if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_ABORTED') {
         throw new RemoteError('gateway/cancelled', 'session search was aborted', {})
       }
-      // A refused query is the caller's to narrow; it is not a server fault, and
-      // the refusal is what keeps one search from reading the whole index.
-      if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SEARCH_TOO_BROAD') {
+      // A refused query or an exhausted per-request document budget is the
+      // caller's to narrow or repeat; it is not a server fault, and the refusal
+      // is what keeps one search from reading the whole index.
+      if (error instanceof SessionQueryError
+        && (error.code === 'SESSION_QUERY_SEARCH_TOO_BROAD'
+          || error.code === 'SESSION_QUERY_SEARCH_BUDGET_EXHAUSTED')) {
         throw new RemoteError('gateway/bad-request', error.message, {})
       }
       throw new RemoteError('gateway/internal', `session search failed: ${String(error)}`, {})
